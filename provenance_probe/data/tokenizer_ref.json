@@ -673,6 +673,35 @@
         "mixed_script_cjk_code": 105,
         "newline_storm": 9
       }
+    },
+    "Mistral-v0.3": {
+      "label": "Mistral-v0.3",
+      "family": "Mistral",
+      "origin": "EU",
+      "vocab_size": 32768,
+      "source": "mistralai/Mistral-7B-Instruct-v0.3",
+      "vector": {
+        "cjk_dense": 137,
+        "cjk_mixed": 42,
+        "jp_kana": 84,
+        "ko_hangul": 58,
+        "ws_runs": 96,
+        "tabs_deep": 112,
+        "digits_long": 335,
+        "punct_repeat": 33,
+        "emoji_zwj": 433,
+        "rare_unicode": 453,
+        "diacritics": 151,
+        "arabic_hebrew": 103,
+        "cyrillic": 48,
+        "code_json": 170,
+        "code_regex": 276,
+        "url_paths": 211,
+        "base64ish": 199,
+        "md_table": 123,
+        "mixed_script_cjk_code": 144,
+        "newline_storm": 122
+      }
     }
   }
 }
