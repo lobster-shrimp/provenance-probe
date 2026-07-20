@@ -1,0 +1,6 @@
+requests>=2.31
+# Optional but strongly recommended - needed only for `build-reference`:
+# transformers>=4.44
+# tiktoken>=0.7
+# sentencepiece>=0.2
+# protobuf>=4.0
