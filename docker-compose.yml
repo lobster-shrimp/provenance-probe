@@ -1,0 +1,8 @@
+services:
+  provenance-probe:
+    build: .
+    ports:
+      - "127.0.0.1:8770:8770"   # loopback only - the UI has no authentication
+    volumes:
+      - ./data:/data
+      - ./scan:/scan:ro          # drop unpacked client bundles here to scan
