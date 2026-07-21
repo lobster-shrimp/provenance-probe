@@ -101,7 +101,7 @@ Vendor-specific response headers (`x-tt-logid` → ByteDance, `x-ca-request-id` 
 ### Reference vector coverage
 
 `data/tokenizer_ref.json` ships **real** production tokenizers, not surrogates —
-23 vectors, each measured over all 20 probes, every vocab size checked against
+24 vectors, each measured over all 20 probes, every vocab size checked against
 its published value. Run `provenance-probe verify-reference` to print the full
 table.
 
@@ -122,19 +122,19 @@ The core set is GGUF-derived (extracted from llama.cpp's bundled vocabs):
 The families GGUF does not cover are now **also shipped**, built from HuggingFace
 via `build-reference` and merged in: GLM-4.5 and GLM-4-9B (GLM/Zhipu — the one
 that matters most for z.ai-style cases), Yi-1.5, InternLM2.5, MiniCPM3, Qwen3,
-DeepSeek-V3, Moonshot (CN); Mistral-v0.3 (EU); Phi-3.5 and the OpenAI
-`cl100k` / `o200k` tiktoken encodings (US). **CN families covered: 11.**
+DeepSeek-V3, Moonshot, Baichuan2 (CN); Mistral-v0.3 (EU); Phi-3.5 and the OpenAI
+`cl100k` / `o200k` tiktoken encodings (US). **CN families covered: 12.**
 
-**Two still require a manual `build-reference` step** because of upstream
-constraints:
+Baichuan2 ships a custom tokenizer class needing `trust_remote_code`, which
+`build-reference` refuses by default (executing unvetted repo code in a
+provenance tool is self-defeating). Its vector here was built in a throwaway
+container; to rebuild, run `build-reference --only Baichuan2 --allow-remote-code`
+in a disposable environment only.
+
+**One family still needs a manual `build-reference` step:**
 
 - **Gemma** — gated on HuggingFace. Accept Google's licence on the model page,
   set `HF_TOKEN`, then `provenance-probe build-reference --only Gemma-2`.
-- **Baichuan** — ships a custom tokenizer class needing `trust_remote_code`,
-  which `build-reference` refuses by default (executing unvetted repo code in a
-  provenance tool is self-defeating). Build it in a throwaway container with
-  `build-reference --only Baichuan2 --allow-remote-code`, or use an HF-native
-  variant that does not require remote code.
 
 Verified blind: a mock endpoint serving genuine Qwen2 token counts under the brand name `northstar-secure-1` was identified as **Qwen2, 20/20 probes exact, score 1.0**, with next-best Llama-3 at 0.175.
 
