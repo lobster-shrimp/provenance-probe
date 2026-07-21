@@ -43,7 +43,12 @@ def cmd_assess(a):
 
         if not a.no_tokenizer:
             print("  [3/7] tokenizer fingerprint ...")
-            b["tokenizer"] = tokenizer.measure(c)
+            _seed = getattr(a, "variant_seed", 0) or 0
+            _ref_seed = ref.get("variant_seed", 0) if ref else 0
+            if _seed != _ref_seed:
+                print(f"        ! variant-seed {_seed} != reference seed {_ref_seed}; "
+                      f"rebuild the reference with --variant-seed {_seed} or the match is invalid")
+            b["tokenizer"] = tokenizer.measure(c, variant_seed=_seed)
             if b["tokenizer"]["usable"]:
                 b["tokenizer_match"] = tokenizer.compare(b["tokenizer"], ref)
             else:
@@ -227,7 +232,8 @@ def cmd_network(a):
 def cmd_build_reference(a):
     reference.build(hf_token=a.hf_token, overwrite=a.overwrite,
                     allow_remote_code=a.allow_remote_code,
-                    only=a.only or None)
+                    only=a.only or None,
+                    variant_seed=getattr(a, "variant_seed", 0) or 0)
 
 
 def cmd_verify_reference(a):
@@ -256,6 +262,9 @@ def main(argv=None):
                    help="DANGEROUS: executes tokenizer code from the repo. Container only.")
     s.add_argument("--only", action="append",
                    help="build just this repo or label; repeatable")
+    s.add_argument("--variant-seed", type=int, default=0,
+                   help="build the reference for a rotated probe set (evasion "
+                        "hardening); 0 = canonical corpus. Probe with the same seed.")
     s.set_defaults(func=cmd_build_reference)
 
     s = sub.add_parser("verify-reference", help="self-check the reference file")
@@ -281,6 +290,9 @@ def main(argv=None):
     s.add_argument("--offline", action="store_true", help="skip RDAP lookups")
     s.add_argument("--i-am-authorized", action="store_true",
                    help="attest you have written authorization to test these targets")
+    s.add_argument("--variant-seed", type=int, default=0,
+                   help="probe with a rotated probe set (evasion hardening); must "
+                        "match the reference's seed (build-reference --variant-seed).")
     s.set_defaults(func=cmd_assess)
 
     s = sub.add_parser("monitor", help="diff two assessment JSONs; exit 2 on drift")

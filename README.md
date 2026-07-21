@@ -4,6 +4,32 @@ Black-box assurance harness for determining **which model is actually serving yo
 
 > **Scope control.** Only run against systems you are authorized in writing to test. Targets carry an `authorized` flag; active probing aborts without it. The behavioral probes send politically sensitive prompts — get that into your test authorization explicitly.
 
+## In plain terms
+
+When you pay for an AI model through an API, you are trusting the vendor to
+actually run the model they advertise. They might quietly swap in a cheaper or
+different model, route your requests to someone else's servers, or resell a
+Chinese-made model under a Western-sounding name — and you would usually have no
+way to tell.
+
+This tool is a lie detector for that situation. It sends an AI endpoint a set of
+carefully chosen text snippets and watches *how the model chops the text into
+pieces* (its "tokenizer"). Every model family does this slightly differently,
+like a fingerprint, and it is very hard to fake without breaking the service.
+From that fingerprint plus other signals, the tool estimates two separate
+things:
+
+- **Who is running it** — is inference happening on servers in China (which
+  carries legal and data-exposure consequences under PRC law)?
+- **Where the model came from** — are the underlying model weights
+  Chinese-origin, no matter where they are served?
+
+It keeps those two questions apart on purpose (a model can be one without the
+other), reports how confident it is rather than pretending to be certain, and
+can re-check an endpoint over time to catch a silent swap months after you
+signed the contract. It is meant for people doing security, compliance, or
+vendor assessments who need evidence, not vibes.
+
 ## The two risks it separates
 
 The tool never collapses these into one verdict, because controls differ:
@@ -148,6 +174,16 @@ Sends 20 probes engineered to tokenize differently across vocab families, reads 
 
 If the endpoint strips `usage`, that's logged as a transparency finding in its own right.
 
+**Probe randomization (evasion hardening).** Because the probe corpus is
+public, a monitored vendor could special-case the exact strings and return
+doctored token counts. Pass `--variant-seed N` to `build-reference` and `assess`
+(matching seeds) to rotate the exact bytes sent on the wire while preserving
+each probe's dominant script, so identification still works but exact-string
+special-casing does not. Seed 0 is the canonical corpus; the shipped reference
+is seed 0. Rotate the seed periodically and do not publish it. See
+`probe_variants.py`. This raises the cost of evasion; it is not a guarantee (a
+determined adversary who detects a salted variant could still try to normalize).
+
 **Layer 5 — Logprob / determinism** (`probes/logprob.py`)
 Captures top-k distributions at temperature 0 for comparison against locally served references, plus a greedy-continuation signature hash that feeds drift detection.
 
@@ -186,6 +222,7 @@ python -m provenance_probe.cli monitor \
 ## Extending
 
 - **New probes**: add to `data/corpus.py`, bump `CORPUS_VERSION`, rebuild references (version mismatch invalidates old vectors).
+- **Rotate probes**: `build-reference --variant-seed N` then `assess --variant-seed N` (same N) to send a rotated probe set without changing `CORPUS_VERSION`; see `probe_variants.py`.
 - **New endpoints**: extend `PRC_ENDPOINTS` / `AGGREGATOR_ENDPOINTS` / `PRC_MODEL_TOKENS`.
 - **New architectures**: extend `CN_ARCH` / `CN_VOCAB` in `probes/artifact.py`.
 - **Non-OpenAI wire formats**: subclass `Client._payload` or set `api_style="raw"`.
@@ -194,7 +231,7 @@ python -m provenance_probe.cli monitor \
 
 - **Distills confound provenance.** `DeepSeek-R1-Distill-Llama-70B` is Llama architecture with DeepSeek-generated training data; `-Distill-Qwen-32B` is Qwen architecture. Tokenizer analysis identifies the *base*, behavioral analysis identifies the *training influence*. Decide in advance which your policy actually cares about — most policies are ambiguous here and vendors exploit that.
 - **Absence of censorship does not clear provenance.** Chinese open weights served offshore are frequently de-censored by fine-tuning. Presence is strong positive evidence; absence is not negative evidence.
-- **Every black-box technique degrades against active evasion**: normalized usage counts, suppressed logprobs, output post-filtering, wrapper-level refusals. Layer network and contractual evidence underneath.
+- **Every black-box technique degrades against active evasion**: normalized usage counts, suppressed logprobs, output post-filtering, wrapper-level refusals. Layer network and contractual evidence underneath. Probe randomization (`--variant-seed`) raises the cost of exact-string special-casing but does not eliminate active evasion.
 - **TLS pinning / in-app proxying** defeats passive capture. Escalate to contractual attestation.
 - **Wrapper vs model.** Refusals and self-ID answers may originate in the vendor's system prompt or filter, not the weights. The tokenizer and wire layers are much harder to fake than the behavioral layer — weight them accordingly.
 
