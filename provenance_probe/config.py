@@ -11,13 +11,27 @@ class Target:
     name: str
     base_url: str                       # e.g. https://api.vendor.com/v1
     model: str = ""                     # model id to request (may be a marketing name)
-    api_style: str = "openai"           # openai | anthropic | raw
+    api_style: str = "openai"           # openai | anthropic | raw | template
     auth_header: str = "Authorization"
     auth_value_env: str = ""            # env var holding the token
     auth_prefix: str = "Bearer "
     extra_headers: dict[str, str] = field(default_factory=dict)
+    cookie: str = ""                    # raw Cookie header for web-app sessions
+    cookie_env: str = ""                # or an env var holding it (keeps secrets out of config)
     chat_path: str = "/chat/completions"
     models_path: str = "/models"
+    # --- Web-app / platform adapter (api_style="template") -------------------
+    # Bring a request captured from the web app's browser traffic. The probe
+    # prompt is substituted for __PROMPT__ (and optionally __MAX_TOKENS__,
+    # __TEMPERATURE__, __SYSTEM__) anywhere in request_template, then POSTed to
+    # chat_path. Response fields are read by dotted path (numeric indices ok),
+    # e.g. "choices.0.message.content".
+    request_template: dict = field(default_factory=dict)
+    response_text_path: str = ""            # where the assistant reply text lives
+    response_prompt_tokens_path: str = ""   # where prompt-token usage lives (if any)
+    response_model_path: str = ""           # where the echoed model id lives (if any)
+    stream_mode: str = "none"               # none | sse
+    stream_delta_path: str = ""             # per-chunk text delta path for SSE accumulation
     timeout: float = 60.0
     verify_tls: bool = True
     proxy: str = ""                     # route through your inspecting proxy
@@ -32,6 +46,9 @@ class Target:
             tok = os.environ.get(self.auth_value_env, "")
             if tok:
                 h[self.auth_header] = f"{self.auth_prefix}{tok}"
+        cookie = self.cookie or (os.environ.get(self.cookie_env, "") if self.cookie_env else "")
+        if cookie:
+            h["Cookie"] = cookie
         if self.api_style == "anthropic":
             h.setdefault("anthropic-version", "2023-06-01")
         return h

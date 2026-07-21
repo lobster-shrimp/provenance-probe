@@ -1,13 +1,50 @@
-"""Transport layer. Normalizes OpenAI-compatible / Anthropic / raw endpoints."""
+"""Transport layer. Normalizes OpenAI-compatible / Anthropic / raw / web-app
+(template) endpoints."""
 from __future__ import annotations
-import json, time
+import copy, json, time
 from typing import Any
 import requests
 
 
+def dig(obj: Any, path: str):
+    """Read a value by dotted path with numeric indices, e.g.
+    'choices.0.message.content'. Returns None if any hop is missing."""
+    if not path:
+        return None
+    cur = obj
+    for part in path.split("."):
+        if isinstance(cur, dict):
+            cur = cur.get(part)
+        elif isinstance(cur, list):
+            try:
+                cur = cur[int(part)]
+            except (ValueError, IndexError):
+                return None
+        else:
+            return None
+    return cur
+
+
+def _substitute(node: Any, repl: dict) -> Any:
+    """Deep-copy a request template, replacing __PLACEHOLDER__ tokens in strings."""
+    if isinstance(node, str):
+        out = node
+        for k, v in repl.items():
+            if out == k:            # whole-value replacement preserves non-string types
+                return v
+            out = out.replace(k, str(v))
+        return out
+    if isinstance(node, dict):
+        return {k: _substitute(v, repl) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_substitute(v, repl) for v in node]
+    return node
+
+
 class Response:
     def __init__(self, status: int, headers: dict, body: Any, raw: str,
-                 ttft: float | None, total: float, err: str | None = None):
+                 ttft: float | None, total: float, err: str | None = None,
+                 paths: dict | None = None, stream_text: str | None = None):
         self.status = status
         self.headers = {k.lower(): v for k, v in (headers or {}).items()}
         self.body = body
@@ -15,12 +52,20 @@ class Response:
         self.ttft = ttft
         self.total = total
         self.err = err
+        # Configured response paths (web-app template mode) + any text already
+        # accumulated from an SSE stream.
+        self.paths = paths or {}
+        self.stream_text = stream_text
 
     @property
     def ok(self) -> bool:
         return self.err is None and 200 <= self.status < 300
 
     def usage_prompt_tokens(self) -> int | None:
+        p = self.paths.get("prompt_tokens")
+        if p:
+            v = dig(self.body, p)
+            return v if isinstance(v, int) else None
         b = self.body
         if not isinstance(b, dict):
             return None
@@ -34,6 +79,13 @@ class Response:
         return None
 
     def text(self) -> str:
+        if self.stream_text is not None:
+            return self.stream_text
+        p = self.paths.get("text")
+        if p:
+            v = dig(self.body, p)
+            if isinstance(v, str):
+                return v
         b = self.body
         if not isinstance(b, dict):
             return self.raw or ""
@@ -53,6 +105,11 @@ class Response:
         return self.raw or ""
 
     def echoed_model(self) -> str | None:
+        p = self.paths.get("model")
+        if p:
+            v = dig(self.body, p)
+            if isinstance(v, str):
+                return v
         b = self.body
         if isinstance(b, dict):
             for k in ("model", "model_id", "modelId"):
@@ -68,9 +125,21 @@ class Client:
         if target.proxy:
             self.s.proxies = {"http": target.proxy, "https": target.proxy}
 
+    def _paths(self) -> dict:
+        t = self.t
+        return {"text": getattr(t, "response_text_path", ""),
+                "prompt_tokens": getattr(t, "response_prompt_tokens_path", ""),
+                "model": getattr(t, "response_model_path", "")}
+
     def _payload(self, prompt: str, max_tokens: int, temperature: float,
                  system: str | None, logprobs: bool, extra: dict) -> dict:
         t = self.t
+        if t.api_style == "template" and getattr(t, "request_template", None):
+            repl = {"__PROMPT__": prompt, "__MAX_TOKENS__": max_tokens,
+                    "__TEMPERATURE__": temperature, "__SYSTEM__": system or ""}
+            p = _substitute(copy.deepcopy(t.request_template), repl)
+            p.update(extra or {})
+            return p
         if t.api_style == "anthropic":
             p: dict[str, Any] = {"model": t.model, "max_tokens": max_tokens,
                                  "temperature": temperature,
@@ -96,31 +165,50 @@ class Client:
         t = self.t
         url = t.url(t.chat_path)
         payload = self._payload(prompt, max_tokens, temperature, system, logprobs, extra or {})
-        if stream:
-            payload["stream"] = True
+        paths = self._paths()
+        # Web-app template endpoints may stream Server-Sent Events; accumulate
+        # the per-chunk text delta so the behavioral layers get the full reply.
+        sse = stream or getattr(t, "stream_mode", "none") == "sse"
+        delta_path = getattr(t, "stream_delta_path", "") or "choices.0.delta.content"
+        if stream or sse:
+            payload.setdefault("stream", True)
         start = time.perf_counter()
         ttft = None
         try:
             r = self.s.post(url, headers=t.headers(), json=payload,
-                            timeout=t.timeout, verify=t.verify_tls, stream=stream)
-            if stream:
-                chunks = []
+                            timeout=t.timeout, verify=t.verify_tls, stream=sse)
+            if sse:
+                chunks, delta_text = [], []
                 for line in r.iter_lines():
                     if line and ttft is None:
                         ttft = time.perf_counter() - start
-                    if line:
-                        chunks.append(line.decode("utf-8", "replace"))
+                    if not line:
+                        continue
+                    s = line.decode("utf-8", "replace")
+                    chunks.append(s)
+                    if s.startswith("data:"):
+                        payload_str = s[5:].strip()
+                        if payload_str and payload_str != "[DONE]":
+                            try:
+                                piece = dig(json.loads(payload_str), delta_path)
+                                if isinstance(piece, str):
+                                    delta_text.append(piece)
+                            except Exception:
+                                pass
                 raw = "\n".join(chunks)
                 body = raw
-            else:
-                raw = r.text
-                ttft = time.perf_counter() - start
-                try:
-                    body = r.json()
-                except Exception:
-                    body = raw
+                stream_text = "".join(delta_text) if delta_text else None
+                return Response(r.status_code, dict(r.headers), body, raw, ttft,
+                                time.perf_counter() - start, paths=paths,
+                                stream_text=stream_text)
+            raw = r.text
+            ttft = time.perf_counter() - start
+            try:
+                body = r.json()
+            except Exception:
+                body = raw
             return Response(r.status_code, dict(r.headers), body, raw,
-                            ttft, time.perf_counter() - start)
+                            ttft, time.perf_counter() - start, paths=paths)
         except Exception as e:
             return Response(0, {}, None, "", None, time.perf_counter() - start, str(e))
 

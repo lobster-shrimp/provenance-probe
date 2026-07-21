@@ -114,6 +114,54 @@ Produces console output plus JSON and standalone HTML per target.
 | `artifacts <dir>` | Inspect on-prem model files; exit 2 on critical findings |
 | `network --host X --hosts-file f` | Jurisdiction-analyze SNI/DNS names harvested from an egress capture |
 
+## Testing web apps and platform tools (not just OpenAI-style APIs)
+
+Many targets are browser-based chat apps (chat.z.ai, and other platform tools),
+not clean OpenAI REST APIs — they use custom request/response shapes, cookie
+sessions, and SSE streaming. Use `api_style: "template"` to drive any of them:
+bring one request captured from the app's browser traffic (DevTools → Network →
+Copy as cURL / the JSON body), and describe where the reply lives.
+
+```json
+{
+  "name": "chat.z.ai",
+  "base_url": "https://chat.z.ai",
+  "chat_path": "/api/paas/v4/chat/completions",
+  "models_path": "/api/paas/v4/models",
+  "api_style": "template",
+  "cookie_env": "ZAI_COOKIE",
+  "request_template": {
+    "model": "glm-4.6",
+    "messages": [{"role": "user", "content": "__PROMPT__"}],
+    "max_tokens": "__MAX_TOKENS__",
+    "temperature": "__TEMPERATURE__"
+  },
+  "response_text_path": "choices.0.message.content",
+  "response_prompt_tokens_path": "usage.prompt_tokens",
+  "response_model_path": "model",
+  "authorized": true
+}
+```
+
+- `__PROMPT__` / `__MAX_TOKENS__` / `__TEMPERATURE__` / `__SYSTEM__` are
+  substituted into `request_template` for each probe (a whole-value
+  placeholder keeps its type; in-string use is stringified).
+- `response_*_path` fields read the reply by dotted path (numeric indices ok),
+  so any nested shape works.
+- For streaming apps set `"stream_mode": "sse"` and `"stream_delta_path":
+  "choices.0.delta.content"` — the per-chunk deltas are accumulated into the
+  full reply for the behavioral layers.
+- Session auth: put the browser `Cookie` header in `cookie` (or, better, an env
+  var via `cookie_env`); add anything else to `extra_headers`.
+
+What works on web apps: the **behavioral and deception layers are the primary
+signal** here (self-ID, persona vs. jurisdiction claims, confrontation, CJK
+leakage) plus network and wire. The tokenizer fingerprint only works if the app
+exposes prompt-token usage; many web apps don't (logged as a transparency
+finding). This is the chat.z.ai case — a GLM backend asserting a Google Gemini
+persona and denying PRC jurisdiction gets caught as a **material
+misrepresentation** even when the tokenizer layer is unavailable.
+
 ## What each layer does
 
 **Layer 2 — Network / jurisdiction** (`probes/network.py`)
@@ -225,7 +273,9 @@ python -m provenance_probe.cli monitor \
 - **Rotate probes**: `build-reference --variant-seed N` then `assess --variant-seed N` (same N) to send a rotated probe set without changing `CORPUS_VERSION`; see `probe_variants.py`.
 - **New endpoints**: extend `PRC_ENDPOINTS` / `AGGREGATOR_ENDPOINTS` / `PRC_MODEL_TOKENS`.
 - **New architectures**: extend `CN_ARCH` / `CN_VOCAB` in `probes/artifact.py`.
-- **Non-OpenAI wire formats**: subclass `Client._payload` or set `api_style="raw"`.
+- **Non-OpenAI wire formats / web apps**: use `api_style="template"` with a
+  captured `request_template` and `response_*_path` fields (see "Testing web
+  apps and platform tools" above), or subclass `Client._payload`.
 
 ## Known limits — read before reporting a verdict
 
