@@ -702,6 +702,35 @@
         "mixed_script_cjk_code": 144,
         "newline_storm": 122
       }
+    },
+    "Baichuan2": {
+      "label": "Baichuan2",
+      "family": "Baichuan",
+      "origin": "CN",
+      "vocab_size": 125696,
+      "source": "baichuan-inc/Baichuan2-7B-Chat",
+      "vector": {
+        "cjk_dense": 62,
+        "cjk_mixed": 34,
+        "jp_kana": 68,
+        "ko_hangul": 46,
+        "ws_runs": 98,
+        "tabs_deep": 112,
+        "digits_long": 334,
+        "punct_repeat": 164,
+        "emoji_zwj": 192,
+        "rare_unicode": 224,
+        "diacritics": 148,
+        "arabic_hebrew": 102,
+        "cyrillic": 59,
+        "code_json": 173,
+        "code_regex": 304,
+        "url_paths": 221,
+        "base64ish": 256,
+        "md_table": 126,
+        "mixed_script_cjk_code": 123,
+        "newline_storm": 122
+      }
     }
   }
 }

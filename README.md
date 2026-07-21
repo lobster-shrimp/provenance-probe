@@ -100,9 +100,14 @@ Vendor-specific response headers (`x-tt-logid` → ByteDance, `x-ca-request-id` 
 
 ### Reference vector coverage
 
-`data/tokenizer_ref.json` ships **real** production tokenizers — vocabularies and merge tables extracted from llama.cpp's bundled GGUF files, not surrogates. Every vocab size was checked against its published value.
+`data/tokenizer_ref.json` ships **real** production tokenizers, not surrogates —
+24 vectors, each measured over all 20 probes, every vocab size checked against
+its published value. Run `provenance-probe verify-reference` to print the full
+table.
 
-| Shipped (real) | Origin | Han tokens/char |
+The core set is GGUF-derived (extracted from llama.cpp's bundled vocabs):
+
+| GGUF-derived | Origin | Han tokens/char |
 |---|---|---|
 | Qwen2 / Qwen2.5 | CN | 0.53 |
 | DeepSeek-LLM | CN | 0.55 |
@@ -114,7 +119,22 @@ Vendor-specific response headers (`x-tt-logid` → ByteDance, `x-ca-request-id` 
 | MPT · GPT-NeoX | US | 1.40 |
 | GPT-2 | US | 2.32 |
 
-**Still missing — you must add these yourself via `build-reference`:** GLM/Zhipu, Yi, InternLM, MiniCPM, Baichuan, Gemma, Mistral, Phi, and the OpenAI `cl100k`/`o200k` encodings. GLM matters most if you are chasing z.ai-style cases; it is not in llama.cpp's vocab set.
+The families GGUF does not cover are now **also shipped**, built from HuggingFace
+via `build-reference` and merged in: GLM-4.5 and GLM-4-9B (GLM/Zhipu — the one
+that matters most for z.ai-style cases), Yi-1.5, InternLM2.5, MiniCPM3, Qwen3,
+DeepSeek-V3, Moonshot, Baichuan2 (CN); Mistral-v0.3 (EU); Phi-3.5 and the OpenAI
+`cl100k` / `o200k` tiktoken encodings (US). **CN families covered: 12.**
+
+Baichuan2 ships a custom tokenizer class needing `trust_remote_code`, which
+`build-reference` refuses by default (executing unvetted repo code in a
+provenance tool is self-defeating). Its vector here was built in a throwaway
+container; to rebuild, run `build-reference --only Baichuan2 --allow-remote-code`
+in a disposable environment only.
+
+**One family still needs a manual `build-reference` step:**
+
+- **Gemma** — gated on HuggingFace. Accept Google's licence on the model page,
+  set `HF_TOKEN`, then `provenance-probe build-reference --only Gemma-2`.
 
 Verified blind: a mock endpoint serving genuine Qwen2 token counts under the brand name `northstar-secure-1` was identified as **Qwen2, 20/20 probes exact, score 1.0**, with next-best Llama-3 at 0.175.
 
