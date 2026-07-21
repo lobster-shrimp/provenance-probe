@@ -52,15 +52,17 @@ def _load(out):
     return {"corpus_version": CORPUS_VERSION, "synthetic": False, "models": {}}
 
 
-def _vector(encode_fn):
-    return {pid: len(encode_fn(text)) for pid, text in TOKENIZER_PROBES}
+def _vector(encode_fn, variant_seed=0):
+    from .probe_variants import variant_probes
+    return {pid: len(encode_fn(text)) for pid, text in variant_probes(variant_seed)}
 
 
 def build(models=None, out=OUT, hf_token=None, overwrite=False,
-          allow_remote_code=False, only=None) -> dict:
+          allow_remote_code=False, only=None, variant_seed=0) -> dict:
     ref = _load(out)
     if overwrite:
         ref["models"] = {}
+    ref["variant_seed"] = variant_seed
     before = set(ref["models"])
     ok, skipped, failed = [], [], []
 
@@ -73,7 +75,7 @@ def build(models=None, out=OUT, hf_token=None, overwrite=False,
                 enc = tiktoken.get_encoding(enc_name)
                 ref["models"][label] = {"label": label, "family": fam, "origin": origin,
                                         "vocab_size": enc.n_vocab, "source": "tiktoken",
-                                        "vector": _vector(enc.encode)}
+                                        "vector": _vector(enc.encode, variant_seed)}
                 ok.append((label, enc.n_vocab))
             except Exception as e:
                 failed.append((label, str(e)[:90]))
@@ -114,7 +116,7 @@ def build(models=None, out=OUT, hf_token=None, overwrite=False,
                 failed.append((label, msg[:110]))
             continue
         try:
-            vec = _vector(lambda t: tk.encode(t, add_special_tokens=False))
+            vec = _vector(lambda t: tk.encode(t, add_special_tokens=False), variant_seed)
             vs = getattr(tk, "vocab_size", None) or len(tk)
             ref["models"][label] = {"label": label, "family": fam, "origin": origin,
                                     "vocab_size": vs, "source": repo, "vector": vec}

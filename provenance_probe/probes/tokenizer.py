@@ -6,9 +6,16 @@ from ..data.corpus import TOKENIZER_PROBES, CORPUS_VERSION, CJK_DENSE_HAN_CHARS
 REF_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "tokenizer_ref.json")
 
 
-def measure(client, probes=None, verbose=False) -> dict:
-    """Send each probe with max_tokens=1 and record reported prompt tokens."""
-    probes = probes or TOKENIZER_PROBES
+def measure(client, probes=None, verbose=False, variant_seed=0) -> dict:
+    """Send each probe with max_tokens=1 and record reported prompt tokens.
+
+    variant_seed selects a rotated probe set (probe_variants) to defeat exact-
+    string special-casing; 0 is the canonical corpus. The seed is recorded so a
+    comparison only trusts a reference built with the same seed.
+    """
+    if probes is None:
+        from ..probe_variants import variant_probes
+        probes = variant_probes(variant_seed)
     vec, errors, meta = {}, {}, {}
     for pid, text in probes:
         r = client.chat(text, max_tokens=1, temperature=0.0)
@@ -21,8 +28,8 @@ def measure(client, probes=None, verbose=False) -> dict:
             meta.setdefault("echoed_models", set()).add(r.echoed_model())
     if "echoed_models" in meta:
         meta["echoed_models"] = sorted(meta["echoed_models"])
-    return {"corpus_version": CORPUS_VERSION, "vector": vec,
-            "errors": errors, "meta": meta,
+    return {"corpus_version": CORPUS_VERSION, "variant_seed": variant_seed,
+            "vector": vec, "errors": errors, "meta": meta,
             "usable": len(vec) >= 6}
 
 
