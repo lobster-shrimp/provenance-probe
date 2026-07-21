@@ -45,15 +45,30 @@ def _run(run_id: str, spec: dict):
         st["progress"] = pct
 
     try:
+        rt = spec.get("request_template") or ""
+        if isinstance(rt, str) and rt.strip():
+            try:
+                rt = json.loads(rt)
+            except Exception as e:
+                raise ValueError(f"Request template is not valid JSON: {e}")
+        elif not isinstance(rt, dict):
+            rt = {}
         t = Target(
             name=spec.get("name") or "target",
             base_url=spec["base_url"],
             model=spec.get("model", ""),
             api_style=spec.get("api_style", "openai"),
-            chat_path=spec.get("chat_path", "/chat/completions"),
-            models_path=spec.get("models_path", "/models"),
+            chat_path=spec.get("chat_path") or "/chat/completions",
+            models_path=spec.get("models_path") or "/models",
             proxy=spec.get("proxy", ""),
             verify_tls=bool(spec.get("verify_tls", True)),
+            cookie=spec.get("cookie", ""),
+            request_template=rt,
+            response_text_path=spec.get("response_text_path", ""),
+            response_prompt_tokens_path=spec.get("response_prompt_tokens_path", ""),
+            response_model_path=spec.get("response_model_path", ""),
+            stream_mode=spec.get("stream_mode", "none"),
+            stream_delta_path=spec.get("stream_delta_path", ""),
             authorized=True,
         )
         if spec.get("api_key"):
@@ -254,8 +269,31 @@ a{color:var(--acc)}
   <div><label>Endpoint base URL</label>
    <input type=text id=base_url placeholder="https://api.vendor.example/v1"></div>
   <div><label>Model id</label><input type=text id=model placeholder="vendor-flagship-1"></div>
-  <div><label>API style</label><select id=api_style>
-    <option value=openai>openai</option><option value=anthropic>anthropic</option></select></div>
+  <div><label>API style</label><select id=api_style onchange="toggleTmpl()">
+    <option value=openai>openai</option><option value=anthropic>anthropic</option>
+    <option value=template>template (web app)</option></select></div>
+ </div>
+ <div id=tmpl class=hide>
+  <div class=stat style="margin:2px 0 12px">Web app / platform tool: paste one request captured from the app's
+   browser traffic (DevTools → Network → the chat request). Use <span class=mono>__PROMPT__</span> where the
+   message text goes. Tell it where the reply lives with the response paths below.</div>
+  <div class="row grid">
+   <div><label>Chat path</label><input type=text id=chat_path placeholder="/api/paas/v4/chat/completions"></div>
+   <div><label>Models path (optional)</label><input type=text id=models_path placeholder="/api/paas/v4/models"></div>
+  </div>
+  <div class=row><label>Request template (JSON, use __PROMPT__)</label>
+   <textarea id=request_template rows=7 style="width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:7px;font:13px ui-monospace,monospace;background:#fcfcfd"
+    placeholder='{"model":"glm-4.6","messages":[{"role":"user","content":"__PROMPT__"}],"max_tokens":"__MAX_TOKENS__","temperature":"__TEMPERATURE__"}'></textarea></div>
+  <div class="row grid3">
+   <div><label>Response text path</label><input type=text id=response_text_path placeholder="choices.0.message.content"></div>
+   <div><label>Prompt-tokens path (opt)</label><input type=text id=response_prompt_tokens_path placeholder="usage.prompt_tokens"></div>
+   <div><label>Model path (opt)</label><input type=text id=response_model_path placeholder="model"></div>
+  </div>
+  <div class="row grid3">
+   <div><label>Session cookie (stays in memory)</label><input type=password id=cookie placeholder="session=…"></div>
+   <div><label>Stream mode</label><select id=stream_mode><option value=none>none</option><option value=sse>sse</option></select></div>
+   <div><label>SSE delta path</label><input type=text id=stream_delta_path placeholder="choices.0.delta.content"></div>
+  </div>
  </div>
  <div class="row grid">
   <div><label>Label</label><input type=text id=name placeholder="vendor-under-test"></div>
@@ -297,6 +335,7 @@ a{color:var(--acc)}
 <script>
 const $=i=>document.getElementById(i);
 let timer=null;
+function toggleTmpl(){$('tmpl').classList.toggle('hide',$('api_style').value!=='template')}
 function start(){
  if(!$('authorized').checked){alert('Confirm authorization first.');return}
  const spec={base_url:$('base_url').value.trim(),model:$('model').value.trim(),
@@ -306,6 +345,19 @@ function start(){
   confront_control:$('confront_control').value.trim(),proxy:$('proxy').value.trim(),
   artifacts_dir:$('artifacts_dir').value.trim(),session_test:$('session_test').checked,
   offline:$('offline').checked,no_behavioral:$('no_behavioral').checked,authorized:true};
+ if($('api_style').value==='template'){
+  spec.chat_path=$('chat_path').value.trim();
+  spec.models_path=$('models_path').value.trim();
+  spec.request_template=$('request_template').value.trim();
+  spec.response_text_path=$('response_text_path').value.trim();
+  spec.response_prompt_tokens_path=$('response_prompt_tokens_path').value.trim();
+  spec.response_model_path=$('response_model_path').value.trim();
+  spec.cookie=$('cookie').value;
+  spec.stream_mode=$('stream_mode').value;
+  spec.stream_delta_path=$('stream_delta_path').value.trim();
+  if(!spec.request_template){alert('Request template required for web-app (template) mode.');return}
+  if(!spec.response_text_path){alert('Response text path required for template mode.');return}
+ }
  if(!spec.base_url){alert('Endpoint base URL required.');return}
  $('go').disabled=true;$('prog').classList.remove('hide');$('out').innerHTML='';
  fetch('/api/assess',{method:'POST',headers:{'Content-Type':'application/json'},
