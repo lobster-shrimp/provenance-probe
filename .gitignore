@@ -17,3 +17,6 @@ venv/
 
 # Generated assessment output
 reports/
+
+# gstack design/scratch artifacts
+.gstack/

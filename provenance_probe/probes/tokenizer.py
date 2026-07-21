@@ -42,6 +42,26 @@ def _overhead_correct(obs: dict, ref: dict) -> int:
     return deltas[len(deltas) // 2]
 
 
+def shape_vector(vec: dict) -> dict:
+    """Overhead-invariant form of a probe vector, for stable fingerprinting.
+
+    A chat template adds a roughly constant token overhead to every probe
+    (see _overhead_correct). Comparison cancels it against a reference, but a
+    fingerprint has no reference at compute time, so hashing the raw vector
+    makes the fingerprint flip whenever an aggregator tweaks its template or
+    token accounting — a benign change read as a model swap.
+
+    Subtracting the vector's own minimum cancels any constant offset without
+    needing a reference, while preserving the relative structure between
+    probes that actually distinguishes tokenizer families. Keys are sorted by
+    the caller (json.dumps sort_keys) so ordering is stable.
+    """
+    if not vec:
+        return {}
+    floor = min(vec.values())
+    return {k: v - floor for k, v in vec.items()}
+
+
 def compare(observed: dict, reference: dict | None = None) -> list[dict]:
     reference = reference if reference is not None else load_reference()
     obs = observed.get("vector", {})
