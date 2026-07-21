@@ -731,6 +731,35 @@
         "mixed_script_cjk_code": 123,
         "newline_storm": 122
       }
+    },
+    "Gemma-2": {
+      "label": "Gemma-2",
+      "family": "Gemma",
+      "origin": "US",
+      "vocab_size": 256000,
+      "source": "google/gemma-2-9b-it",
+      "vector": {
+        "cjk_dense": 75,
+        "cjk_mixed": 30,
+        "jp_kana": 37,
+        "ko_hangul": 32,
+        "ws_runs": 87,
+        "tabs_deep": 51,
+        "digits_long": 334,
+        "punct_repeat": 21,
+        "emoji_zwj": 192,
+        "rare_unicode": 268,
+        "diacritics": 149,
+        "arabic_hebrew": 42,
+        "cyrillic": 27,
+        "code_json": 155,
+        "code_regex": 240,
+        "url_paths": 211,
+        "base64ish": 174,
+        "md_table": 122,
+        "mixed_script_cjk_code": 111,
+        "newline_storm": 5
+      }
     }
   }
 }
