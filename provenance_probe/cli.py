@@ -131,9 +131,17 @@ def _hard_evidence(b: dict):
 
 
 def _fp(b: dict) -> str:
-    """Stable identity of the serving backend, for drift detection."""
+    """Stable identity of the serving backend, for drift detection.
+
+    The tokenizer component hashes the overhead-invariant shape of the probe
+    vector, not the raw prompt_tokens counts. A constant chat-template /
+    token-accounting shift by the endpoint therefore does NOT flip the
+    fingerprint (it would otherwise read as a false model swap); a genuine
+    change in tokenizer family, which changes the relative structure between
+    probes, still does. See tokenizer.shape_vector.
+    """
     parts = [
-        json.dumps((b.get("tokenizer") or {}).get("vector", {}), sort_keys=True),
+        json.dumps(tokenizer.shape_vector((b.get("tokenizer") or {}).get("vector", {})), sort_keys=True),
         (b.get("errors") or {}).get("error_signature", ""),
         (b.get("headers") or {}).get("header_shape_hash", ""),
         (b.get("greedy") or {}).get("signature", ""),
@@ -151,12 +159,16 @@ def cmd_monitor(a):
         out["changes"].append({"severity": "critical", "field": "fingerprint_id",
                                "detail": "Composite backend fingerprint changed — the serving model "
                                          "or stack was altered since baseline."})
-    bt = (base.get("tokenizer") or {}).get("vector", {})
-    ct = (cur.get("tokenizer") or {}).get("vector", {})
+    # Compare the overhead-invariant shape, not raw prompt_tokens: a constant
+    # chat-template / accounting shift moves every probe by the same amount and
+    # is NOT a model change. Only a shift in the relative structure between
+    # probes indicates a different tokenizer family. (Same rationale as _fp.)
+    bt = tokenizer.shape_vector((base.get("tokenizer") or {}).get("vector", {}))
+    ct = tokenizer.shape_vector((cur.get("tokenizer") or {}).get("vector", {}))
     diff = {k: (bt[k], ct[k]) for k in bt if k in ct and bt[k] != ct[k]}
     if diff:
         out["changes"].append({"severity": "critical", "field": "tokenizer_vector",
-                               "detail": f"Token counts changed on {len(diff)} probes: "
+                               "detail": f"Tokenizer shape changed on {len(diff)} probes (overhead-corrected): "
                                          + ", ".join(f"{k} {v[0]}->{v[1]}" for k, v in list(diff.items())[:6]),
                                "implication": "Different tokenizer => different model family."})
     if (base.get("errors") or {}).get("error_signature") != (cur.get("errors") or {}).get("error_signature"):
