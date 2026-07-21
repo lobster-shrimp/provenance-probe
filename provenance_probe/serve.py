@@ -212,7 +212,8 @@ def report_file(name):
 
 @app.get("/")
 def index():
-    return Response(PAGE, mimetype="text/html")
+    obs_url = os.environ.get("PROVENANCE_OBSERVATORY_URL", "http://127.0.0.1:8080")
+    return Response(PAGE.replace("__OBSERVATORY_URL__", html.escape(obs_url)), mimetype="text/html")
 
 
 PAGE = r"""<!doctype html><meta charset=utf-8><title>provenance-probe</title>
@@ -260,7 +261,11 @@ td{padding:7px 9px;border-top:1px solid var(--line);vertical-align:top}
 a{color:var(--acc)}
 .hist{font-size:13px}.hist td{padding:6px 9px}
 .dot{display:inline-block;width:8px;height:8px;border-radius:99px;margin-right:7px}
+.topnav{display:flex;gap:14px;font-size:11px;letter-spacing:.07em;text-transform:uppercase;
+margin:0 0 14px;border-bottom:1px solid var(--line);padding-bottom:8px}
+.topnav .active{color:var(--ink);font-weight:700}.topnav a{color:var(--acc);text-decoration:none}
 </style><div class=w>
+<div class=topnav><span class=active>Live probe tool</span><a href="__OBSERVATORY_URL__">Observatory &rarr;</a></div>
 <h1>provenance-probe</h1>
 <div class=sub>Local model provenance &amp; jurisdiction assurance · binds to 127.0.0.1 · nothing leaves this machine except requests to the endpoint you name</div>
 
