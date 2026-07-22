@@ -202,6 +202,16 @@ class Client:
                                 time.perf_counter() - start, paths=paths,
                                 stream_text=stream_text)
             raw = r.text
+            # Reasoning models (Moonshot kimi, OpenAI o-series, ...) reject
+            # temperature=0 with a 400. prompt_tokens is deterministic
+            # regardless of temperature, so retry once without it — this keeps
+            # the tokenizer layer working against reasoning endpoints.
+            if (r.status_code == 400 and isinstance(payload, dict)
+                    and "temperature" in payload and "temperature" in raw.lower()):
+                retry = {k: v for k, v in payload.items() if k != "temperature"}
+                r = self.s.post(url, headers=t.headers(), json=retry,
+                                timeout=t.timeout, verify=t.verify_tls)
+                raw = r.text
             ttft = time.perf_counter() - start
             try:
                 body = r.json()
