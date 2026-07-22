@@ -2,7 +2,7 @@
 from __future__ import annotations
 import socket, ipaddress, json
 from urllib.parse import urlparse
-from ..data.corpus import PRC_ENDPOINTS, AGGREGATOR_ENDPOINTS
+from ..data.corpus import PRC_ENDPOINTS, AGGREGATOR_ENDPOINTS, FIRST_PARTY_ENDPOINTS
 
 PRC_ASN_HINTS = ("alibaba", "aliyun", "tencent", "huawei", "baidu", "chinanet",
                  "china telecom", "china unicom", "china mobile", "cernet",
@@ -43,6 +43,16 @@ def analyze_host(url: str, do_rdap: bool = True) -> dict:
                      "detail": f"{op} is a multi-model aggregator. Jurisdiction likely non-PRC, "
                                f"but PRC-origin WEIGHTS may still be served. Provenance unresolved."})
                 break
+        else:
+            for pat, (op, origin) in FIRST_PARTY_ENDPOINTS.items():
+                if pat in low:
+                    out.update(operator=op, jurisdiction="non-PRC-firstparty", confidence=0.85)
+                    out["findings"].append(
+                        {"type": "first_party", "severity": "info",
+                         "detail": f"{op} is a first-party {origin} model developer serving its own "
+                                   f"weights; jurisdiction non-PRC. Verify the served model with the "
+                                   f"tokenizer/behavioral layers (a first-party can still reroute)."})
+                    break
 
     if low.endswith(".cn") or ".cn." in low:
         out["findings"].append({"type": "cn_tld", "severity": "high",

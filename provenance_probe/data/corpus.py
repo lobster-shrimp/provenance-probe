@@ -163,6 +163,25 @@ AGGREGATOR_ENDPOINTS = {
     "aiplatform.googleapis.com": "Google Vertex",
 }
 
+# First-party (non-aggregator) model developers serving their OWN weights.
+# Resolves jurisdiction (non-PRC) AND signals expected provenance — unlike an
+# aggregator, which resolves jurisdiction but leaves provenance open. Still
+# verify the served model with the tokenizer/behavioral layers (a first-party
+# could silently reroute). host substring -> (operator, origin).
+FIRST_PARTY_ENDPOINTS = {
+    "api.openai.com": ("OpenAI", "US"),
+    "api.anthropic.com": ("Anthropic", "US"),
+    "generativelanguage.googleapis.com": ("Google (Gemini)", "US"),
+    "api.mistral.ai": ("Mistral AI", "EU"),
+    "codestral.mistral.ai": ("Mistral AI", "EU"),
+    "api.cohere.com": ("Cohere", "CA"),
+    "api.cohere.ai": ("Cohere", "CA"),
+    "api.x.ai": ("xAI (Grok)", "US"),
+    "api.ai21.com": ("AI21 Labs", "IL"),
+    "api.reka.ai": ("Reka", "US"),
+    "api.llama.com": ("Meta (Llama)", "US"),
+}
+
 # Model-name substrings implying Chinese-origin weights.
 PRC_MODEL_TOKENS = {
     "qwen": "Qwen (Alibaba)", "qwq": "QwQ (Alibaba)", "qvq": "QVQ (Alibaba)",
