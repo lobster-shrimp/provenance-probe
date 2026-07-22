@@ -4,6 +4,14 @@ Black-box assurance harness for determining **which model is actually serving yo
 
 > **Scope control.** Only run against systems you are authorized in writing to test. Targets carry an `authorized` flag; active probing aborts without it. The behavioral probes send politically sensitive prompts — get that into your test authorization explicitly.
 
+> **Companion project — [provenance-observatory](https://github.com/lobster-shrimp/provenance-observatory).**
+> This repo is the **engine + CLI + local web UI**: a point-in-time assessment you
+> run against an endpoint or web app you're authorized to test. The
+> **Observatory** is the **continuous, public monitoring layer** built on top of
+> it — nightly probes, a signed append-only evidence log, disclosure-gated
+> advisories, and a published site. Same fingerprinting core, two use cases. See
+> [Documentation & related project](#documentation--related-project) below.
+
 ## In plain terms
 
 When you pay for an AI model through an API, you are trusting the vendor to
@@ -265,7 +273,13 @@ python -m provenance_probe.cli monitor \
   --json-out drift.json || alert
 ```
 
-`fingerprint_id` is a composite of the tokenizer vector, error signature, header shape, greedy signature, and streaming fields. Any change means the backend moved.
+`fingerprint_id` is a composite of the tokenizer vector, error signature, header shape, greedy signature, and streaming fields. Any change means the backend moved. The `fingerprint_id` hashes the *overhead-corrected* tokenizer shape, so a benign chat-template change does not trip a false drift.
+
+For a **productized** version of this — nightly monitoring across many targets,
+committed and cryptographically signed evidence, numbered advisories on drift,
+and a public Certificate-Transparency-style site — see the
+[provenance-observatory](https://github.com/lobster-shrimp/provenance-observatory)
+companion project, which consumes this `monitor` contract as a black-box CLI.
 
 ## Extending
 
@@ -284,6 +298,41 @@ python -m provenance_probe.cli monitor \
 - **Every black-box technique degrades against active evasion**: normalized usage counts, suppressed logprobs, output post-filtering, wrapper-level refusals. Layer network and contractual evidence underneath. Probe randomization (`--variant-seed`) raises the cost of exact-string special-casing but does not eliminate active evasion.
 - **TLS pinning / in-app proxying** defeats passive capture. Escalate to contractual attestation.
 - **Wrapper vs model.** Refusals and self-ID answers may originate in the vendor's system prompt or filter, not the weights. The tokenizer and wire layers are much harder to fake than the behavioral layer — weight them accordingly.
+
+## Documentation & related project
+
+### In this repo
+- [`QUICKSTART.md`](QUICKSTART.md) — five-step install with checkpoints.
+- [`CHANGELOG.md`](CHANGELOG.md) — version history.
+- [`docs/live-fingerprint-corpus.md`](docs/live-fingerprint-corpus.md) — real
+  full-stack results against production endpoints (OpenAI clean-US anchor;
+  DeepSeek + Moonshot CONFIRMED-CN anchors), validating the shipped reference
+  vectors against live services.
+- [`docs/provider-jurisdiction-corpus.md`](docs/provider-jurisdiction-corpus.md) —
+  registry-based jurisdiction snapshot of ~26 LLM API hosts, and why CDN-fronting
+  makes IP geolocation unreliable.
+- **Gate-1 / assurance materials** (for anyone publishing findings about named
+  vendors): [`DISCLOSURE.md`](DISCLOSURE.md) (responsible-disclosure policy),
+  [`docs/tos-notes.md`](docs/tos-notes.md) (per-provider ToS analysis + counsel
+  questions), [`docs/counsel-brief.md`](docs/counsel-brief.md),
+  [`docs/openrouter-approval-request.md`](docs/openrouter-approval-request.md).
+
+### The Observatory (companion repo)
+[**provenance-observatory**](https://github.com/lobster-shrimp/provenance-observatory)
+turns this engine into continuous public monitoring:
+
+| | provenance-probe (this repo) | provenance-observatory |
+|---|---|---|
+| Shape | Engine + CLI + local web UI | GitHub-native monitoring service |
+| Cadence | Point-in-time, on demand | Nightly (Actions cron) |
+| Targets | Any endpoint / web app you're authorized to test | A curated `targets.yaml` watch list |
+| Output | Console + JSON/HTML report + local UI | Signed append-only evidence log + Variant C public site + numbered advisories |
+| Trust model | You run it, you read it | Two-tier publication: neutral evidence public, interpreted verdicts disclosure-gated |
+| Dependency | — | Consumes this package's `assess` / `monitor` as a black-box CLI |
+
+The two local UIs cross-link: the probe web UI (`serve`, :8770) has an
+"Observatory →" nav link and the Observatory site has a "Live probe tool →" link
+(both configurable via `PROVENANCE_OBSERVATORY_URL` / `OBSERVATORY_PROBE_URL`).
 
 ## Contract language this supports
 
