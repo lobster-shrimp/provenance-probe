@@ -52,16 +52,32 @@ def score(bundle: dict) -> dict:
                if WEIGHTS.get(s["signal"], (0, ""))[1] == "provenance")
     jl, pl = _sigmoid(jur - 1.5), _sigmoid(prov - 1.5)
     coverage = _coverage(bundle)
+
+    # A "clean" provenance verdict (UNLIKELY / NO EVIDENCE) is only earned if a
+    # layer that can actually DETECT provenance returned data. If the tokenizer
+    # fingerprint, artifacts, and client-source all produced nothing (e.g. the
+    # endpoint suppressed usage, or requests failed), we haven't looked — so we
+    # must not imply "probably not Chinese". Floor the verdict at INDETERMINATE.
+    prov_detector = (bool(bundle.get("tokenizer_match"))
+                     or bool((bundle.get("artifacts") or {}).get("findings"))
+                     or bool((bundle.get("client_source") or {}).get("files_scanned")))
+    prov_verdict = _verdict(pl)
+    prov = {"likelihood": round(pl, 3), "logodds": round(prov, 2),
+            "verdict": prov_verdict,
+            "meaning": "Model weights are Chinese-origin regardless of where served "
+                       "(bias/integrity/procurement-policy exposure)."}
+    if not prov_detector and prov_verdict in ("UNLIKELY", "NO EVIDENCE"):
+        prov["verdict"] = "INDETERMINATE"
+        prov["note"] = ("Primary provenance layer (tokenizer fingerprint) returned no data — "
+                        "usage suppressed, requests failed, or model unfingerprinted. This is "
+                        "NOT a clean bill; provenance was not actually measured.")
     return {
         "signals": signals,
         "jurisdictional_risk": {"likelihood": round(jl, 3), "logodds": round(jur, 2),
                                 "verdict": _verdict(jl),
                                 "meaning": "Inference executed by a PRC-domiciled operator or on PRC soil "
                                            "(PIPL/DSL/CSL/NIL Art.7 exposure)."},
-        "provenance_risk": {"likelihood": round(pl, 3), "logodds": round(prov, 2),
-                            "verdict": _verdict(pl),
-                            "meaning": "Model weights are Chinese-origin regardless of where served "
-                                       "(bias/integrity/procurement-policy exposure)."},
+        "provenance_risk": prov,
         "evidence_coverage": coverage,
         "confidence": _conf(coverage, signals),
     }
