@@ -141,7 +141,10 @@ def cmd_monitor(a):
     cur = json.load(open(a.current))
     result = monitor.diff(base, cur)
     out = {"baseline": a.baseline, "current": a.current,
-           "changes": result["changes"], "drift_detected": result["drift_detected"]}
+           "changes": result["changes"], "drift_detected": result["drift_detected"],
+           "confidence": result["confidence"]}
+    if result.get("confidence_note"):
+        out["confidence_note"] = result["confidence_note"]
     print(json.dumps(out, indent=2))
     if a.json_out:
         json.dump(out, open(a.json_out, "w"), indent=2)

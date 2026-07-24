@@ -9,7 +9,7 @@ from provenance_probe import monitor
 def _bundle(vec, *, fp="fp-a", err="sig-1", jur="UNLIKELY", prov="NO EVIDENCE"):
     return {
         "fingerprint_id": fp,
-        "tokenizer": {"vector": vec},
+        "tokenizer": {"vector": vec, "usable": True},
         "errors": {"error_signature": err},
         "score": {"jurisdictional_risk": {"verdict": jur},
                   "provenance_risk": {"verdict": prov}},
@@ -72,3 +72,35 @@ def test_fingerprint_stable_and_overhead_invariant():
     # a real structural change does move it
     b3 = {"tokenizer": {"vector": {**VEC, "c": 99}}, "errors": {"error_signature": "s"}}
     assert monitor.fingerprint(b1) != monitor.fingerprint(b3)
+
+
+# --- degraded confidence when usage/tokenizer is suppressed -----------------
+
+def _no_tok(*, fp="fp-a", err="sig-1"):
+    return {"fingerprint_id": fp, "tokenizer": {"usable": False},
+            "errors": {"error_signature": err}, "score": {}}
+
+
+def test_confidence_full_when_both_tokenizers_usable():
+    out = monitor.diff(_bundle(VEC), _bundle(VEC))
+    assert out["confidence"] == "full"
+    assert "confidence_note" not in out
+
+
+def test_confidence_degraded_when_usage_suppressed():
+    out = monitor.diff(_no_tok(), _no_tok())
+    assert out["confidence"] == "degraded"
+    assert "usage suppressed" in out["confidence_note"]
+    assert "not a clean bill" in out["confidence_note"]
+
+
+def test_degraded_still_detects_wire_drift():
+    # tokenizer gone, but error schema changed -> drift still flagged, degraded
+    out = monitor.diff(_no_tok(err="s1"), _no_tok(err="s2", fp="fp-b"))
+    assert out["drift_detected"] is True
+    assert out["confidence"] == "degraded"
+
+
+def test_degraded_if_only_one_side_suppressed():
+    out = monitor.diff(_bundle(VEC), _no_tok(fp="fp-a"))
+    assert out["confidence"] == "degraded"

@@ -222,6 +222,8 @@ def api_monitor():
     return jsonify({
         "drift_detected": result["drift_detected"],
         "changes": result["changes"],
+        "confidence": result["confidence"],
+        "confidence_note": result.get("confidence_note", ""),
         "baseline": {"fingerprint_id": base.get("fingerprint_id", ""), "ts": base.get("timestamp")},
         "current": {"fingerprint_id": cur.get("fingerprint_id", ""), "ts": cur.get("timestamp")},
     })
@@ -488,6 +490,10 @@ function compare(){
      d.changes.map(c=>'<tr><td><span class="sev '+esc(c.severity)+'">'+esc(c.severity)+
      '</span></td><td class=mono>'+esc(c.field)+'</td><td>'+esc(c.detail)+
      (c.implication?'<div class=stat>'+esc(c.implication)+'</div>':'')+'</td></tr>').join('')+'</table>';
+   }
+   if(d.confidence==='degraded'){
+    h+='<div class="ban yellow" style="margin-top:10px"><div class=lvl>Degraded confidence</div>'+
+     '<div class=stat style="color:inherit">'+esc(d.confidence_note||'')+'</div></div>';
    }
    $('mon_out').innerHTML=h;
   }).catch(e=>{$('cmp').disabled=false;$('mon_out').textContent='Compare failed: '+e});

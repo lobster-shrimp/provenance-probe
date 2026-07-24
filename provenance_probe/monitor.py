@@ -41,12 +41,24 @@ def fingerprint(b: dict) -> str:
     return hashlib.sha256("||".join(parts).encode()).hexdigest()[:24]
 
 
+def _tokenizer_usable(b: dict) -> bool:
+    return bool((b.get("tokenizer") or {}).get("usable"))
+
+
 def diff(base: dict, cur: dict) -> dict:
     """Compare a current assessment against a baseline. Detects silent swaps.
 
-    Returns {"changes": [...], "drift_detected": bool}. Pure — no I/O, no
-    process exit — so the CLI, the web UI, and the observatory runner can all
-    reuse it and present the result their own way.
+    Returns {"changes": [...], "drift_detected": bool, "confidence": "full"|
+    "degraded", "confidence_note": str?}. Pure — no I/O, no process exit — so the
+    CLI, the web UI, and the observatory runner can all reuse it and present the
+    result their own way.
+
+    Confidence is "degraded" when the tokenizer layer was unavailable (the
+    endpoint suppressed usage.prompt_tokens) in either run. The tokenizer
+    fingerprint is the strongest signal; without it the comparison rests on
+    wire + latency only, so a same-family model swap can slip through and a
+    "no drift" verdict is weaker. Web apps commonly hit this. Making it explicit
+    stops a degraded no-drift from reading as a clean bill of health.
     """
     changes: list[dict] = []
 
@@ -85,4 +97,13 @@ def diff(base: dict, cur: dict) -> dict:
             changes.append({"severity": "medium", "field": "latency",
                             "detail": json.dumps(d["signals"])})
 
-    return {"changes": changes, "drift_detected": bool(changes)}
+    degraded = not (_tokenizer_usable(base) and _tokenizer_usable(cur))
+    out = {"changes": changes, "drift_detected": bool(changes),
+           "confidence": "degraded" if degraded else "full"}
+    if degraded:
+        out["confidence_note"] = (
+            "Tokenizer layer unavailable (usage suppressed) in at least one run — "
+            "the strongest signal is absent. Drift judged on wire + latency only; "
+            "a same-family model swap could go undetected and a no-drift result is "
+            "not a clean bill of health.")
+    return out
