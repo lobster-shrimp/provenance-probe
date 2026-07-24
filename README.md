@@ -124,6 +124,11 @@ Produces console output plus JSON and standalone HTML per target.
 
 ## Testing web apps and platform tools (not just OpenAI-style APIs)
 
+> **Full step-by-step for adding any source (API or web app), the complete
+> `Target` field reference, and troubleshooting:
+> [`docs/adding-sources.md`](docs/adding-sources.md).** The rest of this section
+> is the short version.
+
 Many targets are browser-based chat apps (chat.z.ai, and other platform tools),
 not clean OpenAI REST APIs — they use custom request/response shapes, cookie
 sessions, and SSE streaming. Use `api_style: "template"` to drive any of them:
@@ -287,9 +292,12 @@ companion project, which consumes this `monitor` contract as a black-box CLI.
 - **Rotate probes**: `build-reference --variant-seed N` then `assess --variant-seed N` (same N) to send a rotated probe set without changing `CORPUS_VERSION`; see `probe_variants.py`.
 - **New endpoints**: extend `PRC_ENDPOINTS` / `AGGREGATOR_ENDPOINTS` / `PRC_MODEL_TOKENS`.
 - **New architectures**: extend `CN_ARCH` / `CN_VOCAB` in `probes/artifact.py`.
+- **New API / web-app sources**: see the full guide,
+  [`docs/adding-sources.md`](docs/adding-sources.md) (OpenAI/Anthropic styles,
+  the `template` adapter, auth, SSE, field reference, troubleshooting).
 - **Non-OpenAI wire formats / web apps**: use `api_style="template"` with a
-  captured `request_template` and `response_*_path` fields (see "Testing web
-  apps and platform tools" above), or subclass `Client._payload`.
+  captured `request_template` and `response_*_path` fields, or subclass
+  `Client._payload`.
 
 ## Known limits — read before reporting a verdict
 
@@ -303,6 +311,12 @@ companion project, which consumes this `monitor` contract as a black-box CLI.
 
 ### In this repo
 - [`QUICKSTART.md`](QUICKSTART.md) — five-step install with checkpoints.
+- [`docs/adding-sources.md`](docs/adding-sources.md) — **add a new API or
+  web-app source**: OpenAI/Anthropic styles, the `template` adapter (captured
+  request, placeholders, dotted response paths, cookies, SSE), the full `Target`
+  field reference, and troubleshooting.
+- [`eval/README.md`](eval/README.md) — the accuracy/consistency eval harness and
+  its zero-FP CI gate.
 - [`CHANGELOG.md`](CHANGELOG.md) — version history.
 - [`docs/live-fingerprint-corpus.md`](docs/live-fingerprint-corpus.md) — real
   full-stack results against production endpoints (OpenAI clean-US anchor;
