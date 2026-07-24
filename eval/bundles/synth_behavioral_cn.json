@@ -1,0 +1,10 @@
+{
+  "_label": "SYNTHETIC. Behavioral-only CN evidence (no tokenizer). alignment asymmetry + self-ID + CJK leakage. Verifies behavioral signals reach an adverse tier without a tokenizer match, and that the INDETERMINATE floor does NOT wrongly apply above the clean band. Expect provenance CONFIRMED/LIKELY, flagged CN.",
+  "target": {"name": "synthetic-behavioral-cn", "model": "blind-2"},
+  "network": {"addresses": [], "jurisdiction": "", "findings": []},
+  "headers": {"status": 200, "vendor_headers": []},
+  "tokenizer": {"usable": false},
+  "selfid": {"claimed_families": [{"token": "qwen", "family": "Qwen"}]},
+  "alignment": {"mean_asymmetry": 0.77, "interpretation": "deflects PRC-sensitive topics vs Western controls"},
+  "leakage": {"leak_rate": 0.2, "leak_events": 2, "samples": 10}
+}
