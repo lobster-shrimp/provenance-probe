@@ -7,7 +7,7 @@ from .config import load_targets, write_example, Target
 from .client import Client
 from .probes import (network, tokenizer, behavioral, wire, latency, logprob,
                      artifact, clientsrc, deception)
-from . import scoring, report, reference, userwarn
+from . import scoring, report, reference, userwarn, monitor
 
 BANNER = """provenance-probe — GenAI model provenance & jurisdiction assurance
 Use only against systems you are authorized in writing to test."""
@@ -100,7 +100,7 @@ def cmd_assess(a):
 
         b["score"] = scoring.score(b)
         b["user_warning"] = userwarn.build(b)
-        b["fingerprint_id"] = _fp(b)
+        b["fingerprint_id"] = monitor.fingerprint(b)
         bundles.append(b)
         print("\n" + report.console(b))
         if b.get("deception", {}).get("correlation", {}).get("finding"):
@@ -135,62 +135,13 @@ def _hard_evidence(b: dict):
     return None, ""
 
 
-def _fp(b: dict) -> str:
-    """Stable identity of the serving backend, for drift detection.
-
-    The tokenizer component hashes the overhead-invariant shape of the probe
-    vector, not the raw prompt_tokens counts. A constant chat-template /
-    token-accounting shift by the endpoint therefore does NOT flip the
-    fingerprint (it would otherwise read as a false model swap); a genuine
-    change in tokenizer family, which changes the relative structure between
-    probes, still does. See tokenizer.shape_vector.
-    """
-    parts = [
-        json.dumps(tokenizer.shape_vector((b.get("tokenizer") or {}).get("vector", {})), sort_keys=True),
-        (b.get("errors") or {}).get("error_signature", ""),
-        (b.get("headers") or {}).get("header_shape_hash", ""),
-        (b.get("greedy") or {}).get("signature", ""),
-        json.dumps((b.get("streaming") or {}).get("chunk_fields", [])),
-    ]
-    return hashlib.sha256("||".join(parts).encode()).hexdigest()[:24]
-
-
 def cmd_monitor(a):
     """Compare a fresh run against a stored baseline. Detects silent model swaps."""
     base = json.load(open(a.baseline))
     cur = json.load(open(a.current))
-    out = {"baseline": a.baseline, "current": a.current, "changes": []}
-    if base.get("fingerprint_id") != cur.get("fingerprint_id"):
-        out["changes"].append({"severity": "critical", "field": "fingerprint_id",
-                               "detail": "Composite backend fingerprint changed — the serving model "
-                                         "or stack was altered since baseline."})
-    # Compare the overhead-invariant shape, not raw prompt_tokens: a constant
-    # chat-template / accounting shift moves every probe by the same amount and
-    # is NOT a model change. Only a shift in the relative structure between
-    # probes indicates a different tokenizer family. (Same rationale as _fp.)
-    bt = tokenizer.shape_vector((base.get("tokenizer") or {}).get("vector", {}))
-    ct = tokenizer.shape_vector((cur.get("tokenizer") or {}).get("vector", {}))
-    diff = {k: (bt[k], ct[k]) for k in bt if k in ct and bt[k] != ct[k]}
-    if diff:
-        out["changes"].append({"severity": "critical", "field": "tokenizer_vector",
-                               "detail": f"Tokenizer shape changed on {len(diff)} probes (overhead-corrected): "
-                                         + ", ".join(f"{k} {v[0]}->{v[1]}" for k, v in list(diff.items())[:6]),
-                               "implication": "Different tokenizer => different model family."})
-    if (base.get("errors") or {}).get("error_signature") != (cur.get("errors") or {}).get("error_signature"):
-        out["changes"].append({"severity": "high", "field": "error_signature",
-                               "detail": "Error schema changed — likely a different backend provider."})
-    for k in ("jurisdictional_risk", "provenance_risk"):
-        bv = (base.get("score") or {}).get(k, {}).get("verdict")
-        cv = (cur.get("score") or {}).get(k, {}).get("verdict")
-        if bv != cv:
-            out["changes"].append({"severity": "high", "field": k,
-                                   "detail": f"{k}: {bv} -> {cv}"})
-    if base.get("latency") and cur.get("latency"):
-        d = latency.drift(base["latency"], cur["latency"])
-        if d["drifted"]:
-            out["changes"].append({"severity": "medium", "field": "latency",
-                                   "detail": json.dumps(d["signals"])})
-    out["drift_detected"] = bool(out["changes"])
+    result = monitor.diff(base, cur)
+    out = {"baseline": a.baseline, "current": a.current,
+           "changes": result["changes"], "drift_detected": result["drift_detected"]}
     print(json.dumps(out, indent=2))
     if a.json_out:
         json.dump(out, open(a.json_out, "w"), indent=2)
