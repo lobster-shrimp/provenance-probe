@@ -1,0 +1,8 @@
+{
+  "_label": "SYNTHETIC. Endpoint suppressed usage (tokenizer unusable) and no other provenance-detecting layer returned data. The provenance verdict MUST floor at INDETERMINATE, never a clean UNLIKELY/NO EVIDENCE (that would be a false clean bill). Expect provenance INDETERMINATE, NOT flagged.",
+  "target": {"name": "synthetic-suppressed-usage", "model": "blind-4"},
+  "network": {"addresses": ["203.0.113.1"], "jurisdiction": "US", "operator": "Example", "findings": []},
+  "headers": {"status": 200, "vendor_headers": [{"header": "server", "implies": "generic", "value": "nginx"}]},
+  "catalog": {"prc_origin_models": []},
+  "tokenizer": {"usable": false}
+}

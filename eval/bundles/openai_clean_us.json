@@ -1,0 +1,18 @@
+{
+  "_label": "Real non-adverse US anchor. Recorded from api.openai.com gpt-4o-mini (own account). Safe to publish: 'serves a US model' is non-adverse. Expect provenance NO EVIDENCE, jurisdiction UNLIKELY.",
+  "target": {"name": "openai-clean-us", "model": "gpt-4o-mini"},
+  "network": {"addresses": ["104.18.0.0"], "jurisdiction": "US/Cloudflare", "operator": "Cloudflare", "findings": []},
+  "headers": {
+    "status": 200, "echoed_model": "gpt-4o-mini-2024-07-18",
+    "vendor_headers": [
+      {"header": "openai-organization", "implies": "OpenAI", "value": "aoi-x"},
+      {"header": "openai-processing-ms", "implies": "OpenAI", "value": "471"}
+    ]
+  },
+  "catalog": {"prc_origin_models": []},
+  "tokenizer": {"usable": true, "variant_seed": 0, "vector": {"cjk_dense": 93, "digits_long": 191}},
+  "tokenizer_match": [
+    {"model": "OpenAI-o200k", "family": "OpenAI", "origin": "US", "score": 1.0,
+     "exact_matches": 20, "shared_probes": 20, "han_tok_per_char_obs": 2.01}
+  ]
+}

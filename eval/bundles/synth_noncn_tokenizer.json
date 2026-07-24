@@ -1,0 +1,12 @@
+{
+  "_label": "SYNTHETIC. Strong non-CN (US) tokenizer match. The tokenizer_match_noncn signal must pull provenance to a clean tier — guards against a Western model reading as Chinese. Expect provenance NO EVIDENCE/UNLIKELY, NOT flagged.",
+  "target": {"name": "synthetic-noncn-tokenizer", "model": "blind-3"},
+  "network": {"addresses": [], "jurisdiction": "", "findings": []},
+  "headers": {"status": 200, "vendor_headers": []},
+  "catalog": {"prc_origin_models": []},
+  "tokenizer": {"usable": true, "variant_seed": 0, "vector": {"cjk_dense": 128, "digits_long": 190}},
+  "tokenizer_match": [
+    {"model": "Llama-3", "family": "Llama-3", "origin": "US", "score": 0.92,
+     "exact_matches": 18, "shared_probes": 20, "han_tok_per_char_obs": 0.73}
+  ]
+}

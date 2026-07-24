@@ -1,0 +1,49 @@
+name: ci
+
+# Runs the test suite on every push/PR, plus the accuracy/consistency eval gate.
+# No secrets are used and no network is required: the eval serves vendored GGUF
+# vocabs through a blind local mock. Live named-vendor accuracy is out of scope
+# here (Gate-1) and runs in the private provenance-observatory.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install (all deps so the full suite runs — reference tests use tiktoken)
+        run: pip install -e ".[test,reference,eval]"
+      - name: Unit + contract tests (full suite)
+        run: python -m pytest tests/ -q
+
+  eval:
+    # The accuracy/consistency gate. Hard-fails on any false positive.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install (test + eval extras)
+        run: pip install -e ".[test,eval]"
+      - name: Harness self-tests
+        run: python -m pytest tests/test_eval_harness.py -q
+      - name: Accuracy / consistency eval (zero-FP gate)
+        run: python -m eval.run_eval --json

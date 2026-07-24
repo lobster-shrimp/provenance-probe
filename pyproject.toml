@@ -11,6 +11,8 @@ dependencies = ["requests>=2.31", "flask>=3.0"]
 
 [project.optional-dependencies]
 reference = ["transformers>=4.44", "tiktoken>=0.7", "sentencepiece>=0.2", "protobuf>=4.0"]
+# eval: serve real GGUF vocabs through the blind mock (consistency tier).
+eval = ["gguf>=0.9", "tokenizers>=0.19"]
 test = ["pytest>=8.0"]
 
 [project.scripts]
