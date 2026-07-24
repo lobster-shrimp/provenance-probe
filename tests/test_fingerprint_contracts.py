@@ -9,7 +9,7 @@ Observatory depends on:
    shipped reference, and survives a constant overhead offset.
 
 These pin behavior the observatory's public verdicts rest on. Written
-alongside the _fp() overhead-invariance fix (see cli._fp / tokenizer.shape_vector).
+alongside the _fp() overhead-invariance fix (see monitor.fingerprint / tokenizer.shape_vector).
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ import os
 
 import pytest
 
-from provenance_probe import cli
+from provenance_probe import cli, monitor
 from provenance_probe.probes import tokenizer
 
 REF_PATH = os.path.join(
@@ -65,7 +65,7 @@ def _backend(vector: dict, error_sig: str = "sig-A") -> dict:
 def test_fingerprint_stable_across_benign_overhead_shift():
     base = _backend({"p1": 12, "p2": 15, "p3": 22, "p4": 30})
     shifted = _backend(_shift(base["tokenizer"]["vector"], 4))
-    assert cli._fp(base) == cli._fp(shifted), (
+    assert monitor.fingerprint(base) == monitor.fingerprint(shifted), (
         "a constant template-overhead shift must not flip the fingerprint"
     )
 
@@ -73,13 +73,13 @@ def test_fingerprint_stable_across_benign_overhead_shift():
 def test_fingerprint_changes_on_real_tokenizer_change():
     base = _backend({"p1": 12, "p2": 15, "p3": 22, "p4": 30})
     swapped = _backend({"p1": 12, "p2": 25, "p3": 14, "p4": 30})
-    assert cli._fp(base) != cli._fp(swapped)
+    assert monitor.fingerprint(base) != monitor.fingerprint(swapped)
 
 
 def test_fingerprint_changes_on_non_tokenizer_signal():
     base = _backend({"p1": 12, "p2": 15, "p3": 22})
     changed = _backend({"p1": 12, "p2": 15, "p3": 22}, error_sig="sig-B")
-    assert cli._fp(base) != cli._fp(changed)
+    assert monitor.fingerprint(base) != monitor.fingerprint(changed)
 
 
 # --- Contract 2: monitor exit-2 drift semantics ---
@@ -100,7 +100,7 @@ def _run_monitor(baseline_path, current_path):
 
 def _scored(vector, error_sig="sig-A"):
     b = _backend(vector, error_sig)
-    b["fingerprint_id"] = cli._fp(b)
+    b["fingerprint_id"] = monitor.fingerprint(b)
     return b
 
 

@@ -14,7 +14,7 @@ from flask import Flask, request, jsonify, Response
 from .config import Target
 from .client import Client
 from .probes import network, tokenizer, behavioral, wire, latency, logprob, artifact, clientsrc, deception
-from . import scoring, report, userwarn
+from . import scoring, report, userwarn, monitor
 
 RUNS: dict[str, dict] = {}
 DATA_DIR = os.path.expanduser(os.environ.get("PROVENANCE_PROBE_HOME", "~/.provenance-probe"))
@@ -136,6 +136,9 @@ def _run(run_id: str, spec: dict):
         step("Scoring…", 97)
         b["score"] = scoring.score(b)
         b["user_warning"] = userwarn.build(b)
+        # Stable backend fingerprint so this run can be diffed against a
+        # baseline in the Monitor tab (silent model-swap detection).
+        b["fingerprint_id"] = monitor.fingerprint(b)
 
         os.makedirs(os.path.join(DATA_DIR, "reports"), exist_ok=True)
         base = os.path.join(DATA_DIR, "reports", f"{t.name}_{run_id[:8]}")
@@ -193,11 +196,35 @@ def api_history():
                 b = json.load(open(os.path.join(d, f)))
                 rows.append({"file": f, "name": b["target"]["name"],
                              "url": b["target"]["base_url"], "ts": b["timestamp"],
+                             "fingerprint_id": b.get("fingerprint_id", ""),
                              "level": b.get("user_warning", {}).get("level"),
                              "headline": b.get("user_warning", {}).get("headline")})
             except Exception:
                 pass
     return jsonify(rows[:50])
+
+
+@app.post("/api/monitor")
+def api_monitor():
+    """Diff two stored runs (baseline vs current) for silent model-swap detection.
+
+    Reuses the same monitor.diff() the CLI and observatory runner use, so the
+    UI verdict cannot drift from the CLI verdict.
+    """
+    spec = request.get_json(force=True) or {}
+    d = os.path.join(DATA_DIR, "reports")
+    try:
+        base = json.load(open(os.path.join(d, os.path.basename(spec["baseline"]))))
+        cur = json.load(open(os.path.join(d, os.path.basename(spec["current"]))))
+    except (KeyError, FileNotFoundError):
+        return jsonify({"error": "pick a baseline and a current run"}), 400
+    result = monitor.diff(base, cur)
+    return jsonify({
+        "drift_detected": result["drift_detected"],
+        "changes": result["changes"],
+        "baseline": {"fingerprint_id": base.get("fingerprint_id", ""), "ts": base.get("timestamp")},
+        "current": {"fingerprint_id": cur.get("fingerprint_id", ""), "ts": cur.get("timestamp")},
+    })
 
 
 @app.get("/report/<path:name>")
@@ -264,6 +291,8 @@ a{color:var(--acc)}
 .topnav{display:flex;gap:14px;font-size:11px;letter-spacing:.07em;text-transform:uppercase;
 margin:0 0 14px;border-bottom:1px solid var(--line);padding-bottom:8px}
 .topnav .active{color:var(--ink);font-weight:700}.topnav a{color:var(--acc);text-decoration:none}
+.sev{font-size:10px;letter-spacing:.07em;text-transform:uppercase;font-weight:700;padding:1px 6px;border-radius:4px}
+.sev.critical{background:#fdf2f2;color:#8b1a1a}.sev.high{background:#fff8f0;color:#a8500f}.sev.medium{background:#fffdf0;color:#7a6a12}
 </style><div class=w>
 <div class=topnav><span class=active>Live probe tool</span><a href="__OBSERVATORY_URL__">Observatory &rarr;</a></div>
 <h1>provenance-probe</h1>
@@ -335,6 +364,18 @@ margin:0 0 14px;border-bottom:1px solid var(--line);padding-bottom:8px}
 </div>
 
 <div id=out></div>
+
+<div class=card><h3>Monitor · compare two runs for a silent model swap</h3>
+ <div class=stat style="margin:-2px 0 12px">Same diff the CLI <span class=mono>monitor</span> uses:
+  fingerprint, overhead-corrected tokenizer shape, error schema, verdicts, latency.</div>
+ <div class="row grid3">
+  <div><label>Baseline run</label><select id=mon_base></select></div>
+  <div><label>Current run</label><select id=mon_cur></select></div>
+  <div style="display:flex;align-items:flex-end"><button id=cmp onclick=compare() style="width:100%">Compare</button></div>
+ </div>
+ <div id=mon_out class=stat>Run at least two assessments, then compare them here.</div>
+</div>
+
 <div class=card><h3>Local run history</h3><div id=hist class=stat>none yet</div></div>
 </div>
 <script>
@@ -407,6 +448,7 @@ function render(d,rid){
 }
 function loadHist(){
  fetch('/api/history').then(r=>r.json()).then(rows=>{
+  fillMon(rows);
   if(!rows.length){$('hist').textContent='none yet';return}
   const col={red:'#8b1a1a',orange:'#a8500f',yellow:'#7a6a12',green:'#2f6b3a'};
   $('hist').innerHTML='<table class=hist>'+rows.map(r=>
@@ -416,6 +458,39 @@ function loadHist(){
    '" target=_blank>warning</a> · <a href="/report/'+
    encodeURIComponent(r.file.replace(".json",".html"))+'" target=_blank>technical</a></td></tr>'
   ).join('')+'</table>'});
+}
+function fillMon(rows){
+ // rows are newest-first. Default: current = newest, baseline = previous.
+ const opt=r=>'<option value="'+esc(r.file)+'">'+esc(r.name)+' · '+esc(r.ts)+
+   ' · '+esc((r.fingerprint_id||'—').slice(0,10))+'</option>';
+ const b=$('mon_base'),c=$('mon_cur');
+ if(!rows.length){b.innerHTML=c.innerHTML='<option value="">no runs yet</option>';return}
+ b.innerHTML=c.innerHTML=rows.map(opt).join('');
+ c.selectedIndex=0; b.selectedIndex=Math.min(1,rows.length-1);
+}
+function compare(){
+ const baseline=$('mon_base').value,current=$('mon_cur').value;
+ if(!baseline||!current){$('mon_out').textContent='Need two runs to compare.';return}
+ if(baseline===current){$('mon_out').innerHTML='<span class=sev high>note</span> baseline and current are the same run.';return}
+ $('cmp').disabled=true;$('mon_out').textContent='Comparing…';
+ fetch('/api/monitor',{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({baseline,current})}).then(r=>r.json()).then(d=>{
+   $('cmp').disabled=false;
+   if(d.error){$('mon_out').innerHTML='<span class=sev critical>error</span> '+esc(d.error);return}
+   const drift=d.drift_detected;
+   let h='<div class="ban '+(drift?'red':'green')+'" style="margin:0 0 12px">'+
+    '<div class=lvl>'+(drift?'DRIFT DETECTED':'NO DRIFT')+'</div><h2>'+
+    (drift?(d.changes.length+' change'+(d.changes.length>1?'s':'')+' since baseline'):'Backend is stable')+'</h2>'+
+    '<div class=stat style="color:inherit">baseline '+esc((d.baseline.fingerprint_id||'—').slice(0,12))+
+    ' &rarr; current '+esc((d.current.fingerprint_id||'—').slice(0,12))+'</div></div>';
+   if(drift){
+    h+='<table><tr><th>Severity</th><th>Field</th><th>Detail</th></tr>'+
+     d.changes.map(c=>'<tr><td><span class="sev '+esc(c.severity)+'">'+esc(c.severity)+
+     '</span></td><td class=mono>'+esc(c.field)+'</td><td>'+esc(c.detail)+
+     (c.implication?'<div class=stat>'+esc(c.implication)+'</div>':'')+'</td></tr>').join('')+'</table>';
+   }
+   $('mon_out').innerHTML=h;
+  }).catch(e=>{$('cmp').disabled=false;$('mon_out').textContent='Compare failed: '+e});
 }
 loadHist();
 </script>"""
