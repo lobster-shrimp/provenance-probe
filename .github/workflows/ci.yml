@@ -27,9 +27,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - name: Install (test extras only)
-        run: pip install -e ".[test]"
-      - name: Unit + contract tests
+      - name: Install (all deps so the full suite runs — reference tests use tiktoken)
+        run: pip install -e ".[test,reference,eval]"
+      - name: Unit + contract tests (full suite)
         run: python -m pytest tests/ -q
 
   eval:
