@@ -2,6 +2,10 @@
 
 Black-box assurance harness for determining **which model is actually serving your requests**, and whether it is Chinese-origin or PRC-jurisdiction — including when a vendor is silently routing, swapping, or rebranding.
 
+> **New to this?** Read the **[whitepaper](WHITEPAPER.md)** — the problem, the
+> solution, the technical detail, and why it's open source (written for
+> consumers, security practitioners, legal/compliance, and policy makers).
+
 > **Scope control.** Only run against systems you are authorized in writing to test. Targets carry an `authorized` flag; active probing aborts without it. The behavioral probes send politically sensitive prompts — get that into your test authorization explicitly.
 
 > **Companion project — [provenance-observatory](https://github.com/lobster-shrimp/provenance-observatory).**
@@ -178,6 +182,20 @@ finding). This is the chat.z.ai case — a GLM backend asserting a Google Gemini
 persona and denying PRC jurisdiction gets caught as a **material
 misrepresentation** even when the tokenizer layer is unavailable.
 
+## Catching a model that switches identity
+
+A model swap happens on four time horizons, and the tool catches each — all
+reduce to the same stable fingerprint + diff:
+
+| Horizon | Command | What it catches |
+|---|---|---|
+| **After the fact** | `transcript <chat.json> --true-origin CN` | Identity flips in a captured conversation (the z.ai "I am Gemini" → "actually GLM" case); records the exact turn + a misrepresentation verdict |
+| **Per run** | `session --config t.json --gap-probes N` | A swap *within one session* (a load balancer rotating models mid-conversation) — fingerprints at session start + end |
+| **Between runs** | `monitor --baseline A.json --current B.json` | A silent backend change day-over-day; exit 2 on drift |
+| **Real time** | `sentinel --upstream URL` | A reverse proxy that alerts (`X-Provenance-Alert` header + `/sentinel/events`) the **instant** the served model switches mid-stream |
+
+Full rationale and the deception model: see the [whitepaper](WHITEPAPER.md) §3.3.
+
 ## What each layer does
 
 **Layer 2 — Network / jurisdiction** (`probes/network.py`)
@@ -313,6 +331,9 @@ companion project, which consumes this `monitor` contract as a black-box CLI.
 ## Documentation & related project
 
 ### In this repo
+- [`WHITEPAPER.md`](WHITEPAPER.md) — **the problem, the solution, the technical
+  detail, and the open-source rationale**, for consumers, security practitioners,
+  legal/compliance, and federal/policy audiences.
 - [`QUICKSTART.md`](QUICKSTART.md) — five-step install with checkpoints.
 - [`docs/adding-sources.md`](docs/adding-sources.md) — **add a new API or
   web-app source**: OpenAI/Anthropic styles, the `template` adapter (captured
