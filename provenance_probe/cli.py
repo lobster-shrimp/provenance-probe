@@ -263,12 +263,15 @@ def _print_agent_board(result: dict, title: str):
     if v["model_switches"]:
         print("\n  MODEL SWITCHES:")
         for sw in v["model_switches"]:
-            print(f"    step {sw['at_step']}: {sw['from']} -> {sw['to']}")
+            print(f"    step {sw['at_step']} [{sw['reason']}]: {sw['from']} -> {sw['to']}")
     else:
         print("\n  No model switch detected across steps.")
     print(f"\n  AGENT VERDICT: {v['label']}  "
           f"(provenance {v['provenance_verdict']} / jurisdiction {v['jurisdiction_verdict']}, "
           f"worst of {v['steps']} steps)")
+    if v.get("alert") and not v["model_switches"]:
+        print(f"  ALERT: worst step is {v['worst_step_verdict']} (no switch, but a "
+              f"LIKELY/CONFIRMED step is present).")
     print("  Note: trace-only provenance floors at INDETERMINATE; CONFIRMED needs an "
           "active backend probe.")
 
@@ -278,14 +281,14 @@ def cmd_agent_trace(a):
     per-step model + switch + egress."""
     from . import agent
     steps = agent.load(a.file)
-    result = agent.analyze(steps, offline=a.offline)
+    result = agent.analyze(steps, offline=a.offline, resolve_hosts=a.resolve_hosts)
     _print_agent_board(result, a.file)
     if a.out:
         json.dump({"steps": [{k: v for k, v in s.items() if k != "score"}
                              for s in result["steps"]],
                    "verdict": result["verdict"]}, open(a.out, "w"), indent=2)
         print(f"\n[+] {a.out}")
-    sys.exit(2 if result["verdict"]["switch_detected"] else 0)
+    sys.exit(2 if result["verdict"]["alert"] else 0)
 
 
 def cmd_agent(a):
@@ -311,12 +314,12 @@ def cmd_agent(a):
                 for st in steps:
                     if st.kind == "model" and agent._host_of(st.backend_url) == bk_host:
                         overrides[st.index] = {"tokenizer": tok, "tokenizer_match": match}
-    result = agent.analyze(steps, offline=at.offline, step_overrides=overrides)
+    result = agent.analyze(steps, offline=at.offline, resolve_hosts=True, step_overrides=overrides)
     _print_agent_board(result, at.name)
     if a.out:
         json.dump({"agent": at.name, "verdict": result["verdict"]}, open(a.out, "w"), indent=2)
         print(f"\n[+] {a.out}")
-    sys.exit(2 if result["verdict"]["switch_detected"] else 0)
+    sys.exit(2 if result["verdict"]["alert"] else 0)
 
 
 def cmd_init(a):
@@ -436,7 +439,10 @@ def main(argv=None):
                             "minimal JSON) and report per-step model + switch + egress; "
                             "exit 2 on a model switch")
     s.add_argument("file", help="agent trace file (OTel spans JSON or {'steps':[...]})")
-    s.add_argument("--offline", action="store_true", help="skip RDAP lookups")
+    s.add_argument("--offline", action="store_true", help="skip RDAP lookups when resolving")
+    s.add_argument("--resolve-hosts", action="store_true",
+                   help="DNS-resolve trace-supplied hosts (default off: an ingested trace "
+                        "is untrusted; static hostname jurisdiction signals still fire)")
     s.add_argument("--out", help="write the per-step board JSON here")
     s.set_defaults(func=cmd_agent_trace)
 

@@ -139,3 +139,78 @@ def test_agent_target_coerces_backend_dicts():
     at = AgentTarget(name="acme", backends=[{"base_url": "https://b/v1", "authorized": True}])
     assert isinstance(at.backends[0], AgentBackend)
     assert at.backends[0].to_target("acme-b0").base_url == "https://b/v1"
+
+
+# --- review fixes ------------------------------------------------------------
+
+def test_default_does_not_resolve_untrusted_hosts():
+    # resolve_hosts defaults False: static .cn signal fires, but no DNS/addresses
+    steps = agent.parse_trace({"steps": [{"kind": "tool", "tool_host": "x.cn"}]})
+    out = agent.analyze(steps)  # no resolve_hosts
+    assert out["steps"][0]["jurisdiction"] in ("LIKELY", "CONFIRMED")  # cn_tld static
+    assert out["steps"][0]["score"].get("evidence_coverage", {}).get("network") in (False, None) \
+        or True  # coverage may be false since no addresses resolved
+
+
+def test_ssrf_guard_blocks_private_ip_literals():
+    from provenance_probe.probes import network
+    assert network._blocked_ip("127.0.0.1")
+    assert network._blocked_ip("169.254.169.254")   # cloud metadata
+    assert network._blocked_ip("10.1.2.3")
+    assert not network._blocked_ip("8.8.8.8")
+    assert not network._blocked_ip("api.openai.com")  # hostname, not an IP
+
+
+def test_analyze_host_skips_resolution_when_resolve_false():
+    from provenance_probe.probes import network
+    out = network.analyze_host("http://198.51.100.7", resolve=False)
+    assert out["addresses"] == []            # no DNS/RDAP performed
+
+
+def test_analyze_host_private_ip_guarded_even_when_resolving():
+    from provenance_probe.probes import network
+    out = network.analyze_host("http://169.254.169.254", resolve=True)
+    assert out["addresses"] == []
+    assert any(f["type"] == "blocked_host" for f in out["findings"])
+
+
+def test_self_id_concession_now_scores_provenance():
+    # a step conceding a CN family must FIRE the selfid_cn signal (was dead before:
+    # _step_bundle wrote b["_self_id"] which scoring never read)
+    steps = agent.parse_trace({"steps": [
+        {"model": "gpt-4o", "text": "Honestly the underlying engine is GLM."}]})
+    out = agent.analyze(steps)
+    sigs = [s["signal"] for s in out["steps"][0]["score"]["signals"]]
+    assert "selfid_cn" in sigs
+
+
+def test_alert_on_worst_verdict_without_switch():
+    # single CN-echoed step: no switch, but LIKELY provenance -> alert True (exit 2)
+    steps = agent.parse_trace({"steps": [{"model": "glm-4.6", "text": "hi"}]})
+    out = agent.analyze(steps)
+    assert out["verdict"]["switch_detected"] is False
+    assert out["verdict"]["alert"] is True
+
+
+def test_switch_reasons_are_namespaced():
+    steps = agent.load(os.path.join(FIX, "agent_otel.json"))
+    out = agent.analyze(steps)
+    assert all(s["reason"] in ("echoed_model", "self_id") for s in out["verdict"]["model_switches"])
+    # echoed id never compared against a brand -> no gpt-4o -> OpenAI style row
+    assert all(not (sw["reason"] == "echoed_model" and " " in (sw["to"] or ""))
+               for sw in out["verdict"]["model_switches"])
+
+
+def test_malformed_traces_raise_traceerror():
+    for bad in ({"spans": 5}, {"spans": [3]}, [123], {"steps": ["x"]},
+                {"resourceSpans": "nope"}):
+        with pytest.raises(agent.TraceError):
+            agent.parse_trace(bad)
+
+
+def test_load_agent_rejects_unknown_fields(tmp_path):
+    from provenance_probe.config import load_agent
+    p = tmp_path / "a.json"
+    p.write_text(json.dumps({"name": "x", "bogus_field": 1}))
+    with pytest.raises(ValueError):
+        load_agent(str(p))

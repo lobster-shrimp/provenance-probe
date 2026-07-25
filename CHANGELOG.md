@@ -19,7 +19,25 @@
 - Honest by design: trace-only provenance floors at INDETERMINATE (no tokenizer
   signal in a post-hoc trace). Egress jurisdiction and model switch are the
   reliable trace signals. `docs/CONOPS.md` = executive/federal concept of ops.
-- 17 new tests (`tests/test_agent.py`), fixtures for OTel + JSON traces.
+- 26 tests (`tests/test_agent.py`), fixtures for OTel + JSON traces.
+
+### Security / hardening (agent trace ingest)
+- **SSRF guard:** an ingested agent trace is untrusted, so `agent-trace` does NOT
+  DNS-resolve trace-supplied hosts by default — static hostname jurisdiction
+  signals (`.cn`, known PRC endpoints) still fire with zero network I/O. Pass
+  `--resolve-hosts` to opt into DNS + RDAP. `network.analyze_host` gained a
+  `resolve` flag and a private/reserved/loopback/link-local/metadata IP denylist
+  (`_blocked_ip`) applied to both IP-literal hosts and resolved addresses
+  (DNS-rebinding defense), plus a distinct-host cap.
+- **Self-ID now scores:** a step whose text concedes a CN family feeds `selfid_cn`
+  into scoring (previously written to a dead `_self_id` key scoring never read).
+- **Switch detection namespaced:** echoed-model-id changes and self-ID brand flips
+  are tracked separately (no more spurious `gpt-4o -> OpenAI` cross-namespace hits).
+- **Exit-on-worst-verdict:** `agent`/`agent-trace` exit 2 on a LIKELY/CONFIRMED
+  worst step even without a switch (CI no longer reads a PRC finding as clean).
+- **Malformed-trace hardening:** non-object rows/spans, non-list containers, and
+  over-size/over-step traces raise `TraceError`; unknown config keys raise a clear
+  `ValueError` instead of a raw `TypeError`.
 
 ## [0.4.1] - 2026-07-20
 

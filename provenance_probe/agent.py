@@ -20,6 +20,7 @@ the reliable trace-only signals.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -49,6 +50,11 @@ class TraceError(ValueError):
     """Raised when a trace cannot be parsed into steps."""
 
 
+MAX_TRACE_BYTES = 32 * 1024 * 1024   # 32 MiB — a trace is a log, not a dataset
+MAX_STEPS = 5000                     # bound the per-run step count
+MAX_HOSTS = 256                      # cap distinct hosts resolved from one trace
+
+
 # --- parsing -----------------------------------------------------------------
 
 def _host_of(url: str | None) -> str | None:
@@ -67,6 +73,8 @@ def _parse_otel(obj: dict) -> list[AgentStep]:
     spans = _collect_spans(obj)
     steps: list[AgentStep] = []
     for i, sp in enumerate(spans):
+        if not isinstance(sp, dict):
+            raise TraceError(f"span {i} is not an object")
         attrs = _flatten_attrs(sp.get("attributes", {}))
         op = attrs.get("gen_ai.operation.name") or ""
         tool_name = attrs.get("gen_ai.tool.name")
@@ -90,13 +98,19 @@ def _parse_otel(obj: dict) -> list[AgentStep]:
     return steps
 
 
+def _as_list(x, what: str) -> list:
+    if not isinstance(x, list):
+        raise TraceError(f"expected a list for {what}, got {type(x).__name__}")
+    return x
+
+
 def _collect_spans(obj: dict) -> list[dict]:
     if "spans" in obj:
-        return list(obj["spans"])
+        return _as_list(obj["spans"], "spans")
     out = []
-    for rs in obj.get("resourceSpans", []):
-        for ss in rs.get("scopeSpans", []):
-            out.extend(ss.get("spans", []))
+    for rs in _as_list(obj.get("resourceSpans", []), "resourceSpans"):
+        for ss in _as_list((rs or {}).get("scopeSpans", []), "scopeSpans"):
+            out.extend(_as_list((ss or {}).get("spans", []), "spans"))
     return out
 
 
@@ -131,6 +145,8 @@ def _parse_json(obj) -> list[AgentStep]:
         raise TraceError("JSON trace must be a list of steps or {'steps': [...]}")
     steps = []
     for i, r in enumerate(rows):
+        if not isinstance(r, dict):
+            raise TraceError(f"step {i} is not an object")
         host = r.get("tool_host") or _host_of(r.get("tool_url"))
         kind = r.get("kind") or ("tool" if host and not r.get("model") else "model")
         steps.append(AgentStep(
@@ -158,64 +174,99 @@ def parse_trace(raw) -> list[AgentStep]:
         steps = _parse_json(raw)
     if not steps:
         raise TraceError("trace contained no steps")
+    if len(steps) > MAX_STEPS:
+        raise TraceError(f"trace has {len(steps)} steps; cap is {MAX_STEPS}")
     return steps
 
 
 def load(path: str) -> list[AgentStep]:
-    with open(path) as f:
+    if os.path.getsize(path) > MAX_TRACE_BYTES:
+        raise TraceError(f"trace file exceeds {MAX_TRACE_BYTES} bytes")
+    with open(path, encoding="utf-8") as f:
         return parse_trace(f.read())
 
 
 # --- per-step scoring --------------------------------------------------------
 
-def _step_bundle(step: AgentStep, *, offline: bool) -> dict:
+def _step_bundle(step: AgentStep, *, do_rdap: bool, resolve: bool) -> dict:
     """Build the smallest scoring bundle a single step supports (trace-only).
 
     No tokenizer_match here — trace mode cannot produce it, so scoring floors
-    provenance at INDETERMINATE. That is the honest result.
+    provenance at INDETERMINATE. That is the honest result. A text concession to a
+    CN family is mapped into `selfid` so it actually scores (selfid_cn), not just
+    into switch detection.
     """
     b: dict = {}
     host_url = step.tool_host or step.backend_url
     if host_url:
-        b["network"] = network.analyze_host(host_url, do_rdap=not offline)
+        b["network"] = network.analyze_host(host_url, do_rdap=do_rdap, resolve=resolve)
     if step.echoed_model:
         b.setdefault("headers", {})["echoed_model"] = step.echoed_model
     if step.kind == "model" and step.text:
         idy = _tx._turn_identity(step.text)
-        # feed the deception layer only when the text actually asserts/concedes an identity
-        if idy.get("asserted") or idy.get("conceded"):
-            b["_self_id"] = idy
+        conceded = idy.get("conceded")
+        # A conceded CN family is a real provenance signal — feed it to scoring the
+        # same way behavioral self-identification does (fires selfid_cn).
+        if conceded and not _tx._western(conceded):
+            b["selfid"] = {"claimed_families": [{"family": conceded, "token": conceded}]}
     return b
 
 
-def analyze(steps: list[AgentStep], *, offline: bool = False,
+def _step_identity(step: AgentStep) -> tuple[str | None, str | None]:
+    """(echoed_model_id, asserted_or_conceded_brand) for a model step — kept in
+    separate namespaces so a raw model id is never compared against a brand."""
+    if step.kind != "model":
+        return None, None
+    brand = None
+    if step.text:
+        idy = _tx._turn_identity(step.text)
+        brand = idy.get("conceded") or idy.get("asserted")
+    return step.echoed_model, brand
+
+
+def analyze(steps: list[AgentStep], *, offline: bool = False, resolve_hosts: bool = False,
             step_overrides: dict[int, dict] | None = None) -> dict:
     """Score each step, detect model switches, and combine into an agent verdict.
 
-    step_overrides: {step_index: bundle_fragment} — used to graft an active-probe
-    result (e.g. tokenizer_match) onto a specific step before scoring.
+    resolve_hosts: whether to DNS-resolve trace-supplied hosts (default False —
+    an ingested trace is untrusted; static hostname signals still fire). offline
+    additionally disables RDAP when resolving.
+    step_overrides: {step_index: bundle_fragment} — grafts an active-probe result
+    (e.g. tokenizer_match) onto a step before scoring.
     """
     step_overrides = step_overrides or {}
-    rows, prev_identity = [], None
-    switches = []
+    rows, switches = [], []
+    prev_echoed, prev_brand = None, None
+    hosts_seen: set[str] = set()
     for st in steps:
-        bundle = _step_bundle(st, offline=offline)
+        # host-count cap: once we've resolved MAX_HOSTS distinct hosts, stop resolving
+        host = st.tool_host or st.backend_url
+        do_resolve = resolve_hosts
+        if resolve_hosts and host:
+            if host not in hosts_seen and len(hosts_seen) >= MAX_HOSTS:
+                do_resolve = False
+            hosts_seen.add(host)
+        bundle = _step_bundle(st, do_rdap=not offline, resolve=do_resolve)
         if st.index in step_overrides:
             bundle.update(step_overrides[st.index])
         sc = scoring.score(bundle)
-        # model-switch: echoed id change OR self-ID identity flip across model steps
-        cur_identity = None
+
+        echoed, brand = _step_identity(st)
         if st.kind == "model":
-            sid = bundle.get("_self_id") or {}
-            cur_identity = sid.get("conceded") or sid.get("asserted") or st.echoed_model
-            if cur_identity and prev_identity and cur_identity != prev_identity:
-                switches.append({"at_step": st.index, "from": prev_identity, "to": cur_identity})
-            if cur_identity:
-                prev_identity = cur_identity
+            if echoed and prev_echoed and echoed != prev_echoed:
+                switches.append({"at_step": st.index, "reason": "echoed_model",
+                                 "from": prev_echoed, "to": echoed})
+            if brand and prev_brand and brand != prev_brand:
+                switches.append({"at_step": st.index, "reason": "self_id",
+                                 "from": prev_brand, "to": brand})
+            if echoed:
+                prev_echoed = echoed
+            if brand:
+                prev_brand = brand
+
         rows.append({
             "index": st.index, "kind": st.kind, "name": st.name,
-            "echoed_model": st.echoed_model,
-            "host": st.tool_host or st.backend_url,
+            "echoed_model": st.echoed_model, "host": host,
             "provenance": sc["provenance_risk"]["verdict"],
             "jurisdiction": sc["jurisdictional_risk"]["verdict"],
             "score": sc,
@@ -223,6 +274,8 @@ def analyze(steps: list[AgentStep], *, offline: bool = False,
     combined = scoring.combine_agent([r["score"] for r in rows])
     combined["model_switches"] = switches
     combined["switch_detected"] = bool(switches)
+    # a worst-step LIKELY/CONFIRMED is alertable even without a switch
+    combined["alert"] = bool(switches) or combined["worst_step_verdict"] in ("LIKELY", "CONFIRMED")
     return {"steps": rows, "verdict": combined}
 
 

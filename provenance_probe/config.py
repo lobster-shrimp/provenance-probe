@@ -1,7 +1,7 @@
 """Target configuration and scope control."""
 from __future__ import annotations
 import json, os
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields
 from typing import Any
 
 
@@ -93,13 +93,25 @@ class AgentTarget:
     notes: str = ""
 
     def __post_init__(self):
-        self.backends = [b if isinstance(b, AgentBackend) else AgentBackend(**b)
+        self.backends = [b if isinstance(b, AgentBackend) else _from_dict(AgentBackend, b)
                          for b in self.backends]
+
+
+def _from_dict(cls, d: dict):
+    """Build a dataclass from a dict, ignoring unknown keys with a clear error
+    instead of a raw TypeError from ``cls(**d)``."""
+    if not isinstance(d, dict):
+        raise ValueError(f"expected an object for {cls.__name__}, got {type(d).__name__}")
+    known = {f.name for f in fields(cls)}
+    unknown = set(d) - known
+    if unknown:
+        raise ValueError(f"{cls.__name__}: unknown field(s) {sorted(unknown)}")
+    return cls(**d)
 
 
 def load_agent(path: str) -> AgentTarget:
     with open(path) as f:
-        return AgentTarget(**json.load(f))
+        return _from_dict(AgentTarget, json.load(f))
 
 
 def load_targets(path: str) -> list[Target]:
