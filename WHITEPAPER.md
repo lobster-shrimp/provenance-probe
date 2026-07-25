@@ -29,6 +29,12 @@ empirically rather than taking the vendor's word for it:
   measurements to a cryptographically signed, append-only log, and raises a
   numbered advisory when what serves an endpoint changes.
 
+The same engine extends from single endpoints to **agents**: point it at an
+autonomous, multi-step, multi-model agent and it produces a signed per-step
+flight recorder of which model each step ran on, whether the model switched, and
+where each tool call sent data, live through an in-line proxy or after the fact
+from a trace (see §3.7).
+
 Both are open source. Every verdict is probabilistic, carries a confidence
 level, is reproducible from published evidence, and comes with a measured error
 rate. Nothing accusatory about a named vendor is published until it has passed a
@@ -257,6 +263,52 @@ which the operator is notified and may respond, and a legal-review clearance
 before an accusation is published. When a verdict change clears both, it becomes
 a numbered advisory (format MPA-YYYY-NNN) that a practitioner can cite. This is
 what separates the system from a rumor mill.
+
+### 3.7 From endpoints to agents: the flight recorder
+
+The unit that matters is shifting. A year ago you called one model behind one
+endpoint. Today you field an *agent*: a workflow that calls one or more models
+over many steps, invokes tools, and spawns sub-agents. Each step is a fresh
+opportunity for a vendor to route reasoning through a foreign-origin model or for
+a tool call to ship your data abroad, and the single-endpoint verdict no longer
+covers it. The system makes the **agent** the unit of assessment.
+
+You point it at an authorized agent and get a per-step board: which model each
+step ran on, whether the model switched across steps, and where each tool call
+sent data. There are three ways to observe it, and they are honest about what
+each can prove:
+
+- **Trace ingest** (the general case) reads a captured run in the OpenTelemetry
+  GenAI span format that agent frameworks already emit, or a minimal JSON. It
+  recovers the echoed model, self-identification, tool destinations, and switches.
+  Provenance from a trace alone floors at INDETERMINATE, because a post-hoc trace
+  carries no tokenizer signal and a polished agent can rewrite intermediate output
+  before it is logged.
+- **Active backend probe** is the only route to a CONFIRMED provenance verdict: an
+  out-of-band tokenizer fingerprint of a reachable backend, gated by per-backend
+  written authorization.
+- **Live proxy interposition** puts the `sentinel` in the path of the agent's
+  model calls. It tees streamed responses, forwarding every byte to the agent
+  untouched while fingerprinting in parallel, so it is invisible to the agent's
+  behavior; a fingerprinting error can never alter or truncate the proxied stream.
+
+The reliable signals against a real agent are **egress jurisdiction** and **model
+switch or drift**, not per-step CONFIRMED provenance, and the report says so. The
+jurisdiction verdict distinguishes PRC *soil* from PRC *operator*: a Beijing-
+domiciled vendor serving through a Western CDN reads "US" to geo-IP but is caught
+on operator grounds, which is exactly the exposure that matters under the National
+Intelligence Law. When an agent spawns sub-agents, span parentage reconstructs the
+call graph so a switch or a leak is attributed to the step that caused it.
+
+The same machinery closes the loop. A signed-ready evidence record drops into the
+monitoring service's data tree and is covered by the daily transparency manifest;
+the service re-assesses authorized agents on a schedule and opens a numbered
+advisory when an agent's model composition drifts; and an adversarial corpus
+drives an authorized endpoint under stress to catch a router that swaps to a
+cheaper model only when pushed. The evidence is legible without a specialist: a
+command-line board, a self-contained HTML report whose every term and verdict
+carries a plain-English explanation on hover, a local console, and a board that
+updates in real time as the agent runs.
 
 ---
 
