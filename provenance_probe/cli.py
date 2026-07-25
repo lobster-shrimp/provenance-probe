@@ -7,7 +7,7 @@ from .config import load_targets, write_example, Target
 from .client import Client
 from .probes import (network, tokenizer, behavioral, wire, latency, logprob,
                      artifact, clientsrc, deception, transcript, session)
-from . import scoring, report, reference, userwarn, monitor
+from . import scoring, report, reference, userwarn, monitor, sentinel
 
 BANNER = """provenance-probe — GenAI model provenance & jurisdiction assurance
 Use only against systems you are authorized in writing to test."""
@@ -245,6 +245,11 @@ def cmd_session(a):
     sys.exit(2 if switched else 0)
 
 
+def cmd_sentinel(a):
+    """Run the real-time in-line model-switch sentinel (reverse proxy)."""
+    sentinel.serve(a.upstream, host=a.host, port=a.port, events_file=a.events_file)
+
+
 def cmd_init(a):
     write_example(a.path)
     print(f"Wrote example config -> {a.path}")
@@ -326,6 +331,15 @@ def main(argv=None):
     s.add_argument("--hosts-file")
     s.add_argument("--offline", action="store_true")
     s.set_defaults(func=cmd_network)
+
+    s = sub.add_parser("sentinel",
+                       help="real-time in-line model-switch sentinel: reverse-proxy an "
+                            "upstream and alert the instant the served model switches")
+    s.add_argument("--upstream", required=True, help="upstream endpoint root (…/v1 appended)")
+    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--port", type=int, default=8900)
+    s.add_argument("--events-file", help="append model-change events as JSONL here")
+    s.set_defaults(func=cmd_sentinel)
 
     s = sub.add_parser("session",
                        help="fingerprint an endpoint at session start + end; "

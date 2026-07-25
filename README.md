@@ -121,6 +121,7 @@ Produces console output plus JSON and standalone HTML per target.
 | `monitor --baseline A.json --current B.json` | Diff two runs; **exit 2 on drift** — wire this into CI |
 | `transcript <file> --true-origin CN` | Analyze a captured conversation for identity deception + **mid-session model switches** (the z.ai "I am Gemini" → "actually GLM" case); records model-change events, **exit 2** to alert |
 | `session --config t.json --gap-probes N` | Fingerprint a live endpoint at session **start + end**; **exit 2** if the served model **switched mid-session** (a load balancer rotating models within one session) |
+| `sentinel --upstream URL` | **Real-time** in-line guardrail: OpenAI-compatible reverse proxy that watches every response and alerts (`X-Provenance-Alert` header + `/sentinel/events`) the instant the served model switches mid-session |
 | `artifacts <dir>` | Inspect on-prem model files; exit 2 on critical findings |
 | `network --host X --hosts-file f` | Jurisdiction-analyze SNI/DNS names harvested from an egress capture |
 
