@@ -6,7 +6,7 @@ import argparse, json, os, sys, datetime, hashlib
 from .config import load_targets, write_example, Target
 from .client import Client
 from .probes import (network, tokenizer, behavioral, wire, latency, logprob,
-                     artifact, clientsrc, deception)
+                     artifact, clientsrc, deception, transcript)
 from . import scoring, report, reference, userwarn, monitor
 
 BANNER = """provenance-probe — GenAI model provenance & jurisdiction assurance
@@ -194,6 +194,35 @@ def cmd_verify_reference(a):
     sys.exit(reference.verify())
 
 
+def cmd_transcript(a):
+    """Analyze a captured conversation for identity deception + model switches."""
+    result = transcript.analyze(transcript.load(a.file),
+                                true_origin=a.true_origin, true_detail=a.true_detail or "")
+    bundle = {"transcript": {"file": a.file}, "deception": result["deception"]}
+    bundle["score"] = scoring.score(bundle)
+    corr = result["correlation"]
+    print(f"\ntranscript: {a.file}  ({result['turns_analyzed']} assistant turns)")
+    print(f"distinct identities claimed: {', '.join(result['distinct_identities']) or 'none'}")
+    if result["model_change_events"]:
+        print("\nMODEL-CHANGE EVENTS (identity switched mid-session):")
+        for e in result["model_change_events"]:
+            print(f"  turn {e['turn']}: {e['from']} -> {e['to']}  [{e['kind']}]")
+    else:
+        print("\nNo mid-session identity change detected.")
+    if corr.get("misrepresentation"):
+        print(f"\nVERDICT: MATERIAL MISREPRESENTATION ({corr['severity']}) — {corr['finding']}")
+    else:
+        print(f"\nVERDICT: {corr.get('finding','no misrepresentation asserted')}")
+    prov = bundle["score"]["provenance_risk"]["verdict"]
+    jur = bundle["score"]["jurisdictional_risk"]["verdict"]
+    print(f"provenance: {prov}   jurisdiction: {jur}")
+    if a.out:
+        json.dump({**result, "score": bundle["score"]}, open(a.out, "w"), indent=2)
+        print(f"\n[+] {a.out}")
+    # exit 2 when there's something to alert on (a switch or a misrepresentation)
+    sys.exit(2 if (result["model_change_events"] or corr.get("misrepresentation")) else 0)
+
+
 def cmd_init(a):
     write_example(a.path)
     print(f"Wrote example config -> {a.path}")
@@ -275,6 +304,16 @@ def main(argv=None):
     s.add_argument("--hosts-file")
     s.add_argument("--offline", action="store_true")
     s.set_defaults(func=cmd_network)
+
+    s = sub.add_parser("transcript",
+                       help="analyze a captured conversation for identity deception + "
+                            "mid-session model switches; exit 2 on a switch/misrepresentation")
+    s.add_argument("file", help="transcript file (.json list of {role,content}, or 'Speaker: text')")
+    s.add_argument("--true-origin", choices=["CN", "nonCN"], default=None,
+                   help="the endpoint's real origin (e.g. z.ai -> CN); needed to assert misrepresentation")
+    s.add_argument("--true-detail", default="", help="one line of hard evidence for the origin")
+    s.add_argument("--out", help="write full JSON result here")
+    s.set_defaults(func=cmd_transcript)
 
     a = p.parse_args(argv)
     return a.func(a)

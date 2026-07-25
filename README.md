@@ -119,6 +119,7 @@ Produces console output plus JSON and standalone HTML per target.
 | `build-reference` | Compute local tokenizer reference vectors (the strongest signal) |
 | `assess` | Full multi-layer assessment |
 | `monitor --baseline A.json --current B.json` | Diff two runs; **exit 2 on drift** — wire this into CI |
+| `transcript <file> --true-origin CN` | Analyze a captured conversation for identity deception + **mid-session model switches** (the z.ai "I am Gemini" → "actually GLM" case); records model-change events, **exit 2** to alert |
 | `artifacts <dir>` | Inspect on-prem model files; exit 2 on critical findings |
 | `network --host X --hosts-file f` | Jurisdiction-analyze SNI/DNS names harvested from an egress capture |
 
