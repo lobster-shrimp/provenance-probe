@@ -25,6 +25,22 @@ def dig(obj: Any, path: str):
     return cur
 
 
+def parse_sse_delta(line: str, delta_path: str = "choices.0.delta.content") -> str | None:
+    """Extract the incremental text from one SSE `data:` line, or None. Shared by
+    the streaming client read and the sentinel proxy tee so there is ONE
+    `data:`/`[DONE]` parser."""
+    if not line.startswith("data:"):
+        return None
+    payload = line[5:].strip()
+    if not payload or payload == "[DONE]":
+        return None
+    try:
+        piece = dig(json.loads(payload), delta_path)
+        return piece if isinstance(piece, str) else None
+    except Exception:
+        return None
+
+
 def _substitute(node: Any, repl: dict) -> Any:
     """Deep-copy a request template, replacing __PLACEHOLDER__ tokens in strings."""
     if isinstance(node, str):
@@ -186,15 +202,9 @@ class Client:
                         continue
                     s = line.decode("utf-8", "replace")
                     chunks.append(s)
-                    if s.startswith("data:"):
-                        payload_str = s[5:].strip()
-                        if payload_str and payload_str != "[DONE]":
-                            try:
-                                piece = dig(json.loads(payload_str), delta_path)
-                                if isinstance(piece, str):
-                                    delta_text.append(piece)
-                            except Exception:
-                                pass
+                    piece = parse_sse_delta(s, delta_path)
+                    if piece:
+                        delta_text.append(piece)
                 raw = "\n".join(chunks)
                 body = raw
                 stream_text = "".join(delta_text) if delta_text else None

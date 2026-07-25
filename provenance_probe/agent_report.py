@@ -66,6 +66,13 @@ GLOSSARY: dict[str, str] = {
     "host": "The endpoint the model call hit, or the destination host of a tool call.",
     "alert": "ALERT / exit code 2 — fires on a model switch OR a LIKELY/CONFIRMED "
              "worst step, so CI never reads a PRC finding as clean.",
+    "degraded": "DEGRADED — a signal was partially lost for this step (e.g. the live "
+                "response couldn't be fully fingerprinted); read its verdict with caution.",
+    "unordered": "UNORDERED — this step arrived concurrently with others and its "
+                 "position is unreliable, so order-dependent switch claims are WITHHELD "
+                 "for it (they'd be meaningless without a reliable order).",
+    "truncated": "TRUNCATED — the response body hit the size cap before fingerprinting; "
+                 "the verdict is based on the head of the response.",
 }
 
 # how the network layer's jurisdiction string maps to a display label
@@ -123,6 +130,9 @@ def _narrative(result: dict) -> list[str]:
     if not flagged:
         out.append("No PRC provenance or jurisdiction signal on any step — clean on the "
                    "evidence captured.")
+    if v.get("ordering_incomplete"):
+        out.append("<b>Note:</b> some steps arrived unordered (concurrent calls); "
+                   "switch claims were withheld for them, so the switch view is incomplete.")
     out.append(f"<b>Overall verdict: {html.escape(v['label'])}</b> "
                f"(worst step wins; provenance {v['provenance_verdict']} / "
                f"jurisdiction {v['jurisdiction_verdict']}).")
@@ -169,11 +179,13 @@ def render_html(result: dict, title: str, *, fragment: bool = False) -> str:
     for s in result["steps"]:
         basis = _BASIS_LABEL.get(s.get("jurisdiction_basis") or "", "")
         basis_html = f' <span class="basis">{_tip(basis, basis)}</span>' if basis else ""
+        flags = "".join(f' <span class="flag">{_tip(f, f)}</span>'
+                        for f in ("degraded", "unordered", "truncated") if s.get(f))
         rows.append(
             "<tr>"
             f'<td class="num">{s["index"]}</td>'
             f'<td>{_tip(s["kind"], "kind")}</td>'
-            f'<td>{html.escape(s["name"])}</td>'
+            f'<td>{html.escape(s["name"])}{flags}</td>'
             f'<td class="mono">{html.escape(s.get("echoed_model") or "—")}</td>'
             f'<td>{_tier(s["provenance"])}</td>'
             f'<td>{_tier(s["jurisdiction"])}{basis_html}</td>'
@@ -262,6 +274,8 @@ _STYLE = """<style>
  th { font-size:.8rem; text-transform:uppercase; letter-spacing:.03em; color:#333; }
  .num { color:#888; } .mono { font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.86rem; }
  .host { color:#444; } .basis { font-size:.8rem; color:#666; }
+ .flag { font-size:.72rem; text-transform:uppercase; letter-spacing:.04em; color:var(--warn);
+   border:1px solid var(--warn); border-radius:4px; padding:0 .3rem; margin-left:.25rem; }
  .tier { font-weight:600; } .t-bad{color:var(--bad);} .t-warn{color:var(--warn);} .t-ok{color:var(--ok);} .t-unk{color:var(--unk);}
  .verdict { font-size:1.05rem; padding:.7rem .9rem; border:1px solid var(--line); border-radius:8px; background:#fafafa; }
  .alertline { color:var(--bad); font-weight:600; } .ok { color:var(--ok); }

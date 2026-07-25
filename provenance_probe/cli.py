@@ -296,6 +296,14 @@ def cmd_agent_trace(a):
         from . import agent_report
         open(a.html, "w").write(agent_report.render_html(result, a.file))
         print(f"[+] {a.html}  (open in a browser; hover any term to learn what it means)")
+    if a.export:
+        from . import agent_export
+        agent_export.write_bundle(
+            a.export, result, target=os.path.splitext(os.path.basename(a.file))[0],
+            input_text=open(a.file, encoding="utf-8").read(),
+            captured_at=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            observation=["trace"])
+        print(f"[+] {a.export}  (signed-ready evidence record — drop into the observatory data tree)")
     sys.exit(2 if result["verdict"]["alert"] else 0)
 
 
@@ -331,6 +339,14 @@ def cmd_agent(a):
         from . import agent_report
         open(a.html, "w").write(agent_report.render_html(result, at.name))
         print(f"[+] {a.html}  (open in a browser; hover any term to learn what it means)")
+    if a.export:
+        from . import agent_export
+        agent_export.write_bundle(
+            a.export, result, target=at.name,
+            input_text=open(at.trace_path, encoding="utf-8").read() if at.trace_path else "",
+            captured_at=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            observation=at.observation)
+        print(f"[+] {a.export}  (signed-ready evidence record — drop into the observatory data tree)")
     sys.exit(2 if result["verdict"]["alert"] else 0)
 
 
@@ -458,6 +474,8 @@ def main(argv=None):
     s.add_argument("--out", help="write the per-step board JSON here")
     s.add_argument("--html", help="write a self-contained HTML report with hover "
                                   "tooltips that explain every term and verdict")
+    s.add_argument("--export", help="write a deterministic, signed-ready evidence "
+                                    "record (drop into the observatory data tree to sign)")
     s.set_defaults(func=cmd_agent_trace)
 
     s = sub.add_parser("agent",
@@ -467,6 +485,8 @@ def main(argv=None):
     s.add_argument("--out", help="write the agent verdict JSON here")
     s.add_argument("--html", help="write a self-contained HTML report with hover "
                                   "tooltips that explain every term and verdict")
+    s.add_argument("--export", help="write a deterministic, signed-ready evidence "
+                                    "record (drop into the observatory data tree to sign)")
     s.add_argument("--i-am-authorized", action="store_true",
                    help="attest written authorization for EACH backend actively probed")
     s.set_defaults(func=cmd_agent)

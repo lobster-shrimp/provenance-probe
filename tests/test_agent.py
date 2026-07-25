@@ -287,3 +287,58 @@ def test_serve_agent_route_bad_trace_shows_error():
     r = c.post("/agent", data={"trace": "{not json"})
     assert r.status_code == 200
     assert b"Could not parse trace" in r.data                      # graceful error, no 500
+
+
+# --- T0: AgentStep quality fields --------------------------------------------
+
+def test_unordered_step_withholds_switch_verdict():
+    # two model steps with different echoed ids, but the second is unordered ->
+    # the switch claim must be WITHHELD (order-dependent claim on unreliable order)
+    steps = [agent.AgentStep(0, "model", "a", echoed_model="gpt-4o"),
+             agent.AgentStep(1, "model", "b", echoed_model="glm-4.6", unordered=True)]
+    out = agent.analyze(steps)
+    assert out["verdict"]["switch_detected"] is False
+    assert out["verdict"]["ordering_incomplete"] is True
+    assert "switch_note" in out["verdict"]
+
+
+def test_ordered_steps_still_detect_switch():
+    steps = [agent.AgentStep(0, "model", "a", echoed_model="gpt-4o"),
+             agent.AgentStep(1, "model", "b", echoed_model="glm-4.6")]
+    out = agent.analyze(steps)
+    assert out["verdict"]["switch_detected"] is True
+    assert out["verdict"]["ordering_incomplete"] is False
+
+
+def test_quality_flags_flow_to_rows_and_report():
+    from provenance_probe import agent_report
+    steps = [agent.AgentStep(0, "model", "a", echoed_model="m",
+                             degraded=True, truncated=True)]
+    out = agent.analyze(steps)
+    assert out["steps"][0]["degraded"] and out["steps"][0]["truncated"]
+    doc = agent_report.render_html(out, "t")
+    assert "DEGRADED" in doc and "TRUNCATED" in doc
+
+
+# --- T4/E5: deterministic export bundle --------------------------------------
+
+def test_export_bundle_is_deterministic_except_timestamp():
+    from provenance_probe import agent_export
+    out = agent.analyze(agent.load(os.path.join(FIX, "agent_otel.json")))
+    b1 = agent_export.build_bundle(out, target="t", input_sha256="abc", captured_at=None)
+    b2 = agent_export.build_bundle(out, target="t", input_sha256="abc", captured_at=None)
+    assert agent_export.canonical(b1) == agent_export.canonical(b2)
+    # only captured_at differs when stamped
+    b3 = agent_export.build_bundle(out, target="t", input_sha256="abc", captured_at="2026-01-01T00:00:00Z")
+    b3["captured_at"] = None
+    assert agent_export.canonical(b1) == agent_export.canonical(b3)
+
+
+def test_export_bundle_schema_matches_observatory_record():
+    from provenance_probe import agent_export
+    out = agent.analyze(agent.parse_trace({"steps": [{"model": "glm-4.6", "text": "hi"}]}))
+    b = agent_export.build_bundle(out, target="acme", input_sha256="deadbeef")
+    for key in ("schema_version", "kind", "captured_at", "target", "engine", "verdict", "steps", "input_sha256"):
+        assert key in b
+    assert b["kind"] == "agent" and b["input_sha256"] == "deadbeef"
+    assert "score" not in b["steps"][0]        # score stripped from the record

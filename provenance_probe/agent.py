@@ -44,6 +44,11 @@ class AgentStep:
     tool_host: str | None = None    # destination host for a tool call (egress)
     backend_url: str | None = None  # the model endpoint this call hit, if known
     prompt_tokens: int | None = None
+    # --- evidence-quality flags (live proxy mode) ----------------------------
+    session_id: str | None = None   # the session this step belongs to (proxy mode)
+    degraded: bool = False          # signal partially lost (e.g. fingerprint failed)
+    unordered: bool = False         # arrival order unreliable -> withholds switch claims
+    truncated: bool = False         # response body was capped before fingerprinting
 
 
 class TraceError(ValueError):
@@ -252,7 +257,9 @@ def analyze(steps: list[AgentStep], *, offline: bool = False, resolve_hosts: boo
         sc = scoring.score(bundle)
 
         echoed, brand = _step_identity(st)
-        if st.kind == "model":
+        # An unordered step's arrival position is unreliable, so it can't anchor an
+        # order-dependent switch claim — skip it for switch detection (Codex C4).
+        if st.kind == "model" and not st.unordered:
             if echoed and prev_echoed and echoed != prev_echoed:
                 switches.append({"at_step": st.index, "reason": "echoed_model",
                                  "from": prev_echoed, "to": echoed})
@@ -273,11 +280,19 @@ def analyze(steps: list[AgentStep], *, offline: bool = False, resolve_hosts: boo
             "provenance": sc["provenance_risk"]["verdict"],
             "jurisdiction": sc["jurisdictional_risk"]["verdict"],
             "jurisdiction_basis": basis,
+            "degraded": st.degraded, "unordered": st.unordered, "truncated": st.truncated,
             "score": sc,
         })
     combined = scoring.combine_agent([r["score"] for r in rows])
     combined["model_switches"] = switches
     combined["switch_detected"] = bool(switches)
+    # If any step arrived unordered, order-dependent switch claims were withheld
+    # for it — surface that the switch verdict is incomplete, don't hide it.
+    ordering_incomplete = any(s.unordered for s in steps)
+    combined["ordering_incomplete"] = ordering_incomplete
+    if ordering_incomplete:
+        combined["switch_note"] = ("some steps arrived unordered (concurrent calls "
+                                   "without reliable ordering); switch claims withheld for them")
     # a worst-step LIKELY/CONFIRMED is alertable even without a switch
     combined["alert"] = bool(switches) or combined["worst_step_verdict"] in ("LIKELY", "CONFIRMED")
     return {"steps": rows, "verdict": combined}

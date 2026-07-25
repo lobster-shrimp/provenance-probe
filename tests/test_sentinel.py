@@ -99,3 +99,78 @@ def test_sessions_are_isolated():
         assert evs == []                  # neither session saw a change *within itself*
     finally:
         srv.shutdown()
+
+
+# --- Phase 2: SSE tee, fail-open, passthrough, agent report ------------------
+
+def _sse_upstream():
+    from flask import Flask, Response
+    app = Flask(__name__)
+
+    @app.post("/v1/chat/completions")
+    def chat():
+        def gen():
+            yield 'data: {"model":"glm-4.6","choices":[{"delta":{"content":"Hi"}}]}\n\n'
+            yield 'data: {"model":"glm-4.6","choices":[{"delta":{"content":" there"}}]}\n\n'
+            yield "data: [DONE]\n\n"
+        return Response(gen(), content_type="text/event-stream")
+
+    @app.get("/v1/models")
+    def models():
+        return {"data": [{"id": "glm-4.6"}]}
+
+    return app
+
+
+def test_sse_tee_forwards_bytes_and_collects_step():
+    srv, port = _serve(_sse_upstream())
+    try:
+        app = sentinel.create_app(f"http://127.0.0.1:{port}")
+        c = app.test_client()
+        r = _post(c, "s1")
+        assert r.status_code == 200
+        body = r.data.decode()
+        assert "Hi" in body and "there" in body and "[DONE]" in body   # bytes forwarded
+        rep = c.get("/agent/report?session=s1").get_json()
+        assert rep["steps"][0]["echoed_model"] == "glm-4.6"            # step collected
+    finally:
+        srv.shutdown()
+
+
+def test_fail_open_when_accumulator_raises_midstream(monkeypatch):
+    # if the SSE parser throws on every line, the agent must STILL get all bytes
+    def boom(*a, **k):
+        raise RuntimeError("parser exploded")
+    monkeypatch.setattr(sentinel, "parse_sse_delta", boom)
+    srv, port = _serve(_sse_upstream())
+    try:
+        app = sentinel.create_app(f"http://127.0.0.1:{port}")
+        c = app.test_client()
+        r = _post(c, "s1")
+        assert r.status_code == 200
+        body = r.data.decode()
+        assert "Hi" in body and "there" in body and "[DONE]" in body   # UNTOUCHED despite crash
+    finally:
+        srv.shutdown()
+
+
+def test_generic_passthrough_non_chat_path():
+    srv, port = _serve(_sse_upstream())
+    try:
+        app = sentinel.create_app(f"http://127.0.0.1:{port}")
+        c = app.test_client()
+        r = c.get("/v1/models")                                       # not chat/completions
+        assert r.status_code == 200
+        assert r.get_json()["data"][0]["id"] == "glm-4.6"             # reached upstream
+    finally:
+        srv.shutdown()
+
+
+def test_agent_report_404_for_unknown_session():
+    srv, port = _serve(_sse_upstream())
+    try:
+        app = sentinel.create_app(f"http://127.0.0.1:{port}")
+        c = app.test_client()
+        assert c.get("/agent/report?session=nope").status_code == 404
+    finally:
+        srv.shutdown()
