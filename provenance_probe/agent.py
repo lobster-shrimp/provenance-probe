@@ -1,0 +1,238 @@
+"""Agent provenance flight recorder (Phase 1).
+
+The unit of assessment is an AGENT: a workflow that calls 1..N models over M
+steps and invokes tools. This module ingests an agent run and reports, per step,
+which model it ran on, whether the model switched, and where its tool calls sent
+data.
+
+    trace file ─▶ parse_trace ─▶ AgentStep[] ─┬─▶ transcript._turn_identity(step.text) → self-ID / flip
+      (OTel|JSON)  (one normalizer)            ├─▶ network.analyze_host(host)           → egress jurisdiction
+                                               ├─▶ (active_probe, if authorized+reachable)
+                                               │      tokenizer probe                    → CONFIRMED provenance
+                                               └─▶ scoring.combine_agent(steps)          → agent verdict (worst)
+
+Honesty rule: a post-hoc trace carries NO tokenizer signal (that needs active
+max_tokens=1 probes), so trace-only provenance floors at INDETERMINATE in
+scoring.py. CONFIRMED provenance is reachable ONLY through active_probe against a
+reachable, authorized backend. Egress jurisdiction and model-switch detection are
+the reliable trace-only signals.
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from urllib.parse import urlparse
+
+from . import scoring
+from .probes import network
+from .probes import transcript as _tx
+
+
+@dataclass
+class AgentStep:
+    """One normalized step of an agent run (a model call or a tool call).
+
+    Both the OpenTelemetry-GenAI parser and the minimal-JSON parser produce this
+    single shape, so everything downstream sees one type (DRY).
+    """
+    index: int
+    kind: str                       # "model" | "tool"
+    name: str                       # span/role name if present, else "call#N"
+    echoed_model: str | None = None  # the model id the trace reports for this call
+    text: str = ""                  # assistant text (for self-ID regex)
+    tool_host: str | None = None    # destination host for a tool call (egress)
+    backend_url: str | None = None  # the model endpoint this call hit, if known
+    prompt_tokens: int | None = None
+
+
+class TraceError(ValueError):
+    """Raised when a trace cannot be parsed into steps."""
+
+
+# --- parsing -----------------------------------------------------------------
+
+def _host_of(url: str | None) -> str | None:
+    if not url:
+        return None
+    return urlparse(url).hostname or url or None
+
+
+def _parse_otel(obj: dict) -> list[AgentStep]:
+    """OpenTelemetry GenAI spans.
+
+    Accepts either the OTLP shape ({"resourceSpans":[{"scopeSpans":[{"spans":[…]}]}]})
+    or a flattened {"spans":[{"name":…, "attributes":{gen_ai.*}}]}. Attributes may
+    be a flat dict or the OTLP key/value list form.
+    """
+    spans = _collect_spans(obj)
+    steps: list[AgentStep] = []
+    for i, sp in enumerate(spans):
+        attrs = _flatten_attrs(sp.get("attributes", {}))
+        op = attrs.get("gen_ai.operation.name") or ""
+        tool_name = attrs.get("gen_ai.tool.name")
+        is_tool = bool(tool_name) or op in ("execute_tool", "tool")
+        if is_tool:
+            host = _host_of(attrs.get("server.address") or attrs.get("url.full")
+                            or attrs.get("http.url"))
+            steps.append(AgentStep(index=i, kind="tool",
+                                   name=str(tool_name or sp.get("name") or f"call#{i}"),
+                                   tool_host=host))
+        else:
+            model = (attrs.get("gen_ai.response.model")
+                     or attrs.get("gen_ai.request.model"))
+            steps.append(AgentStep(
+                index=i, kind="model",
+                name=str(sp.get("name") or attrs.get("gen_ai.operation.name") or f"call#{i}"),
+                echoed_model=model,
+                text=str(attrs.get("gen_ai.completion") or attrs.get("gen_ai.response.text") or ""),
+                backend_url=attrs.get("server.address") or attrs.get("gen_ai.system.endpoint"),
+                prompt_tokens=_as_int(attrs.get("gen_ai.usage.input_tokens"))))
+    return steps
+
+
+def _collect_spans(obj: dict) -> list[dict]:
+    if "spans" in obj:
+        return list(obj["spans"])
+    out = []
+    for rs in obj.get("resourceSpans", []):
+        for ss in rs.get("scopeSpans", []):
+            out.extend(ss.get("spans", []))
+    return out
+
+
+def _flatten_attrs(attrs) -> dict:
+    """OTLP attributes come as [{"key":k,"value":{"stringValue":v}}] or a flat dict."""
+    if isinstance(attrs, dict):
+        return attrs
+    flat = {}
+    for kv in attrs or []:
+        k = kv.get("key")
+        v = kv.get("value", {})
+        if k is None:
+            continue
+        flat[k] = (v.get("stringValue") if "stringValue" in v
+                   else v.get("intValue") if "intValue" in v
+                   else next(iter(v.values()), None) if isinstance(v, dict) else v)
+    return flat
+
+
+def _as_int(x):
+    try:
+        return int(x)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_json(obj) -> list[AgentStep]:
+    """Minimal hand-rolled fallback: {"steps":[{model,text,tool_host,backend_url,prompt_tokens}]}
+    or a bare list of such step dicts."""
+    rows = obj["steps"] if isinstance(obj, dict) else obj
+    if not isinstance(rows, list):
+        raise TraceError("JSON trace must be a list of steps or {'steps': [...]}")
+    steps = []
+    for i, r in enumerate(rows):
+        host = r.get("tool_host") or _host_of(r.get("tool_url"))
+        kind = r.get("kind") or ("tool" if host and not r.get("model") else "model")
+        steps.append(AgentStep(
+            index=i, kind=kind, name=str(r.get("name") or f"call#{i}"),
+            echoed_model=r.get("model"), text=str(r.get("text") or ""),
+            tool_host=host, backend_url=r.get("backend_url"),
+            prompt_tokens=_as_int(r.get("prompt_tokens"))))
+    return steps
+
+
+def parse_trace(raw) -> list[AgentStep]:
+    """Parse a trace (str/bytes JSON or an already-loaded object) into steps.
+
+    OTel GenAI spans are primary; the minimal JSON schema is the documented
+    fallback. Detection is by structure, not a flag.
+    """
+    if isinstance(raw, (str, bytes)):
+        try:
+            raw = json.loads(raw)
+        except (ValueError, json.JSONDecodeError) as e:
+            raise TraceError(f"trace is not valid JSON: {e}") from e
+    if isinstance(raw, dict) and ("resourceSpans" in raw or "spans" in raw):
+        steps = _parse_otel(raw)
+    else:
+        steps = _parse_json(raw)
+    if not steps:
+        raise TraceError("trace contained no steps")
+    return steps
+
+
+def load(path: str) -> list[AgentStep]:
+    with open(path) as f:
+        return parse_trace(f.read())
+
+
+# --- per-step scoring --------------------------------------------------------
+
+def _step_bundle(step: AgentStep, *, offline: bool) -> dict:
+    """Build the smallest scoring bundle a single step supports (trace-only).
+
+    No tokenizer_match here — trace mode cannot produce it, so scoring floors
+    provenance at INDETERMINATE. That is the honest result.
+    """
+    b: dict = {}
+    host_url = step.tool_host or step.backend_url
+    if host_url:
+        b["network"] = network.analyze_host(host_url, do_rdap=not offline)
+    if step.echoed_model:
+        b.setdefault("headers", {})["echoed_model"] = step.echoed_model
+    if step.kind == "model" and step.text:
+        idy = _tx._turn_identity(step.text)
+        # feed the deception layer only when the text actually asserts/concedes an identity
+        if idy.get("asserted") or idy.get("conceded"):
+            b["_self_id"] = idy
+    return b
+
+
+def analyze(steps: list[AgentStep], *, offline: bool = False,
+            step_overrides: dict[int, dict] | None = None) -> dict:
+    """Score each step, detect model switches, and combine into an agent verdict.
+
+    step_overrides: {step_index: bundle_fragment} — used to graft an active-probe
+    result (e.g. tokenizer_match) onto a specific step before scoring.
+    """
+    step_overrides = step_overrides or {}
+    rows, prev_identity = [], None
+    switches = []
+    for st in steps:
+        bundle = _step_bundle(st, offline=offline)
+        if st.index in step_overrides:
+            bundle.update(step_overrides[st.index])
+        sc = scoring.score(bundle)
+        # model-switch: echoed id change OR self-ID identity flip across model steps
+        cur_identity = None
+        if st.kind == "model":
+            sid = bundle.get("_self_id") or {}
+            cur_identity = sid.get("conceded") or sid.get("asserted") or st.echoed_model
+            if cur_identity and prev_identity and cur_identity != prev_identity:
+                switches.append({"at_step": st.index, "from": prev_identity, "to": cur_identity})
+            if cur_identity:
+                prev_identity = cur_identity
+        rows.append({
+            "index": st.index, "kind": st.kind, "name": st.name,
+            "echoed_model": st.echoed_model,
+            "host": st.tool_host or st.backend_url,
+            "provenance": sc["provenance_risk"]["verdict"],
+            "jurisdiction": sc["jurisdictional_risk"]["verdict"],
+            "score": sc,
+        })
+    combined = scoring.combine_agent([r["score"] for r in rows])
+    combined["model_switches"] = switches
+    combined["switch_detected"] = bool(switches)
+    return {"steps": rows, "verdict": combined}
+
+
+def assert_backends_authorized(backends, i_am_authorized: bool) -> None:
+    """Widened consent surface: every backend that will be actively probed must be
+    authorized. Raises PermissionError on the first unauthorized backend."""
+    for b in backends:
+        if not (getattr(b, "authorized", False) and i_am_authorized):
+            raise PermissionError(
+                f"backend '{getattr(b, 'base_url', b)}' is not authorized for active "
+                f"probing. Set authorized=true on the backend AND pass --i-am-authorized. "
+                f"Active probing of an agent's model backend needs written authorization "
+                f"for that backend, not just the agent.")

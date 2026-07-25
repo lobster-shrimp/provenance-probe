@@ -1,5 +1,26 @@
 # Changelog
 
+## [Unreleased]
+
+### Added — Agent Provenance Flight Recorder (Phase 1)
+- The unit of assessment can now be an **agent** (a multi-step, multi-model
+  workflow), not just one endpoint. `provenance_probe/agent.py` ingests a captured
+  agent run and reports a per-step board: which model each step ran on, model
+  switches across steps, and tool-call egress jurisdiction.
+- `agent-trace <file>` CLI — ingest **OpenTelemetry GenAI spans** (primary) or a
+  minimal JSON fallback; prints the board; **exit 2** on a model switch.
+- `agent --config a.json` CLI — config-driven assessment: trace ingest + optional
+  **active backend probe** (the only route to a CONFIRMED provenance verdict).
+- `AgentTarget` / `AgentBackend` config types with **per-backend authorization** —
+  active probing aborts on the first unauthorized backend (the consent surface
+  widens to the agent operator AND each backend).
+- `scoring.combine_agent()` — agent verdict = the worst step, labelled MIXED when
+  steps differ; the full per-step board is always shown.
+- Honest by design: trace-only provenance floors at INDETERMINATE (no tokenizer
+  signal in a post-hoc trace). Egress jurisdiction and model switch are the
+  reliable trace signals. `docs/CONOPS.md` = executive/federal concept of ops.
+- 17 new tests (`tests/test_agent.py`), fixtures for OTel + JSON traces.
+
 ## [0.4.1] - 2026-07-20
 
 ### Fixed
