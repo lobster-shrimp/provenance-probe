@@ -264,11 +264,15 @@ def analyze(steps: list[AgentStep], *, offline: bool = False, resolve_hosts: boo
             if brand:
                 prev_brand = brand
 
+        # operator-vs-soil basis for the jurisdiction verdict (network layer keeps
+        # "PRC" = on-soil, "PRC-operator" = PRC-domiciled operator, CDN-fronted etc.)
+        basis = (bundle.get("network") or {}).get("jurisdiction")
         rows.append({
             "index": st.index, "kind": st.kind, "name": st.name,
             "echoed_model": st.echoed_model, "host": host,
             "provenance": sc["provenance_risk"]["verdict"],
             "jurisdiction": sc["jurisdictional_risk"]["verdict"],
+            "jurisdiction_basis": basis,
             "score": sc,
         })
     combined = scoring.combine_agent([r["score"] for r in rows])
