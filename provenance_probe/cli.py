@@ -6,7 +6,7 @@ import argparse, json, os, sys, datetime, hashlib
 from .config import load_targets, write_example, Target
 from .client import Client
 from .probes import (network, tokenizer, behavioral, wire, latency, logprob,
-                     artifact, clientsrc, deception, transcript)
+                     artifact, clientsrc, deception, transcript, session)
 from . import scoring, report, reference, userwarn, monitor
 
 BANNER = """provenance-probe — GenAI model provenance & jurisdiction assurance
@@ -223,6 +223,28 @@ def cmd_transcript(a):
     sys.exit(2 if (result["model_change_events"] or corr.get("misrepresentation")) else 0)
 
 
+def cmd_session(a):
+    """Fingerprint an endpoint at session start + end; detect an intra-session swap."""
+    targets = load_targets(a.config)
+    switched = False
+    for t in targets:
+        _assert_scope(t, a.i_am_authorized)
+        print(f"\n>>> {t.name}  {t.base_url}  (gap {a.gap_probes} probes)")
+        r = session.boundary_check(Client(t), gap_probes=a.gap_probes,
+                                   variant_seed=getattr(a, "variant_seed", 0) or 0)
+        sf, ef = r["start_fingerprint"][:12], r["end_fingerprint"][:12]
+        if r["boundary_switch"]:
+            switched = True
+            print(f"  MODEL SWITCHED MID-SESSION: {sf} -> {ef}  (confidence {r['confidence']})")
+            for c in r["changes"]:
+                print(f"    [{c['severity']}] {c['field']}: {c['detail']}")
+        else:
+            print(f"  stable across the session: {sf}")
+        if a.out:
+            json.dump(r, open(a.out, "w"), indent=2)
+    sys.exit(2 if switched else 0)
+
+
 def cmd_init(a):
     write_example(a.path)
     print(f"Wrote example config -> {a.path}")
@@ -304,6 +326,17 @@ def main(argv=None):
     s.add_argument("--hosts-file")
     s.add_argument("--offline", action="store_true")
     s.set_defaults(func=cmd_network)
+
+    s = sub.add_parser("session",
+                       help="fingerprint an endpoint at session start + end; "
+                            "exit 2 if the served model switched mid-session")
+    s.add_argument("--config", required=True)
+    s.add_argument("--gap-probes", type=int, default=5,
+                   help="filler turns between the start and end snapshots")
+    s.add_argument("--variant-seed", type=int, default=0)
+    s.add_argument("--out", help="write the boundary-check JSON here")
+    s.add_argument("--i-am-authorized", action="store_true")
+    s.set_defaults(func=cmd_session)
 
     s = sub.add_parser("transcript",
                        help="analyze a captured conversation for identity deception + "
