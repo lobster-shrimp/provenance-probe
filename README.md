@@ -55,6 +55,11 @@ A vendor can be clean on one and dirty on the other. Chinese open weights runnin
 
 ## Deploy locally
 
+> **On Windows, or want the full stack (engine + observatory)?** See
+> **[RUNNING-LOCALLY.md](RUNNING-LOCALLY.md)** — a from-scratch, cross-platform
+> guide (Windows PowerShell / macOS / Linux / WSL) covering the probe UI, the
+> observatory API, and the static site. The quick path below is macOS/Linux.
+
 ```bash
 ./install.sh            # venv + install + build tokenizer references
 source .venv/bin/activate
