@@ -325,6 +325,33 @@ def create_app(upstream: str, *, events_file: str | None = None):
             return jsonify({"sessions": len(state["sessions"]),
                             "events": len(state["events"]), "upstream": base_url, "ok": True})
 
+    @app.get("/sentinel/sessions")
+    def sessions_ep():
+        with lock:
+            return jsonify({"sessions": sorted(state["sessions"].keys())})
+
+    @app.get("/agent/report.html")
+    def agent_report_html_ep():
+        """Server-rendered report FRAGMENT for one session (reused by the live
+        page — DRY with the CLI/serve report). Returns a 'waiting' note if the
+        session has no calls yet, so the live poller shows progress not a 404."""
+        from . import agent, agent_report
+        session = request.args.get("session", "default")
+        with lock:
+            s = state["sessions"].get(session)
+            steps = list(s["steps"]) if s else []
+        if not steps:
+            return Response('<p style="color:#666">Waiting for the agent to make a '
+                            'call through the proxy&hellip;</p>', mimetype="text/html")
+        result = agent.analyze(steps)
+        return Response(agent_report.render_html(result, f"session {session}", fragment=True),
+                        mimetype="text/html")
+
+    @app.get("/agent/live")
+    def agent_live_ep():
+        session = request.args.get("session", "default")
+        return Response(_LIVE_PAGE.replace("__SESSION__", session), mimetype="text/html")
+
     @app.get("/agent/report")
     def agent_report_ep():
         """Run the agent analysis over one session's collected steps."""
@@ -386,12 +413,55 @@ def create_app(upstream: str, *, events_file: str | None = None):
     return app
 
 
+_LIVE_PAGE = """<!doctype html><html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>Agent live board — provenance-probe sentinel</title>
+<style>
+ body{font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;margin:1.5rem auto;max-width:960px;
+   color:#1a1a1a;padding:0 1rem}
+ h1{font-size:1.3rem;margin:0 0 .2rem} .bar{display:flex;gap:.8rem;align-items:center;flex-wrap:wrap;
+   margin:.6rem 0 1rem;color:#555;font-size:.9rem}
+ select,button{font:inherit;padding:.35rem .5rem;border:1px solid #ccc;border-radius:6px;background:#fff}
+ .dot{width:9px;height:9px;border-radius:50%;background:#1b7f4d;display:inline-block;animation:p 1.4s infinite}
+ @keyframes p{0%,100%{opacity:.35}50%{opacity:1}} .paused .dot{background:#b26a00;animation:none}
+ #board{border-top:1px solid #eee;padding-top:.5rem}
+</style></head><body>
+<h1>Agent live board</h1>
+<div class=bar id=barwrap>
+ <span class=dot></span><span id=stat>live &mdash; updating every 2s</span>
+ &nbsp;session: <select id=sel></select>
+ <button id=pause>Pause</button>
+ <span style="color:#888">calls made by the agent through this proxy appear here in real time</span>
+</div>
+<div id=board><p style="color:#666">Loading&hellip;</p></div>
+<script>
+ var session=decodeURIComponent("__SESSION__"), paused=false, timer=null;
+ var sel=document.getElementById('sel'), board=document.getElementById('board');
+ function loadSessions(){fetch('/sentinel/sessions').then(r=>r.json()).then(function(d){
+   var cur=sel.value||session; sel.innerHTML='';
+   (d.sessions.length?d.sessions:[session]).forEach(function(s){
+     var o=document.createElement('option');o.value=s;o.textContent=s;if(s===cur)o.selected=true;sel.appendChild(o);});
+   session=sel.value;});}
+ function tick(){ if(paused) return;
+   fetch('/agent/report.html?session='+encodeURIComponent(session))
+     .then(r=>r.text()).then(function(h){board.innerHTML=h;})
+     .catch(function(){document.getElementById('stat').textContent='(proxy unreachable)';});}
+ sel.addEventListener('change',function(){session=sel.value;tick();});
+ document.getElementById('pause').addEventListener('click',function(){
+   paused=!paused;this.textContent=paused?'Resume':'Pause';
+   document.getElementById('barwrap').classList.toggle('paused',paused);
+   document.getElementById('stat').textContent=paused?'paused':'live &mdash; updating every 2s';});
+ loadSessions(); tick(); setInterval(loadSessions,5000); setInterval(tick,2000);
+</script></body></html>"""
+
+
 def serve(upstream: str, host: str = "127.0.0.1", port: int = 8900,
           events_file: str | None = None) -> None:
     app = create_app(upstream, events_file=events_file)
     print(f"provenance-probe sentinel  ->  proxying {upstream}  on http://{host}:{port}")
     print("  point your client's base_url at this address; watch /sentinel/events")
-    print("  agent board: /agent/report?session=<your X-Provenance-Session>")
+    print(f"  LIVE board (updates as the agent runs): http://{host}:{port}/agent/live")
+    print("  agent board JSON: /agent/report?session=<your X-Provenance-Session>")
     if host not in ("127.0.0.1", "localhost", "::1"):
         print("\n  ! Binding to a non-loopback address; this proxy has no auth.\n")
     app.run(host=host, port=port, threaded=True)

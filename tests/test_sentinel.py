@@ -177,6 +177,24 @@ def test_agent_report_404_for_unknown_session():
         srv.shutdown()
 
 
+def test_live_ui_page_and_fragment(monkeypatch):
+    # E4: /agent/live serves the page; /agent/report.html shows 'waiting' pre-call
+    # and the tooltip-rich fragment after a call; /sentinel/sessions lists them.
+    srv, port = _serve(_sse_upstream())
+    try:
+        app = sentinel.create_app(f"http://127.0.0.1:{port}")
+        c = app.test_client()
+        live = c.get("/agent/live?session=s1")
+        assert live.status_code == 200 and b"Agent live board" in live.data
+        assert b"Waiting for the agent" in c.get("/agent/report.html?session=s1").data
+        _post(c, "s1")                                          # agent makes a call
+        frag = c.get("/agent/report.html?session=s1").data
+        assert b"agent-report" in frag and b"data-tip=" in frag  # rendered fragment + tooltips
+        assert "s1" in c.get("/sentinel/sessions").get_json()["sessions"]
+    finally:
+        srv.shutdown()
+
+
 def _upstream_nomodel_first():
     """req1: an error with NO model field; req2: gpt-4o; req3: glm-4 (a switch)."""
     from flask import Flask, jsonify

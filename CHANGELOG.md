@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0] - 2026-07-25 — Live agent board (E4)
+
+### Added
+- **Live streaming board in the `sentinel` proxy.** `GET /agent/live?session=<id>`
+  serves a self-contained page that shows the per-step board **updating in real
+  time** as the agent makes calls through the proxy — session picker, animated
+  live indicator, pause/resume. It polls a server-rendered report fragment
+  (`GET /agent/report.html`), so it reuses the same tooltip-rich `agent_report`
+  render (DRY) — hover any term for what it means. `GET /sentinel/sessions` lists
+  active sessions. Browser-verified live against a real endpoint (board went
+  2 → 3 steps as calls arrived, no reload).
+
 ## [0.7.0] - 2026-07-25 — Sub-agent call graph (E6)
 
 ### Fixed (pre-merge adversarial review — Codex)
