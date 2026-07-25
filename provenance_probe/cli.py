@@ -354,6 +354,9 @@ def cmd_redteam(a):
     """Drive an authorized endpoint through the adversarial corpus; alert on a
     model-identity switch under stress."""
     from . import redteam
+    if not a.i_am_authorized:
+        sys.exit("[abort] redteam sends deliberately adversarial prompts. Pass "
+                 "--i-am-authorized to attest written authorization for these targets.")
     targets = load_targets(a.config)
     rc = 0
     for t in targets:

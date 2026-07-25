@@ -3,10 +3,14 @@ from provenance_probe import redteam
 
 
 class _Resp:
-    def __init__(self, model, content):
-        self.body = {"model": model,
-                     "choices": [{"message": {"role": "assistant", "content": content}}]}
-        self.stream_text = None
+    def __init__(self, model, content, status=200):
+        self._model, self._content, self.status = model, content, status
+    def echoed_model(self):
+        return self._model
+    def text(self):
+        return self._content
+    def ok(self):
+        return 200 <= self.status < 300
 
 
 class _Client:
@@ -41,6 +45,31 @@ def test_cap_bounds_volume():
     c = _Client([("m", "x")] * 20)
     out = redteam.run(c, cap=3)                       # quota guard
     assert out["scenarios_run"] == 3
+
+
+def test_transport_error_is_not_a_clean_scenario():
+    # a non-2xx Response must NOT count as a successful no-identity scenario
+    c = _Client([("gpt-4o", "hi", 200), ("", "", 500), ("gpt-4o", "hi", 200)])
+    out = redteam.run(c, cap=3)
+    assert out["scenarios_run"] == 2                       # the 500 didn't count
+    assert any("transport" in r.get("error", "") for r in out["identities"])
+
+
+def test_self_id_change_is_advisory_not_hard_switch():
+    # echoed model stable, only the self-ID text changes (e.g. a refusal/negation)
+    c = _Client([("gpt-4o", "I am ChatGPT."), ("gpt-4o", "Actually I'm GLM.")] + [("gpt-4o", "x")] * 6)
+    out = redteam.run(c, cap=8)
+    assert out["switch_detected"] is False                 # NOT a hard switch (exit 0)
+    assert out["self_id_flags"]                            # but flagged for review
+
+
+def test_self_id_backfills_when_first_response_has_no_selfid():
+    # first response: model id only; later a self-ID appears then changes -> flagged
+    c = _Client([("router", "ok."), ("router", "I am ChatGPT."), ("router", "Actually GLM.")]
+                + [("router", "x")] * 5)
+    out = redteam.run(c, cap=8)
+    # the self-ID went ChatGPT(OpenAI) -> GLM; backfill means the change is seen
+    assert any(f["signal"] == "self_id" for f in out["self_id_flags"])
 
 
 def test_one_scenario_error_does_not_abort():

@@ -34,41 +34,51 @@ SCENARIOS: list[tuple[str, str]] = [
 
 
 def _identity(resp) -> dict:
-    """Passive identity from one response: echoed model id + self-ID from the text."""
-    body = resp.body if isinstance(resp.body, dict) else {}
-    model = body.get("model")
-    content = ((body.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-    if not content and getattr(resp, "stream_text", None):
-        content = resp.stream_text
+    """Passive identity from one response — adapter-aware: the echoed model id and
+    the reply text come through the Response helpers, so template / Anthropic / raw
+    endpoints work, not just OpenAI-shaped JSON."""
+    model = resp.echoed_model() if hasattr(resp, "echoed_model") else None
+    content = resp.text() if hasattr(resp, "text") else ""
     idy = _tx._turn_identity(content or "")
     return {"model_id": model, "self_id": idy.get("conceded") or idy.get("asserted")}
 
 
 def run(client, *, cap: int = 8, max_tokens: int = 64, scenarios=None) -> dict:
-    """Send up to `cap` scenarios and detect an identity switch under stress."""
+    """Send up to `cap` scenarios and detect an identity switch under stress.
+
+    The HARD switch signal is the echoed `model_id` changing (spoofing aside, a
+    router that swaps models reports a different id). A changing `self_id` (from the
+    reply text) is reported as an advisory FLAG, not a hard switch — the corpus asks
+    about "underlying" identity, so a refusal/negation can trip the self-ID regex; we
+    don't want that to fire exit-2.
+    """
     corpus = (scenarios or SCENARIOS)[:max(0, cap)]
-    rows, switches = [], []
-    base = None
+    rows, switches, self_id_flags = [], [], []
+    base = {"model_id": None, "self_id": None}
     for sid, prompt in corpus:
         try:
             resp = client.chat(prompt, max_tokens=max_tokens, temperature=0.0)
         except Exception as e:                       # never let one scenario abort the run
             rows.append({"scenario": sid, "error": str(e)[:120]})
             continue
+        if hasattr(resp, "ok") and not resp.ok():     # transport error is NOT a clean scenario
+            rows.append({"scenario": sid, "error": f"transport {getattr(resp, 'status', '?')}"})
+            continue
         idy = _identity(resp)
         rows.append({"scenario": sid, "model_id": idy["model_id"], "self_id": idy["self_id"]})
-        if base is None:
-            if idy["model_id"] or idy["self_id"]:
-                base = idy
-            continue
-        for sig in ("model_id", "self_id"):
-            if idy[sig] and base.get(sig) and idy[sig] != base[sig]:
-                switches.append({"scenario": sid, "signal": sig,
-                                 "from": base[sig], "to": idy[sig]})
-                base[sig] = idy[sig]
+        for sig, bucket in (("model_id", switches), ("self_id", self_id_flags)):
+            cur = idy[sig]
+            if not cur:
+                continue
+            if base[sig] is None:
+                base[sig] = cur               # backfill a never-seen signal (not a switch)
+            elif cur != base[sig]:
+                bucket.append({"scenario": sid, "signal": sig, "from": base[sig], "to": cur})
+                base[sig] = cur
     return {"scenarios_run": len([r for r in rows if "error" not in r]),
             "identities": rows,
-            "switch_detected": bool(switches),
+            "switch_detected": bool(switches),        # hard: echoed model id changed
             "switches": switches,
-            "note": ("served model identity stayed stable under stress" if not switches
-                     else "served model identity CHANGED under adversarial stress")}
+            "self_id_flags": self_id_flags,           # advisory: self-ID text changed (review)
+            "note": ("served model id stayed stable under stress" if not switches
+                     else "served model id CHANGED under adversarial stress")}
