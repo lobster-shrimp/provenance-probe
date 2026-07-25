@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.9.0] - 2026-07-25 — Adversarial red-team corpus (E8)
+
+### Added
+- **`redteam` command.** Drives an authorized endpoint through a corpus of
+  stress / adversarial prompts (`provenance_probe/redteam.py`) and detects whether
+  the served model's identity **changes under pressure** — a router that swaps to a
+  cheaper or fallback model when pushed, or reveals a different origin. Reuses the
+  same passive identity (echoed model id + self-ID) as the sentinel, so a
+  switch-under-stress is reported like a mid-session switch. `--cap N` bounds the
+  quota/abuse budget; one scenario erroring never aborts the run; **exit 2** on a
+  switch. Authorized-use only (the prompts are deliberately provocative).
+
 ## [0.8.0] - 2026-07-25 — Live agent board (E4)
 
 ### Fixed (pre-merge adversarial review — Codex)

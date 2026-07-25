@@ -350,6 +350,33 @@ def cmd_agent(a):
     sys.exit(2 if result["verdict"]["alert"] else 0)
 
 
+def cmd_redteam(a):
+    """Drive an authorized endpoint through the adversarial corpus; alert on a
+    model-identity switch under stress."""
+    from . import redteam
+    targets = load_targets(a.config)
+    rc = 0
+    for t in targets:
+        _assert_scope(t, a.i_am_authorized)
+        print(f"\n>>> red-team {t.name}  {t.base_url}  (cap {a.cap})")
+        result = redteam.run(Client(t), cap=a.cap)
+        for row in result["identities"]:
+            if "error" in row:
+                print(f"  {row['scenario']:<16} error: {row['error']}")
+            else:
+                print(f"  {row['scenario']:<16} model={row['model_id'] or '-'}  self-id={row['self_id'] or '-'}")
+        if result["switch_detected"]:
+            print("\n  SWITCH UNDER STRESS:")
+            for s in result["switches"]:
+                print(f"    [{s['scenario']}] {s['signal']}: {s['from']} -> {s['to']}")
+            rc = 2
+        print(f"\n  {result['note']} ({result['scenarios_run']} scenarios)")
+        if a.out:
+            json.dump(result, open(a.out, "w"), indent=2)
+            print(f"  [+] {a.out}")
+    sys.exit(rc)
+
+
 def cmd_init(a):
     write_example(a.path)
     print(f"Wrote example config -> {a.path}")
@@ -490,6 +517,16 @@ def main(argv=None):
     s.add_argument("--i-am-authorized", action="store_true",
                    help="attest written authorization for EACH backend actively probed")
     s.set_defaults(func=cmd_agent)
+
+    s = sub.add_parser("redteam",
+                       help="drive an authorized endpoint through an adversarial corpus; "
+                            "exit 2 if the served model identity switches under stress")
+    s.add_argument("--config", required=True, help="target config JSON")
+    s.add_argument("--cap", type=int, default=8, help="max scenarios to send (quota guard)")
+    s.add_argument("--out", help="write the red-team result JSON here")
+    s.add_argument("--i-am-authorized", action="store_true",
+                   help="attest written authorization to send adversarial prompts")
+    s.set_defaults(func=cmd_redteam)
 
     a = p.parse_args(argv)
     return a.func(a)

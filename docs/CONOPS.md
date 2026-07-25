@@ -98,11 +98,14 @@ probing aborts on the first unauthorized backend. Trace ingest of an
 already-captured run needs only the authorization under which the run was
 captured.
 
-## Roadmap
+## Roadmap — all phases SHIPPED (2026-07-25)
 
-- **Phase 1 (this):** trace ingest, per-step board, egress mapping, active backend
+- **Phase 1 ✓** — trace ingest, per-step board, egress mapping, active backend
   probe, per-backend authorization, this ConOps.
-- **Phase 2:** live proxy interposition, add-an-agent UI, sub-agent call graph,
-  signed export pack.
-- **Phase 3:** continuous nightly agent monitoring, agent-level numbered
-  advisories, adversarial red-team scenario corpus.
+- **Phase 2 ✓** — live proxy interposition (`sentinel` tees SSE, fail-open), the
+  `--export` signed-ready evidence pack (observatory signs it), sub-agent call
+  graph (OTel `parentSpanId` / `X-Provenance-Parent` + `GET /agent/graph`), and
+  the live board (`GET /agent/live`).
+- **Phase 3 ✓** — continuous nightly agent monitoring (observatory `agent_monitor`
+  drifts the agent fingerprint), agent-level numbered advisories (MPA, reusing the
+  disclosure pipeline), and the adversarial red-team corpus (`redteam` command).
