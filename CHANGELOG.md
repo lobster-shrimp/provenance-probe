@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.8.0] - 2026-07-25 — Live agent board (E4)
+
+### Fixed (pre-merge adversarial review — Codex)
+- **Reflected XSS on `/agent/live` closed.** An attacker-controlled `?session=`
+  went into an inline `<script>`; `json.dumps` escaped JS quotes but not
+  `</script>`, so `?session=</script><img src=x onerror=…>` broke out. Now `<`/`>`
+  are escaped to `<`/`>` too (regression test added). The rendered report
+  fragment was already fully `html.escape`d.
+- **Read-side DoS bounded:** `/agent/report.html` caches the rendered fragment per
+  `(session, step-count)`, so a 2s poll with no new calls is O(1) (no re-render).
+- Live/read endpoints are a local surface (like `/sentinel/events`) — serve
+  loopback-only; front with auth if you change `--host`.
+
+### Added
+- **Live streaming board in the `sentinel` proxy.** `GET /agent/live?session=<id>`
+  serves a self-contained page that shows the per-step board **updating in real
+  time** as the agent makes calls through the proxy — session picker, animated
+  live indicator, pause/resume. It polls a server-rendered report fragment
+  (`GET /agent/report.html`), so it reuses the same tooltip-rich `agent_report`
+  render (DRY) — hover any term for what it means. `GET /sentinel/sessions` lists
+  active sessions. Browser-verified live against a real endpoint (board went
+  2 → 3 steps as calls arrived, no reload).
+
 ## [0.7.0] - 2026-07-25 — Sub-agent call graph (E6)
 
 ### Fixed (pre-merge adversarial review — Codex)
