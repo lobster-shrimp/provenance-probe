@@ -195,6 +195,20 @@ def test_live_ui_page_and_fragment(monkeypatch):
         srv.shutdown()
 
 
+def test_live_page_session_is_not_xss_injectable():
+    srv, port = _serve(_sse_upstream())
+    try:
+        app = sentinel.create_app(f"http://127.0.0.1:{port}")
+        c = app.test_client()
+        r = c.get('/agent/live?session=</script><b>x</b>')
+        assert r.status_code == 200
+        # the injected HTML/script-break must NOT appear verbatim (< > escaped)
+        assert b"</script><b>x</b>" not in r.data
+        assert b"\\u003c" in r.data                 # proof the < was escaped
+    finally:
+        srv.shutdown()
+
+
 def _upstream_nomodel_first():
     """req1: an error with NO model field; req2: gpt-4o; req3: glm-4 (a switch)."""
     from flask import Flask, jsonify

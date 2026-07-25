@@ -94,7 +94,7 @@ def create_app(upstream: str, *, events_file: str | None = None):
 
     app = Flask(__name__)
     # sessions[key] = {baseline, steps[], last, inflight, accum}
-    state = {"sessions": {}, "events": [], "global_accum": 0}
+    state = {"sessions": {}, "events": [], "global_accum": 0, "report_cache": {}}
     lock = threading.RLock()   # reentrant: chat() holds it while calling record()
     base_url = upstream.rstrip("/")
 
@@ -334,23 +334,36 @@ def create_app(upstream: str, *, events_file: str | None = None):
     def agent_report_html_ep():
         """Server-rendered report FRAGMENT for one session (reused by the live
         page — DRY with the CLI/serve report). Returns a 'waiting' note if the
-        session has no calls yet, so the live poller shows progress not a 404."""
+        session has no calls yet, so the live poller shows progress not a 404.
+
+        Local surface (like /sentinel/events): serve loopback-only; if you change
+        --host, front it with auth. Cached per (session, step-count) so a 2s poll
+        with no new calls is O(1) and can't burn CPU re-rendering."""
         from . import agent, agent_report
         session = request.args.get("session", "default")
         with lock:
             s = state["sessions"].get(session)
             steps = list(s["steps"]) if s else []
+            cached = state["report_cache"].get(session)
         if not steps:
             return Response('<p style="color:#666">Waiting for the agent to make a '
                             'call through the proxy&hellip;</p>', mimetype="text/html")
-        result = agent.analyze(steps)
-        return Response(agent_report.render_html(result, f"session {session}", fragment=True),
-                        mimetype="text/html")
+        if cached and cached[0] == len(steps):        # no new calls -> serve cached render
+            return Response(cached[1], mimetype="text/html")
+        html_frag = agent_report.render_html(agent.analyze(steps),
+                                             f"session {session}", fragment=True)
+        with lock:
+            state["report_cache"][session] = (len(steps), html_frag)
+        return Response(html_frag, mimetype="text/html")
 
     @app.get("/agent/live")
     def agent_live_ep():
+        # Safe JS string literal: json.dumps escapes quotes/backslashes (no JS-string
+        # break-out) AND we escape < > so an attacker-controlled ?session= can't emit
+        # a literal </script> to break out of the inline <script> (no XSS).
         session = request.args.get("session", "default")
-        return Response(_LIVE_PAGE.replace("__SESSION__", session), mimetype="text/html")
+        safe = json.dumps(session).replace("<", "\\u003c").replace(">", "\\u003e")
+        return Response(_LIVE_PAGE.replace("__SESSION_JSON__", safe), mimetype="text/html")
 
     @app.get("/agent/report")
     def agent_report_ep():
@@ -435,7 +448,7 @@ _LIVE_PAGE = """<!doctype html><html lang=en><head><meta charset=utf-8>
 </div>
 <div id=board><p style="color:#666">Loading&hellip;</p></div>
 <script>
- var session=decodeURIComponent("__SESSION__"), paused=false, timer=null;
+ var session=__SESSION_JSON__, paused=false, timer=null;
  var sel=document.getElementById('sel'), board=document.getElementById('board');
  function loadSessions(){fetch('/sentinel/sessions').then(r=>r.json()).then(function(d){
    var cur=sel.value||session; sel.innerHTML='';
