@@ -136,7 +136,7 @@ def create_app(upstream: str, *, events_file: str | None = None):
                 idx = len(s["steps"])
                 s["steps"].append(AgentStep(
                     index=idx, kind="model", name=f"call#{idx}", echoed_model=model_id,
-                    text=text or "", session_id=session,
+                    text=text or "", session_id=session, backend_url=base_url,
                     degraded=degraded, unordered=unordered, truncated=truncated))
         return alerted
 

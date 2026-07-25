@@ -133,6 +133,7 @@ def test_sse_tee_forwards_bytes_and_collects_step():
         assert "Hi" in body and "there" in body and "[DONE]" in body   # bytes forwarded
         rep = c.get("/agent/report?session=s1").get_json()
         assert rep["steps"][0]["echoed_model"] == "glm-4.6"            # step collected
+        assert rep["steps"][0]["host"]                                # upstream carried for jurisdiction
     finally:
         srv.shutdown()
 
