@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.5.0] - 2026-07-25
 
 ### Added — Agent Provenance Flight Recorder (Phase 1)
 - The unit of assessment can now be an **agent** (a multi-step, multi-model
