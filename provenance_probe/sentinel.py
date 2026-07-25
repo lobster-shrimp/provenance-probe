@@ -187,7 +187,10 @@ def create_app(upstream: str, *, events_file: str | None = None):
         unordered = _enter(session)
         if parent:
             with lock:
-                _session(session)["parent"] = parent
+                s = _session(session)
+                if s["parent"] is None:        # first-writer wins (no silent reparenting)
+                    s["parent"] = parent
+                _session(parent)               # placeholder so the parent is a reachable root
         try:
             r = requests.post(base_url + "/v1/chat/completions", data=body,
                               headers=fwd, timeout=120, stream=True)
@@ -352,18 +355,33 @@ def create_app(upstream: str, *, events_file: str | None = None):
         if root not in snap:
             return jsonify({"error": f"no session '{root}'"}), 404
 
-        seen = set()
+        # Build the tree ITERATIVELY with a depth cap (deep session chains must not
+        # blow the stack or JSON recursion), cycle-guarded.
+        MAX_GRAPH_DEPTH = 256
 
-        def node(key):
-            if key in seen:                      # cycle guard
-                return {"session": key, "cycle": True}
-            seen.add(key)
+        def make(key):
             steps = snap.get(key, [])
-            v = agent.analyze(steps)["verdict"] if steps else None
-            return {"session": key, "verdict": v,
-                    "children": [node(c) for c in sorted(children.get(key, []))]}
+            return {"session": key,
+                    "verdict": agent.analyze(steps)["verdict"] if steps else None,
+                    "children": []}
 
-        return jsonify({"root": root, "graph": node(root)})
+        seen = {root}
+        root_node = make(root)
+        stack = [(root_node, 0)]
+        while stack:
+            parent_node, depth = stack.pop()
+            if depth >= MAX_GRAPH_DEPTH:
+                parent_node["truncated"] = True
+                continue
+            for c in sorted(children.get(parent_node["session"], [])):
+                if c in seen:                    # cycle guard
+                    parent_node["children"].append({"session": c, "cycle": True})
+                    continue
+                seen.add(c)
+                child_node = make(c)
+                parent_node["children"].append(child_node)
+                stack.append((child_node, depth + 1))
+        return jsonify({"root": root, "graph": root_node})
 
     return app
 

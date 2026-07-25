@@ -379,6 +379,18 @@ def test_build_tree_cycle_guard():
     assert len(agent_graph.flatten(tree)) == 2
 
 
+def test_deep_chain_does_not_recurse():
+    from provenance_probe import agent_graph
+    # a 1500-deep acyclic chain (reachable: MAX_STEPS is 5000) must not RecursionError
+    steps = [{"model": "m", "span_id": str(i), "parent_id": (str(i - 1) if i else None)}
+             for i in range(1500)]
+    out = agent.analyze(agent.parse_trace({"steps": steps}))
+    flat = agent_graph.flatten(agent_graph.build_tree(out["steps"]))
+    assert len(flat) == 1500
+    from provenance_probe import agent_report
+    agent_report.render_html(out, "deep")             # must not raise
+
+
 def test_report_renders_call_graph_when_nested():
     from provenance_probe import agent_report
     out = agent.analyze(agent.parse_trace(_NESTED))

@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.7.0] - 2026-07-25 — Sub-agent call graph (E6)
+
+### Fixed (pre-merge adversarial review — Codex)
+- **No recursion on deep graphs.** `agent_graph.flatten` and the sentinel
+  `/agent/graph` builder are now iterative (a 1500-deep acyclic chain — reachable
+  under `MAX_STEPS=5000` — no longer `RecursionError`s the report/endpoint);
+  `/agent/graph` caps nested-JSON depth.
+- **Parent reachable even with no own call:** a child declaring `X-Provenance-Parent`
+  creates a placeholder parent session, so `/agent/graph?session=<parent>` works
+  even when the parent made no proxied call itself.
+- **No silent reparenting** (first-writer wins) and **first-span-wins** on duplicate
+  span ids (adversarial traces can't misattach nodes).
+
+### Added
+- **Sub-agent call graph.** When a trace carries span parentage (OpenTelemetry
+  `spanId`/`parentSpanId`) or the proxy carries `X-Provenance-Parent`, the flat
+  per-step board nests into the tree that actually ran — you see *which* step
+  spawned the sub-call that switched models or leaked data. `AgentStep` gains
+  `span_id`/`parent_id`; `agent_graph.build_tree` is cycle-safe (ancestor-walk
+  guard) and drops nothing (a missing/cyclic parent attaches at the root).
+- The HTML report renders a **"Sub-agent call graph"** section (indented tree)
+  when parentage exists, and documents the blind spot: a sub-agent calling an
+  un-proxied backend, or whose spans aren't exported, can't appear.
+- **`sentinel` `GET /agent/graph?session=<root>`** returns the tree of sessions
+  linked by `X-Provenance-Parent`, each node carrying that agent's verdict.
+
 ## [0.6.0] - 2026-07-25 — Agent Flight Recorder Phase 2 (A + E5)
 
 ### Fixed (pre-merge adversarial review — Codex)

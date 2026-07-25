@@ -200,7 +200,8 @@ def test_agent_graph_links_subagent_sessions():
     try:
         app = sentinel.create_app(f"http://127.0.0.1:{port}")
         c = app.test_client()
-        _post(c, "root")
+        # NB: the parent 'root' makes NO own call — only the child does. The graph
+        # must still be reachable at root (placeholder-parent fix).
         c.post("/v1/chat/completions",
                json={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
                headers={"X-Provenance-Session": "root/retriever", "X-Provenance-Parent": "root"})
