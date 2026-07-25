@@ -125,7 +125,7 @@ def create_app(upstream: str, *, events_file: str | None = None):
                 idle = [(v["last"], k) for k, v in state["sessions"].items() if v["inflight"] == 0]
                 if idle:
                     del state["sessions"][min(idle)[1]]
-            s = {"baseline": None, "steps": [], "last": _now(), "inflight": 0}
+            s = {"baseline": None, "steps": [], "last": _now(), "inflight": 0, "parent": None}
             state["sessions"][key] = s
         return s
 
@@ -183,7 +183,14 @@ def create_app(upstream: str, *, events_file: str | None = None):
                if k.lower() not in ("host", "content-length", "connection")}
         fwd["Connection"] = "close"
         session = request.headers.get("X-Provenance-Session", "default")
+        parent = request.headers.get("X-Provenance-Parent")   # sub-agent linkage (E6)
         unordered = _enter(session)
+        if parent:
+            with lock:
+                s = _session(session)
+                if s["parent"] is None:        # first-writer wins (no silent reparenting)
+                    s["parent"] = parent
+                _session(parent)               # placeholder so the parent is a reachable root
         try:
             r = requests.post(base_url + "/v1/chat/completions", data=body,
                               headers=fwd, timeout=120, stream=True)
@@ -332,6 +339,49 @@ def create_app(upstream: str, *, events_file: str | None = None):
         return jsonify({"session": session,
                         "steps": [{k: v for k, v in r.items() if k != "score"} for r in result["steps"]],
                         "verdict": result["verdict"]})
+
+    @app.get("/agent/graph")
+    def agent_graph_ep():
+        """Sub-agent call graph (E6): the tree of sessions linked by
+        X-Provenance-Parent, rooted at `session`. Each node is that agent's board."""
+        from . import agent
+        root = request.args.get("session", "default")
+        with lock:
+            children = {}
+            snap = {}
+            for key, s in state["sessions"].items():
+                snap[key] = list(s["steps"])
+                children.setdefault(s.get("parent"), []).append(key)
+        if root not in snap:
+            return jsonify({"error": f"no session '{root}'"}), 404
+
+        # Build the tree ITERATIVELY with a depth cap (deep session chains must not
+        # blow the stack or JSON recursion), cycle-guarded.
+        MAX_GRAPH_DEPTH = 256
+
+        def make(key):
+            steps = snap.get(key, [])
+            return {"session": key,
+                    "verdict": agent.analyze(steps)["verdict"] if steps else None,
+                    "children": []}
+
+        seen = {root}
+        root_node = make(root)
+        stack = [(root_node, 0)]
+        while stack:
+            parent_node, depth = stack.pop()
+            if depth >= MAX_GRAPH_DEPTH:
+                parent_node["truncated"] = True
+                continue
+            for c in sorted(children.get(parent_node["session"], [])):
+                if c in seen:                    # cycle guard
+                    parent_node["children"].append({"session": c, "cycle": True})
+                    continue
+                seen.add(c)
+                child_node = make(c)
+                parent_node["children"].append(child_node)
+                stack.append((child_node, depth + 1))
+        return jsonify({"root": root, "graph": root_node})
 
     return app
 
