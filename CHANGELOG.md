@@ -1,5 +1,58 @@
 # Changelog
 
+## [0.6.0] - 2026-07-25 — Agent Flight Recorder Phase 2 (A + E5)
+
+### Fixed (pre-merge adversarial review — Codex)
+- **Baseline no longer poisoned by a model-less first response.** A first response
+  with no `model_id` (e.g. a 400) set the session baseline to `None` and silently
+  swallowed all later switches; the baseline now backfills a never-seen signal
+  without alerting, so a real later switch is still caught (regression test added).
+- **SSE memory limits are now reliable under concurrency:** the runaway-line guard
+  caps `buf` at `MAX_LINE`, and the per-call + global accumulation ceiling is
+  checked-and-reserved atomically under one lock (was a TOCTOU race that let
+  concurrent streams blow past `MAX_GLOBAL_ACCUM`).
+- **Upstream sockets are closed** (`r.close()`) in the tee, JSON, and passthrough
+  paths — no socket leak on client disconnect.
+- **TTL eviction skips in-flight sessions** (`last` refreshed on entry) so a long
+  stream isn't evicted mid-call; distinct sessions capped (evict oldest idle) and
+  the event log bounded.
+- **Passthrough is fully transparent:** adds `HEAD`/`OPTIONS`, forwards raw bytes,
+  and preserves `content-encoding`.
+
+### Added — live proxy interposition (A)
+- **`sentinel` is now a live agent flight recorder.** The proxy **tees SSE**
+  streams — forwards each chunk to the agent unchanged as it arrives (preserves
+  token-streaming), accumulates the delta in parallel (capped per-call + a global
+  in-flight ceiling), fingerprints on completion. **Fail-open:** a fingerprinting
+  error can never alter or truncate the proxied bytes (tested: raise at mid-stream,
+  all chunks still arrive).
+- **Generic passthrough** — every path/method reaches upstream unchanged (not just
+  `/v1/chat/completions`), so the proxy is a real `base_url` interposition point;
+  provenance is collected only on chat completions.
+- **Response headers preserved** end-to-end (hop-by-hop denylist) — vendor/rate-limit
+  headers are both agent-visible behavior and wire evidence.
+- Per-session `AgentStep` accumulation + `GET /agent/report?session=…` runs
+  `agent.analyze` over the collected steps. Session key = `X-Provenance-Session`;
+  concurrent calls without it are flagged `unordered`, which **withholds** the
+  switch verdict. Per-session step cap + byte accounting + TTL eviction.
+- Passive by design: the proxy emits a response-IDENTITY (model id / self-ID /
+  header shape) for switch detection — NOT a tokenizer fingerprint (that needs the
+  active probe). Shared `client.parse_sse_delta` (one SSE parser for client + proxy).
+
+### Added — export pack (E5)
+- **`--export` on `agent`/`agent-trace`** writes a deterministic, signed-ready
+  evidence record (`agent_export.py`): verdict + per-step board + engine version +
+  SHA256 of the input, canonical JSON (`captured_at` isolated so the core is
+  reproducible). The record drops under the observatory `data/agents/<target>/<date>/`
+  tree and is signed by the existing daily cosign+Rekor manifest — the observatory's
+  `build_manifest` now includes agent records. No signing in the engine, no
+  duplicated crypto.
+
+### Added — `AgentStep` quality fields
+- `degraded` / `unordered` / `truncated` / `session_id`, carried through `analyze`,
+  the report (badges + tooltips), and the export. An `unordered` step withholds
+  order-dependent switch claims instead of asserting a meaningless one.
+
 ## [0.5.2] - 2026-07-25
 
 ### Added — the agent report illustrates what happened, and it's in the local UI
