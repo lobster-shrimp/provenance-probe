@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] — Agent Flight Recorder Phase 2 (A + E5)
+## [0.6.0] - 2026-07-25 — Agent Flight Recorder Phase 2 (A + E5)
 
 ### Fixed (pre-merge adversarial review — Codex)
 - **Baseline no longer poisoned by a model-less first response.** A first response
