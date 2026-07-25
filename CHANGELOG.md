@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.5.2] - 2026-07-25
+
+### Added — the agent report illustrates what happened, and it's in the local UI
+- **Bolstered HTML report.** Beyond the per-step board, it now leads with a
+  plain-language **"What happened"** narrative (steps, distinct models, each model
+  switch, which steps flagged and why, overall verdict), a **"What this tool did"**
+  panel naming the observation surfaces that ran (trace ingest / egress mapping /
+  active probe — or why the probe didn't run), and an **"Evidence — why each verdict
+  fired"** table listing the actual signals per step. So a non-technical reviewer
+  sees the reasoning, not just a tier.
+- **Agent board in the local `serve` UI.** New `/agent` route + an "Agent board →"
+  nav link: paste an agent trace (OTel spans or minimal JSON), get the full
+  tooltip-rich report in the browser. Reuses `agent_report.render_html` (DRY);
+  untrusted-trace hosts are not DNS-resolved unless you tick the box.
+- `render_html(..., fragment=True)` for embedding; +4 tests (112 total).
+
 ## [0.5.1] - 2026-07-25
 
 ### Added — agent board: operator/soil basis + educational HTML report
