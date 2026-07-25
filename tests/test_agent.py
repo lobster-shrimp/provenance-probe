@@ -342,3 +342,48 @@ def test_export_bundle_schema_matches_observatory_record():
         assert key in b
     assert b["kind"] == "agent" and b["input_sha256"] == "deadbeef"
     assert "score" not in b["steps"][0]        # score stripped from the record
+
+
+# --- E6: sub-agent call graph ------------------------------------------------
+
+_NESTED = {"steps": [
+    {"name": "planner", "model": "gpt-4o", "span_id": "a"},
+    {"name": "retriever", "model": "glm-4.6", "span_id": "b", "parent_id": "a"},
+    {"name": "web", "kind": "tool", "tool_host": "x.cn", "span_id": "c", "parent_id": "b"},
+]}
+
+
+def test_build_tree_nests_by_parent():
+    from provenance_probe import agent_graph
+    out = agent.analyze(agent.parse_trace(_NESTED))
+    tree = agent_graph.build_tree(out["steps"])
+    assert len(tree) == 1 and tree[0]["name"] == "planner"          # single root
+    assert tree[0]["children"][0]["name"] == "retriever"
+    assert tree[0]["children"][0]["children"][0]["name"] == "web"   # grandchild
+    depths = {n["name"]: n["depth"] for n in agent_graph.flatten(tree)}
+    assert depths == {"planner": 0, "retriever": 1, "web": 2}
+
+
+def test_has_structure_false_for_flat_trace():
+    from provenance_probe import agent_graph
+    out = agent.analyze(agent.load(os.path.join(FIX, "agent_otel.json")))
+    assert agent_graph.has_structure(out["steps"]) is False        # no parent links
+
+
+def test_build_tree_cycle_guard():
+    from provenance_probe import agent_graph
+    out = agent.analyze(agent.parse_trace({"steps": [
+        {"model": "m", "span_id": "a", "parent_id": "b"},
+        {"model": "m", "span_id": "b", "parent_id": "a"}]}))
+    tree = agent_graph.build_tree(out["steps"])                     # must not loop/empty
+    assert len(agent_graph.flatten(tree)) == 2
+
+
+def test_report_renders_call_graph_when_nested():
+    from provenance_probe import agent_report
+    out = agent.analyze(agent.parse_trace(_NESTED))
+    doc = agent_report.render_html(out, "t")
+    assert "Sub-agent call graph" in doc
+    # flat trace: no graph section
+    flat = agent.analyze(agent.load(os.path.join(FIX, "agent_otel.json")))
+    assert "Sub-agent call graph" not in agent_report.render_html(flat, "t")

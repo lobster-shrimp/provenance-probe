@@ -157,6 +157,30 @@ def _what_we_did(result: dict) -> list[tuple[str, str]]:
     return did
 
 
+def _graph_section(result: dict) -> str:
+    """Nested sub-agent call graph, when the trace/proxy carried parentage (E6)."""
+    from . import agent_graph
+    rows = result["steps"]
+    if not agent_graph.has_structure(rows):
+        return ""
+    tree = agent_graph.build_tree(rows)
+    out = ['<h2>Sub-agent call graph</h2>',
+           '<p class="fine">Who spawned whom — the tree that actually ran. A step '
+           'nested under another was spawned by it. (Blind spot: a sub-agent calling '
+           'an un-proxied backend, or whose spans aren\'t exported, can\'t appear.)</p>',
+           '<table><tbody>']
+    for n in agent_graph.flatten(tree):
+        indent = "&nbsp;" * (4 * n["depth"]) + ("&#8627; " if n["depth"] else "")
+        out.append(
+            f'<tr><td>{indent}<span class="mono">{html.escape(n["name"])}</span> '
+            f'<span class="small">({html.escape(n["kind"])})</span></td>'
+            f'<td class="mono">{html.escape(n.get("echoed_model") or "&mdash;")}</td>'
+            f'<td>{_tier(n["provenance"])}</td>'
+            f'<td>{_tier(n["jurisdiction"])}</td></tr>')
+    out.append("</tbody></table>")
+    return "".join(out)
+
+
 def _evidence_rows(result: dict) -> str:
     rows = []
     for s in result["steps"]:
@@ -216,6 +240,7 @@ def render_html(result: dict, title: str, *, fragment: bool = False) -> str:
         f'<li><b>{_tip(mode, mode if mode in GLOSSARY else "trace")}</b> — {html.escape(desc)}</li>'
         for mode, desc in _what_we_did(result))
     evidence = _evidence_rows(result)
+    graph = _graph_section(result)
 
     body = f"""
 <h1>Agent provenance flight recorder</h1>
@@ -244,6 +269,8 @@ reaches {_tip("CONFIRMED", "CONFIRMED")}.</p></div>
  &nbsp; (provenance {_tier(v["provenance_verdict"])} / jurisdiction {_tier(v["jurisdiction_verdict"])},
  worst of {v["steps"]} steps){alert}</div>
 
+{graph}
+
 <h2>Evidence — why each verdict fired</h2>
 {evidence}
 
@@ -269,6 +296,7 @@ _STYLE = """<style>
  .panel h2 { margin-top:.6rem; }
  ul.narr { margin:.4rem 0 .2rem; padding-left:1.1rem; } ul.narr li { margin:.25rem 0; }
  .fine { color:#555; font-size:.86rem; margin:.5rem 0 0; }
+ .small { font-size:.8rem; color:#666; }
  table { border-collapse: collapse; width:100%; margin:.7rem 0; }
  th,td { text-align:left; padding:.45rem .6rem; border-bottom:1px solid var(--line); vertical-align:top; }
  th { font-size:.8rem; text-transform:uppercase; letter-spacing:.03em; color:#333; }

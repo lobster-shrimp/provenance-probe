@@ -194,6 +194,24 @@ def _upstream_nomodel_first():
     return app
 
 
+def test_agent_graph_links_subagent_sessions():
+    # E6: a child session linked via X-Provenance-Parent nests under its parent
+    srv, port = _serve(_sse_upstream())
+    try:
+        app = sentinel.create_app(f"http://127.0.0.1:{port}")
+        c = app.test_client()
+        _post(c, "root")
+        c.post("/v1/chat/completions",
+               json={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+               headers={"X-Provenance-Session": "root/retriever", "X-Provenance-Parent": "root"})
+        g = c.get("/agent/graph?session=root").get_json()
+        assert g["root"] == "root"
+        kids = [n["session"] for n in g["graph"]["children"]]
+        assert "root/retriever" in kids
+    finally:
+        srv.shutdown()
+
+
 def test_baseline_not_poisoned_by_modelless_first_response():
     # regression: a first response with no model_id must NOT freeze the baseline —
     # a later real switch (gpt-4o -> glm-4) must still be caught (Codex P1).
