@@ -249,3 +249,41 @@ def test_html_report_shows_operator_basis_label():
     out = agent.analyze(steps)
     doc = agent_report.render_html(out, "moonshot")
     assert "PRC-operator" in doc
+
+
+def test_report_has_narrative_and_evidence_sections():
+    from provenance_probe import agent_report
+    out = agent.analyze(agent.load(os.path.join(FIX, "agent_otel.json")))
+    doc = agent_report.render_html(out, "t")
+    assert "What happened" in doc            # plain-language narrative
+    assert "What this tool did" in doc        # observation modes
+    assert "Evidence" in doc                  # why-it-fired signals
+    assert "switched" in doc                  # narrates the switch
+
+
+def test_report_fragment_mode_omits_html_wrapper():
+    from provenance_probe import agent_report
+    out = agent.analyze(agent.parse_trace({"steps": [{"model": "m", "text": "hi"}]}))
+    frag = agent_report.render_html(out, "t", fragment=True)
+    assert "<html" not in frag and 'class="agent-report"' in frag
+
+
+# --- serve /agent route ------------------------------------------------------
+
+def test_serve_agent_route_get_and_post():
+    from provenance_probe.serve import app
+    c = app.test_client()
+    assert c.get("/agent").status_code == 200                      # form renders
+    r = c.post("/agent", data={"trace": json.dumps({"steps": [
+        {"model": "glm-4.6", "text": "hi"}]})})
+    assert r.status_code == 200
+    assert b"Agent provenance flight recorder" in r.data           # rendered board
+    assert b"What happened" in r.data
+
+
+def test_serve_agent_route_bad_trace_shows_error():
+    from provenance_probe.serve import app
+    c = app.test_client()
+    r = c.post("/agent", data={"trace": "{not json"})
+    assert r.status_code == 200
+    assert b"Could not parse trace" in r.data                      # graceful error, no 500

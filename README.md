@@ -83,7 +83,7 @@ Reports persist to `~/.provenance-probe/reports` (or `/data` under Docker); over
 
 ### The local web UI
 
-`provenance-probe serve` gives you the whole harness in a browser: endpoint + model, optional client-source URL or directory, confrontation backend and its false control, proxy, and the advanced toggles. It streams progress, then renders the plain-language warning first and the technical detail below it, with a local run history linking to both report formats.
+`provenance-probe serve` gives you the whole harness in a browser: endpoint + model, optional client-source URL or directory, confrontation backend and its false control, proxy, and the advanced toggles. An **Agent board** tab (`/agent`) takes a pasted agent trace and renders the tooltip-rich per-step board with a plain-language "what happened / what the tool did / evidence" summary. It streams progress, then renders the plain-language warning first and the technical detail below it, with a local run history linking to both report formats.
 
 **Deployment notes.** It binds to loopback and has **no authentication** — if you change `--host`, put it behind something that does. The authorization checkbox is enforced server-side, not just in the UI. API keys you enter are held in memory for the run and never written to the report files. Nothing is transmitted anywhere except to the endpoint you name.
 

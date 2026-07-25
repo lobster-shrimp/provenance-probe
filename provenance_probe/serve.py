@@ -245,6 +245,58 @@ def index():
     return Response(PAGE.replace("__OBSERVATORY_URL__", html.escape(obs_url)), mimetype="text/html")
 
 
+_AGENT_FORM = """<!doctype html><meta charset=utf-8><title>Agent board · provenance-probe</title>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<style>body{{font:15px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;color:#16181d;
+background:#f6f7f8;margin:0;padding:26px}}.w{{max-width:940px;margin:0 auto}}
+h1{{font-size:21px;margin:0 0 2px}}.sub{{color:#6b7280;font-size:13px;margin-bottom:18px}}
+.card{{background:#fff;border:1px solid #e3e5e9;border-radius:11px;padding:20px 22px}}
+textarea{{width:100%;min-height:230px;font:13px ui-monospace,monospace;border:1px solid #e3e5e9;
+border-radius:8px;padding:11px}}button{{background:#1f4f8b;color:#fff;border:0;border-radius:8px;
+padding:11px 20px;font-size:14px;font-weight:600;cursor:pointer;margin-top:10px}}
+.chk{{font-size:13px;color:#3d424b;margin:10px 0}}.err{{color:#8b1a1a;font-weight:600;margin:8px 0}}
+.topnav{{font-size:11px;letter-spacing:.07em;text-transform:uppercase;margin-bottom:16px}}
+.topnav a{{color:#1f4f8b;text-decoration:none;margin-right:14px}}
+.eg{{font-size:12px;color:#6b7280}}</style>
+<div class=w>
+<div class=topnav><a href="/">&larr; Live probe tool</a></div>
+<h1>Agent provenance board</h1>
+<p class=sub>Paste a captured agent run &mdash; OpenTelemetry GenAI spans, or the minimal
+JSON form &mdash; and see per-step model, switch, and egress with hover explanations.</p>
+<div class=card>
+<form method=post action="/agent">
+<label style="font-size:11px;text-transform:uppercase;color:#6b7280;font-weight:650">Agent trace (JSON)</label>
+<textarea name=trace placeholder='{{"steps":[{{"model":"gpt-4o","text":"...","backend_url":"https://api.openai.com/v1"}},{{"kind":"tool","tool_host":"data.example.cn"}}]}}'>{trace}</textarea>
+<div class=chk><label><input type=checkbox name=resolve {resolve}> Resolve hosts via DNS/RDAP
+(off by default &mdash; a pasted trace is untrusted; static hostname signals still fire)</label></div>
+{err}
+<button type=submit>Analyze agent run</button>
+</form></div>
+<p class=eg>Tip: from the CLI, <code>provenance-probe agent-trace run.json --html out.html</code> writes the same report.</p>
+</div>"""
+
+
+@app.route("/agent", methods=["GET", "POST"])
+def agent_board():
+    from . import agent, agent_report
+    if request.method == "GET":
+        return Response(_AGENT_FORM.format(trace="", resolve="", err=""), mimetype="text/html")
+    raw = request.form.get("trace", "")
+    resolve = bool(request.form.get("resolve"))
+    try:
+        steps = agent.parse_trace(raw)
+        result = agent.analyze(steps, resolve_hosts=resolve)
+    except agent.TraceError as e:
+        return Response(_AGENT_FORM.format(
+            trace=html.escape(raw), resolve="checked" if resolve else "",
+            err=f'<div class="err">Could not parse trace: {html.escape(str(e))}</div>'),
+            mimetype="text/html")
+    return Response(agent_report.render_html(result, "pasted trace")
+                    .replace("</h1>", "</h1><p class='sub'><a href=\"/agent\">&larr; analyze another</a> · "
+                                      "<a href=\"/\">live probe tool</a></p>"),
+                    mimetype="text/html")
+
+
 PAGE = r"""<!doctype html><meta charset=utf-8><title>provenance-probe</title>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <style>
@@ -296,7 +348,7 @@ margin:0 0 14px;border-bottom:1px solid var(--line);padding-bottom:8px}
 .sev{font-size:10px;letter-spacing:.07em;text-transform:uppercase;font-weight:700;padding:1px 6px;border-radius:4px}
 .sev.critical{background:#fdf2f2;color:#8b1a1a}.sev.high{background:#fff8f0;color:#a8500f}.sev.medium{background:#fffdf0;color:#7a6a12}
 </style><div class=w>
-<div class=topnav><span class=active>Live probe tool</span><a href="__OBSERVATORY_URL__">Observatory &rarr;</a></div>
+<div class=topnav><span class=active>Live probe tool</span><a href="/agent">Agent board &rarr;</a><a href="__OBSERVATORY_URL__">Observatory &rarr;</a></div>
 <h1>provenance-probe</h1>
 <div class=sub>Local model provenance &amp; jurisdiction assurance · binds to 127.0.0.1 · nothing leaves this machine except requests to the endpoint you name</div>
 
