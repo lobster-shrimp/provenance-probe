@@ -253,12 +253,16 @@ def cmd_sentinel(a):
 def _print_agent_board(result: dict, title: str):
     from . import agent as _agent  # noqa: F401 (kept explicit for clarity)
     print(f"\nagent: {title}   ({len(result['steps'])} steps)")
+    _basis = {"PRC": "PRC-soil", "PRC-operator": "PRC-operator",
+              "non-PRC-operator": "non-PRC-op", "non-PRC-firstparty": "non-PRC-1p"}
     print(f"  {'#':>2}  {'kind':<5} {'name':<14} {'echoed model':<16} "
-          f"{'prov':<13} {'juris':<13} host")
+          f"{'prov':<13} {'juris (basis)':<26} host")
     for s in result["steps"]:
+        b = _basis.get(s.get("jurisdiction_basis") or "", "")
+        juris = f"{s['jurisdiction']}" + (f" ({b})" if b else "")
         print(f"  {s['index']:>2}  {s['kind']:<5} {s['name'][:14]:<14} "
               f"{(s['echoed_model'] or '-')[:16]:<16} {s['provenance']:<13} "
-              f"{s['jurisdiction']:<13} {s['host'] or '-'}")
+              f"{juris:<26} {s['host'] or '-'}")
     v = result["verdict"]
     if v["model_switches"]:
         print("\n  MODEL SWITCHES:")
@@ -288,6 +292,10 @@ def cmd_agent_trace(a):
                              for s in result["steps"]],
                    "verdict": result["verdict"]}, open(a.out, "w"), indent=2)
         print(f"\n[+] {a.out}")
+    if a.html:
+        from . import agent_report
+        open(a.html, "w").write(agent_report.render_html(result, a.file))
+        print(f"[+] {a.html}  (open in a browser; hover any term to learn what it means)")
     sys.exit(2 if result["verdict"]["alert"] else 0)
 
 
@@ -319,6 +327,10 @@ def cmd_agent(a):
     if a.out:
         json.dump({"agent": at.name, "verdict": result["verdict"]}, open(a.out, "w"), indent=2)
         print(f"\n[+] {a.out}")
+    if a.html:
+        from . import agent_report
+        open(a.html, "w").write(agent_report.render_html(result, at.name))
+        print(f"[+] {a.html}  (open in a browser; hover any term to learn what it means)")
     sys.exit(2 if result["verdict"]["alert"] else 0)
 
 
@@ -444,6 +456,8 @@ def main(argv=None):
                    help="DNS-resolve trace-supplied hosts (default off: an ingested trace "
                         "is untrusted; static hostname jurisdiction signals still fire)")
     s.add_argument("--out", help="write the per-step board JSON here")
+    s.add_argument("--html", help="write a self-contained HTML report with hover "
+                                  "tooltips that explain every term and verdict")
     s.set_defaults(func=cmd_agent_trace)
 
     s = sub.add_parser("agent",
@@ -451,6 +465,8 @@ def main(argv=None):
                             "active backend probe (the only route to CONFIRMED provenance)")
     s.add_argument("--config", required=True, help="AgentTarget JSON (observation, trace_path, backends)")
     s.add_argument("--out", help="write the agent verdict JSON here")
+    s.add_argument("--html", help="write a self-contained HTML report with hover "
+                                  "tooltips that explain every term and verdict")
     s.add_argument("--i-am-authorized", action="store_true",
                    help="attest written authorization for EACH backend actively probed")
     s.set_defaults(func=cmd_agent)

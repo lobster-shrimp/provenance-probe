@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.5.1] - 2026-07-25
+
+### Added — agent board: operator/soil basis + educational HTML report
+- **Jurisdiction basis on the board.** Each step now carries `jurisdiction_basis`
+  (the network layer's operator-vs-soil distinction), so the board shows *why* a
+  step is flagged: `CONFIRMED (PRC-soil)` vs `CONFIRMED (PRC-operator)` vs
+  `UNLIKELY (non-PRC-1p)`. Surfaces that a CDN-fronted PRC vendor (e.g.
+  `api.moonshot.ai` → Cloudflare) is caught on operator grounds even when geo-IP
+  reads "US".
+- **`--html` report** (`provenance_probe/agent_report.py`) — a self-contained HTML
+  page for `agent-trace` / `agent` with **hover tooltips on every column, verdict
+  tier, and concept** (provenance vs jurisdiction, each tier's meaning, model
+  switch, egress, active probe, operator vs soil, …) plus a full glossary. Teaches
+  a non-technical reviewer what the tool measured and what each verdict means.
+- +3 tests (108 total).
+
 ## [0.5.0] - 2026-07-25
 
 ### Added — Agent Provenance Flight Recorder (Phase 1)

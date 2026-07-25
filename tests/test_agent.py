@@ -214,3 +214,38 @@ def test_load_agent_rejects_unknown_fields(tmp_path):
     p.write_text(json.dumps({"name": "x", "bogus_field": 1}))
     with pytest.raises(ValueError):
         load_agent(str(p))
+
+
+# --- operator-vs-soil basis + HTML report -----------------------------------
+
+def test_jurisdiction_basis_distinguishes_operator_from_soil():
+    # .cn host -> on-soil "PRC"; a known PRC-operator endpoint -> "PRC-operator"
+    steps = agent.parse_trace({"steps": [
+        {"kind": "tool", "tool_host": "x.cn"},
+        {"model": "m", "backend_url": "https://api.moonshot.ai/v1"}]})
+    out = agent.analyze(steps)  # static signals, no DNS
+    bases = [s.get("jurisdiction_basis") for s in out["steps"]]
+    assert "PRC" in bases            # x.cn -> on-soil
+    assert "PRC-operator" in bases   # moonshot.ai -> operator, not soil
+
+
+def test_html_report_has_tooltips_and_glossary():
+    from provenance_probe import agent_report
+    steps = agent.load(os.path.join(FIX, "agent_otel.json"))
+    out = agent.analyze(steps)
+    doc = agent_report.render_html(out, "test")
+    assert "<html" in doc and "</html>" in doc
+    assert 'class="tip"' in doc and "data-tip=" in doc          # hover tooltips present
+    assert "Glossary" in doc                                     # educational glossary
+    assert "PROVENANCE" in doc and "JURISDICTION" in doc         # both axes explained
+    # every verdict tier the board can show has a glossary entry
+    for tier in ("CONFIRMED", "LIKELY", "INDETERMINATE", "UNLIKELY", "NO EVIDENCE"):
+        assert tier in agent_report.GLOSSARY
+
+
+def test_html_report_shows_operator_basis_label():
+    from provenance_probe import agent_report
+    steps = agent.parse_trace({"steps": [{"model": "m", "backend_url": "https://api.moonshot.ai/v1"}]})
+    out = agent.analyze(steps)
+    doc = agent_report.render_html(out, "moonshot")
+    assert "PRC-operator" in doc
