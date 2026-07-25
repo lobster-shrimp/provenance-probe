@@ -2,6 +2,23 @@
 
 ## [Unreleased] — Agent Flight Recorder Phase 2 (A + E5)
 
+### Fixed (pre-merge adversarial review — Codex)
+- **Baseline no longer poisoned by a model-less first response.** A first response
+  with no `model_id` (e.g. a 400) set the session baseline to `None` and silently
+  swallowed all later switches; the baseline now backfills a never-seen signal
+  without alerting, so a real later switch is still caught (regression test added).
+- **SSE memory limits are now reliable under concurrency:** the runaway-line guard
+  caps `buf` at `MAX_LINE`, and the per-call + global accumulation ceiling is
+  checked-and-reserved atomically under one lock (was a TOCTOU race that let
+  concurrent streams blow past `MAX_GLOBAL_ACCUM`).
+- **Upstream sockets are closed** (`r.close()`) in the tee, JSON, and passthrough
+  paths — no socket leak on client disconnect.
+- **TTL eviction skips in-flight sessions** (`last` refreshed on entry) so a long
+  stream isn't evicted mid-call; distinct sessions capped (evict oldest idle) and
+  the event log bounded.
+- **Passthrough is fully transparent:** adds `HEAD`/`OPTIONS`, forwards raw bytes,
+  and preserves `content-encoding`.
+
 ### Added — live proxy interposition (A)
 - **`sentinel` is now a live agent flight recorder.** The proxy **tees SSE**
   streams — forwards each chunk to the agent unchanged as it arrives (preserves

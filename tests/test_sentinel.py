@@ -175,3 +175,38 @@ def test_agent_report_404_for_unknown_session():
         assert c.get("/agent/report?session=nope").status_code == 404
     finally:
         srv.shutdown()
+
+
+def _upstream_nomodel_first():
+    """req1: an error with NO model field; req2: gpt-4o; req3: glm-4 (a switch)."""
+    from flask import Flask, jsonify
+    app = Flask(__name__)
+    st = {"n": 0}
+
+    @app.post("/v1/chat/completions")
+    def chat():
+        st["n"] += 1
+        if st["n"] == 1:
+            return jsonify({"error": {"message": "bad model"}}), 400   # no "model"
+        model = "glm-4" if st["n"] >= 3 else "gpt-4o"
+        return jsonify({"model": model, "choices": [{"message": {"role": "assistant", "content": "ok"}}]})
+
+    return app
+
+
+def test_baseline_not_poisoned_by_modelless_first_response():
+    # regression: a first response with no model_id must NOT freeze the baseline —
+    # a later real switch (gpt-4o -> glm-4) must still be caught (Codex P1).
+    srv, port = _serve(_upstream_nomodel_first())
+    try:
+        app = sentinel.create_app(f"http://127.0.0.1:{port}")
+        c = app.test_client()
+        _post(c, "s1")                                  # no model -> baseline None
+        r2 = _post(c, "s1")                             # gpt-4o -> backfills baseline, no alert
+        assert "X-Provenance-Alert" not in r2.headers
+        r3 = _post(c, "s1")                             # glm-4 -> switch DETECTED
+        assert r3.headers.get("X-Provenance-Alert") == "model-switch"
+        sigs = {(e["from"], e["to"]) for e in c.get("/sentinel/events").get_json()["events"]}
+        assert ("gpt-4o", "glm-4") in sigs
+    finally:
+        srv.shutdown()

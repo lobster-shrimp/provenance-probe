@@ -51,6 +51,9 @@ _HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authoriz
 MAX_SESSION_STEPS = 1000          # per-session step cap
 MAX_ACCUM = 256 * 1024           # per-call accumulation cap (fingerprint needs the head)
 MAX_GLOBAL_ACCUM = 16 * 1024 * 1024   # global in-flight accumulation ceiling
+MAX_LINE = 64 * 1024             # a single SSE line can't buffer past this (runaway guard)
+MAX_SESSIONS = 4096              # cap distinct sessions (evict oldest idle)
+MAX_EVENTS = 10000               # cap the retained event log
 SESSION_TTL = 3600               # evict idle sessions after 1h
 
 
@@ -71,10 +74,13 @@ def identity(resp_json: dict, content: str, headers) -> dict:
             "header_shape": _header_shape(headers)}
 
 
-def _passthrough_headers(up_headers) -> list[tuple[str, str]]:
+def _passthrough_headers(up_headers, *, keep_encoding: bool = False) -> list[tuple[str, str]]:
     """Copy end-to-end upstream response headers (drop hop-by-hop). Preserves
-    vendor / rate-limit headers — both agent-visible behavior and wire evidence."""
-    return [(k, v) for k, v in up_headers.items() if k.lower() not in _HOP_BY_HOP]
+    vendor / rate-limit headers — both agent-visible behavior and wire evidence.
+    keep_encoding=True keeps `content-encoding` (raw byte passthrough of an
+    already-compressed body); the chat path decodes, so it drops it."""
+    drop = _HOP_BY_HOP if not keep_encoding else (_HOP_BY_HOP - {"content-encoding"})
+    return [(k, v) for k, v in up_headers.items() if k.lower() not in drop]
 
 
 def _now() -> float:
@@ -96,6 +102,8 @@ def create_app(upstream: str, *, events_file: str | None = None):
         ev = {"session": session, "ts": _now(), "signal": signal, "from": frm, "to": to}
         with lock:
             state["events"].append(ev)
+            if len(state["events"]) > MAX_EVENTS:      # bound the retained log
+                del state["events"][:len(state["events"]) - MAX_EVENTS]
         if events_file:
             with open(events_file, "a") as f:
                 f.write(json.dumps(ev) + "\n")
@@ -103,12 +111,20 @@ def create_app(upstream: str, *, events_file: str | None = None):
         return ev
 
     def _evict(now: float):
-        for k in [k for k, s in state["sessions"].items() if now - s["last"] > SESSION_TTL]:
+        # never evict a session with an in-flight call (a long stream can outlive
+        # the TTL); only idle sessions are removed.
+        for k in [k for k, s in state["sessions"].items()
+                  if s["inflight"] == 0 and now - s["last"] > SESSION_TTL]:
             del state["sessions"][k]
 
     def _session(key: str) -> dict:
         s = state["sessions"].get(key)
         if s is None:
+            # cap distinct sessions: evict the oldest idle one before adding.
+            if len(state["sessions"]) >= MAX_SESSIONS:
+                idle = [(v["last"], k) for k, v in state["sessions"].items() if v["inflight"] == 0]
+                if idle:
+                    del state["sessions"][min(idle)[1]]
             s = {"baseline": None, "steps": [], "last": _now(), "inflight": 0}
             state["sessions"][key] = s
         return s
@@ -128,7 +144,11 @@ def create_app(upstream: str, *, events_file: str | None = None):
                 s["baseline"] = idy
             else:
                 for sig in ("model_id", "self_id"):
-                    if idy[sig] and base.get(sig) and idy[sig] != base[sig] and not unordered:
+                    if not idy[sig]:
+                        continue
+                    if base.get(sig) is None:
+                        base[sig] = idy[sig]           # backfill a never-seen signal (not a switch)
+                    elif idy[sig] != base[sig] and not unordered:
                         record(session, sig, base[sig], idy[sig])
                         base[sig] = idy[sig]
                         alerted = True
@@ -147,6 +167,7 @@ def create_app(upstream: str, *, events_file: str | None = None):
             _evict(_now())
             s = _session(session)
             s["inflight"] += 1
+            s["last"] = _now()               # refresh so a long call isn't evicted
             return s["inflight"] > 1
 
     def _leave(session: str):
@@ -188,20 +209,16 @@ def create_app(upstream: str, *, events_file: str | None = None):
                         yield chunk                       # forward exact bytes FIRST
                         try:                              # accumulation NEVER breaks the yield
                             buf += chunk
+                            # runaway-line guard: a line that never terminates can't
+                            # buffer past MAX_LINE (bypasses the accumulation cap).
+                            if b"\n" not in buf and len(buf) > MAX_LINE:
+                                buf = b""
+                                truncated = True
                             while b"\n" in buf:
                                 line, buf = buf.split(b"\n", 1)
                                 s = line.decode("utf-8", "replace").strip()
                                 if not s:
                                     continue
-                                if acc_bytes >= MAX_ACCUM or state["global_accum"] >= MAX_GLOBAL_ACCUM:
-                                    truncated = True
-                                    continue
-                                piece = parse_sse_delta(s)
-                                if piece:
-                                    acc.append(piece)
-                                    acc_bytes += len(piece)
-                                    with lock:
-                                        state["global_accum"] += len(piece)
                                 if model is None and s.startswith("data:"):
                                     p = s[5:].strip()
                                     if p and p != "[DONE]":
@@ -209,6 +226,19 @@ def create_app(upstream: str, *, events_file: str | None = None):
                                             model = json.loads(p).get("model")
                                         except Exception:
                                             pass
+                                piece = parse_sse_delta(s)
+                                if not piece:
+                                    continue
+                                # atomic: check the per-call + global ceiling AND
+                                # reserve the bytes under one lock (no TOCTOU race).
+                                with lock:
+                                    if (acc_bytes >= MAX_ACCUM
+                                            or state["global_accum"] + len(piece) > MAX_GLOBAL_ACCUM):
+                                        truncated = True
+                                    else:
+                                        state["global_accum"] += len(piece)
+                                        acc.append(piece)
+                                        acc_bytes += len(piece)
                         except Exception:
                             degraded = True                # fail-open: keep streaming
                 finally:
@@ -220,6 +250,7 @@ def create_app(upstream: str, *, events_file: str | None = None):
                     except Exception:
                         pass
                     _leave(session)
+                    r.close()                              # release the upstream socket
 
             resp = Response(tee(), status=r.status_code, content_type=ctype)
             for k, v in passthrough:
@@ -238,6 +269,7 @@ def create_app(upstream: str, *, events_file: str | None = None):
             pass
         finally:
             _leave(session)
+            r.close()
         resp = Response(content, status=r.status_code, content_type=ctype)
         for k, v in passthrough:
             resp.headers[k] = v
@@ -245,11 +277,13 @@ def create_app(upstream: str, *, events_file: str | None = None):
             resp.headers["X-Provenance-Alert"] = "model-switch"
         return resp
 
-    @app.route("/<path:path>", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    @app.route("/<path:path>",
+               methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
     def passthrough(path):
         """Generic transparent passthrough so the proxy is a real base_url
         interposition point — /v1/models, /v1/responses, embeddings, etc. reach
-        upstream unchanged. Provenance is only collected on chat/completions."""
+        upstream unchanged. Provenance is only collected on chat/completions.
+        Forwards raw bytes and preserves content-encoding (no decode)."""
         fwd = {k: v for k, v in request.headers.items()
                if k.lower() not in ("host", "content-length", "connection")}
         fwd["Connection"] = "close"
@@ -258,9 +292,18 @@ def create_app(upstream: str, *, events_file: str | None = None):
                                  headers=fwd, params=request.args, timeout=120, stream=True)
         except requests.RequestException as e:
             return jsonify({"error": {"message": f"sentinel upstream error: {e}"}}), 502
-        resp = Response(r.iter_content(chunk_size=8192), status=r.status_code,
+
+        def gen():
+            try:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        yield chunk
+            finally:
+                r.close()
+
+        resp = Response(gen(), status=r.status_code,
                         content_type=r.headers.get("content-type"))
-        for k, v in _passthrough_headers(r.headers):
+        for k, v in _passthrough_headers(r.headers, keep_encoding=True):
             resp.headers[k] = v
         return resp
 
