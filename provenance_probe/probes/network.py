@@ -21,7 +21,18 @@ def _rdap(ip: str, session=None) -> dict:
     return {}
 
 
-def analyze_host(url: str, do_rdap: bool = True) -> dict:
+def _blocked_ip(ip: str) -> bool:
+    """True for private / loopback / link-local / reserved / multicast addresses —
+    the SSRF denylist. Non-IP strings return False (they are hostnames)."""
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return (a.is_private or a.is_loopback or a.is_link_local
+            or a.is_reserved or a.is_multicast or a.is_unspecified)
+
+
+def analyze_host(url: str, do_rdap: bool = True, resolve: bool = True) -> dict:
     host = urlparse(url).hostname or url
     out = {"host": host, "addresses": [], "findings": [], "jurisdiction": "unknown",
            "operator": None, "confidence": 0.0}
@@ -60,6 +71,17 @@ def analyze_host(url: str, do_rdap: bool = True) -> dict:
         out["jurisdiction"] = "PRC"
         out["confidence"] = max(out["confidence"], 0.85)
 
+    # SSRF guard: static hostname signals above need no network. DNS + RDAP only
+    # run when the caller opts in (resolve=True) — untrusted inputs (e.g. an agent
+    # trace) default to resolve=False so a hostile host can't drive lookups.
+    if not resolve:
+        return out
+    if _blocked_ip(host):
+        out["findings"].append({"type": "blocked_host", "severity": "info",
+                                "detail": f"{host} is a private/reserved address; "
+                                          f"resolution skipped (SSRF guard)."})
+        return out
+
     try:
         infos = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
         ips = sorted({i[4][0] for i in infos})
@@ -68,6 +90,12 @@ def analyze_host(url: str, do_rdap: bool = True) -> dict:
         return out
 
     for ip in ips:
+        if _blocked_ip(ip):
+            # hostname resolved to an internal address (DNS-rebinding); do not
+            # PTR/RDAP it and do not treat it as jurisdiction evidence.
+            out["findings"].append({"type": "blocked_host", "severity": "info",
+                                    "detail": f"{host} resolved to private/reserved {ip}; skipped."})
+            continue
         rec = {"ip": ip, "ptr": None, "asn": None, "asn_name": None, "country": None}
         try:
             rec["ptr"] = socket.gethostbyaddr(ip)[0]

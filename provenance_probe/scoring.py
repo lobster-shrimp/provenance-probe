@@ -91,6 +91,35 @@ def _verdict(p: float) -> str:
     return "NO EVIDENCE"
 
 
+# worst-first ordering for combining per-step agent verdicts
+_TIER_ORDER = ["NO EVIDENCE", "UNLIKELY", "INDETERMINATE", "LIKELY", "CONFIRMED"]
+
+
+def _worst(tiers: list[str]) -> str:
+    real = [t for t in tiers if t in _TIER_ORDER]
+    return max(real, key=_TIER_ORDER.index) if real else "NO EVIDENCE"
+
+
+def combine_agent(step_scores: list[dict]) -> dict:
+    """Combine per-step scores into one agent verdict = the worst step per axis.
+
+    The label is MIXED when steps disagree, so a MIXED board still surfaces (never
+    hides) the worst step. The full per-step board is always shown by the caller.
+    """
+    prov = [s["provenance_risk"]["verdict"] for s in step_scores]
+    jur = [s["jurisdictional_risk"]["verdict"] for s in step_scores]
+    prov_w, jur_w = _worst(prov), _worst(jur)
+    mixed = len(set(prov)) > 1 or len(set(jur)) > 1
+    worst = prov_w if _TIER_ORDER.index(prov_w) >= _TIER_ORDER.index(jur_w) else jur_w
+    return {
+        "provenance_verdict": prov_w,
+        "jurisdiction_verdict": jur_w,
+        "label": "MIXED" if mixed else worst,
+        "worst_step_verdict": worst,
+        "steps": len(step_scores),
+    }
+
+
 def _coverage(b: dict) -> dict:
     return {
         "network": bool(b.get("network", {}).get("addresses")),

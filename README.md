@@ -126,8 +126,17 @@ Produces console output plus JSON and standalone HTML per target.
 | `transcript <file> --true-origin CN` | Analyze a captured conversation for identity deception + **mid-session model switches** (the z.ai "I am Gemini" → "actually GLM" case); records model-change events, **exit 2** to alert |
 | `session --config t.json --gap-probes N` | Fingerprint a live endpoint at session **start + end**; **exit 2** if the served model **switched mid-session** (a load balancer rotating models within one session) |
 | `sentinel --upstream URL` | **Real-time** in-line guardrail: OpenAI-compatible reverse proxy that watches every response and alerts (`X-Provenance-Alert` header + `/sentinel/events`) the instant the served model switches mid-session |
+| `agent-trace <file>` | **Agent** provenance: ingest a captured agent run (OpenTelemetry GenAI spans or minimal JSON) and print a **per-step board** — which model each step ran on, model switches across steps, and where tool calls sent data; **exit 2** on a switch. See [`docs/CONOPS.md`](docs/CONOPS.md) |
+| `agent --config a.json --i-am-authorized` | Config-driven agent assessment: trace ingest + optional **active backend probe** (the only route to CONFIRMED provenance; per-backend authorization enforced) |
 | `artifacts <dir>` | Inspect on-prem model files; exit 2 on critical findings |
 | `network --host X --hosts-file f` | Jurisdiction-analyze SNI/DNS names harvested from an egress capture |
+
+> **Agent provenance (Phase 1).** The unit of assessment can be an *agent*, not
+> just one endpoint. Trace-only provenance is honest — it floors at INDETERMINATE
+> because a post-hoc trace carries no tokenizer signal; the reliable trace signals
+> are **tool-call egress jurisdiction** and **model switch**. CONFIRMED provenance
+> needs the active backend probe. Full concept of operations for executive /
+> federal audiences: [`docs/CONOPS.md`](docs/CONOPS.md).
 
 ## Testing web apps and platform tools (not just OpenAI-style APIs)
 

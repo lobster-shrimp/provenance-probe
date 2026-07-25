@@ -1,7 +1,7 @@
 """Target configuration and scope control."""
 from __future__ import annotations
 import json, os
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields
 from typing import Any
 
 
@@ -55,6 +55,63 @@ class Target:
 
     def url(self, path: str) -> str:
         return self.base_url.rstrip("/") + path
+
+
+@dataclass
+class AgentBackend:
+    """One model backend an agent calls. Carries its own authorization flag —
+    active probing of an agent's backend needs written authorization for THAT
+    backend, not just the agent (the consent surface multiplies)."""
+    base_url: str
+    model: str = ""
+    auth_value_env: str = ""
+    auth_header: str = "Authorization"
+    auth_prefix: str = "Bearer "
+    api_style: str = "openai"
+    authorized: bool = False
+
+    def to_target(self, name: str) -> "Target":
+        return Target(name=name, base_url=self.base_url, model=self.model,
+                      api_style=self.api_style, auth_header=self.auth_header,
+                      auth_value_env=self.auth_value_env, auth_prefix=self.auth_prefix,
+                      authorized=self.authorized)
+
+
+@dataclass
+class AgentTarget:
+    """An agent under assessment. The unit is the agent, not one endpoint.
+
+    observation: which surfaces to use — "trace" (general, always works),
+    "active-probe" (the only route to CONFIRMED provenance; needs a reachable,
+    authorized backend), "proxy" (Phase 2).
+    """
+    name: str
+    observation: list[str] = field(default_factory=lambda: ["trace"])
+    trace_path: str = ""
+    backends: list[AgentBackend] = field(default_factory=list)
+    offline: bool = False
+    notes: str = ""
+
+    def __post_init__(self):
+        self.backends = [b if isinstance(b, AgentBackend) else _from_dict(AgentBackend, b)
+                         for b in self.backends]
+
+
+def _from_dict(cls, d: dict):
+    """Build a dataclass from a dict, ignoring unknown keys with a clear error
+    instead of a raw TypeError from ``cls(**d)``."""
+    if not isinstance(d, dict):
+        raise ValueError(f"expected an object for {cls.__name__}, got {type(d).__name__}")
+    known = {f.name for f in fields(cls)}
+    unknown = set(d) - known
+    if unknown:
+        raise ValueError(f"{cls.__name__}: unknown field(s) {sorted(unknown)}")
+    return cls(**d)
+
+
+def load_agent(path: str) -> AgentTarget:
+    with open(path) as f:
+        return _from_dict(AgentTarget, json.load(f))
 
 
 def load_targets(path: str) -> list[Target]:

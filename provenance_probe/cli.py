@@ -250,6 +250,78 @@ def cmd_sentinel(a):
     sentinel.serve(a.upstream, host=a.host, port=a.port, events_file=a.events_file)
 
 
+def _print_agent_board(result: dict, title: str):
+    from . import agent as _agent  # noqa: F401 (kept explicit for clarity)
+    print(f"\nagent: {title}   ({len(result['steps'])} steps)")
+    print(f"  {'#':>2}  {'kind':<5} {'name':<14} {'echoed model':<16} "
+          f"{'prov':<13} {'juris':<13} host")
+    for s in result["steps"]:
+        print(f"  {s['index']:>2}  {s['kind']:<5} {s['name'][:14]:<14} "
+              f"{(s['echoed_model'] or '-')[:16]:<16} {s['provenance']:<13} "
+              f"{s['jurisdiction']:<13} {s['host'] or '-'}")
+    v = result["verdict"]
+    if v["model_switches"]:
+        print("\n  MODEL SWITCHES:")
+        for sw in v["model_switches"]:
+            print(f"    step {sw['at_step']} [{sw['reason']}]: {sw['from']} -> {sw['to']}")
+    else:
+        print("\n  No model switch detected across steps.")
+    print(f"\n  AGENT VERDICT: {v['label']}  "
+          f"(provenance {v['provenance_verdict']} / jurisdiction {v['jurisdiction_verdict']}, "
+          f"worst of {v['steps']} steps)")
+    if v.get("alert") and not v["model_switches"]:
+        print(f"  ALERT: worst step is {v['worst_step_verdict']} (no switch, but a "
+              f"LIKELY/CONFIRMED step is present).")
+    print("  Note: trace-only provenance floors at INDETERMINATE; CONFIRMED needs an "
+          "active backend probe.")
+
+
+def cmd_agent_trace(a):
+    """Ingest a captured agent run (OTel GenAI spans or minimal JSON) and report
+    per-step model + switch + egress."""
+    from . import agent
+    steps = agent.load(a.file)
+    result = agent.analyze(steps, offline=a.offline, resolve_hosts=a.resolve_hosts)
+    _print_agent_board(result, a.file)
+    if a.out:
+        json.dump({"steps": [{k: v for k, v in s.items() if k != "score"}
+                             for s in result["steps"]],
+                   "verdict": result["verdict"]}, open(a.out, "w"), indent=2)
+        print(f"\n[+] {a.out}")
+    sys.exit(2 if result["verdict"]["alert"] else 0)
+
+
+def cmd_agent(a):
+    """Config-driven agent assessment: trace ingest + optional active backend probe."""
+    from . import agent
+    from .config import load_agent
+    at = load_agent(a.config)
+    if not at.trace_path:
+        sys.exit(f"[abort] agent '{at.name}' has no trace_path (Phase 1 needs a captured run).")
+    steps = agent.load(at.trace_path)
+
+    overrides: dict[int, dict] = {}
+    if "active-probe" in at.observation and at.backends:
+        agent.assert_backends_authorized(at.backends, a.i_am_authorized)  # raises if not
+        ref = tokenizer.load_reference()
+        for bk in at.backends:
+            t = bk.to_target(f"{at.name}-backend")
+            c = Client(t)
+            tok = tokenizer.measure(c)
+            if tok.get("usable"):
+                match = tokenizer.compare(tok, ref)
+                bk_host = agent._host_of(bk.base_url)
+                for st in steps:
+                    if st.kind == "model" and agent._host_of(st.backend_url) == bk_host:
+                        overrides[st.index] = {"tokenizer": tok, "tokenizer_match": match}
+    result = agent.analyze(steps, offline=at.offline, resolve_hosts=True, step_overrides=overrides)
+    _print_agent_board(result, at.name)
+    if a.out:
+        json.dump({"agent": at.name, "verdict": result["verdict"]}, open(a.out, "w"), indent=2)
+        print(f"\n[+] {a.out}")
+    sys.exit(2 if result["verdict"]["alert"] else 0)
+
+
 def cmd_init(a):
     write_example(a.path)
     print(f"Wrote example config -> {a.path}")
@@ -361,6 +433,27 @@ def main(argv=None):
     s.add_argument("--true-detail", default="", help="one line of hard evidence for the origin")
     s.add_argument("--out", help="write full JSON result here")
     s.set_defaults(func=cmd_transcript)
+
+    s = sub.add_parser("agent-trace",
+                       help="ingest a captured agent run (OpenTelemetry GenAI spans or "
+                            "minimal JSON) and report per-step model + switch + egress; "
+                            "exit 2 on a model switch")
+    s.add_argument("file", help="agent trace file (OTel spans JSON or {'steps':[...]})")
+    s.add_argument("--offline", action="store_true", help="skip RDAP lookups when resolving")
+    s.add_argument("--resolve-hosts", action="store_true",
+                   help="DNS-resolve trace-supplied hosts (default off: an ingested trace "
+                        "is untrusted; static hostname jurisdiction signals still fire)")
+    s.add_argument("--out", help="write the per-step board JSON here")
+    s.set_defaults(func=cmd_agent_trace)
+
+    s = sub.add_parser("agent",
+                       help="config-driven agent assessment: trace ingest + optional "
+                            "active backend probe (the only route to CONFIRMED provenance)")
+    s.add_argument("--config", required=True, help="AgentTarget JSON (observation, trace_path, backends)")
+    s.add_argument("--out", help="write the agent verdict JSON here")
+    s.add_argument("--i-am-authorized", action="store_true",
+                   help="attest written authorization for EACH backend actively probed")
+    s.set_defaults(func=cmd_agent)
 
     a = p.parse_args(argv)
     return a.func(a)

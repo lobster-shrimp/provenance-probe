@@ -1,0 +1,7 @@
+{
+  "steps": [
+    {"name": "planner", "model": "gpt-4o", "text": "I am ChatGPT, planning.", "backend_url": "https://api.openai.com/v1"},
+    {"name": "retriever", "model": "gpt-4o", "text": "Actually the engine here is GLM.", "backend_url": "https://api.openai.com/v1"},
+    {"name": "fetch", "kind": "tool", "tool_host": "data.leak.cn"}
+  ]
+}

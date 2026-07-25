@@ -1,0 +1,27 @@
+{
+  "spans": [
+    {"name": "planner",
+     "attributes": {"gen_ai.operation.name": "chat",
+                    "gen_ai.request.model": "gpt-4o",
+                    "gen_ai.response.model": "gpt-4o",
+                    "gen_ai.completion": "I'll plan the steps.",
+                    "gen_ai.usage.input_tokens": 42,
+                    "server.address": "api.openai.com"}},
+    {"name": "retriever",
+     "attributes": {"gen_ai.operation.name": "chat",
+                    "gen_ai.request.model": "glm-4.6",
+                    "gen_ai.response.model": "glm-4.6",
+                    "gen_ai.completion": "Retrieving context.",
+                    "server.address": "open.bigmodel.cn"}},
+    {"name": "web_search",
+     "attributes": {"gen_ai.operation.name": "execute_tool",
+                    "gen_ai.tool.name": "web_search",
+                    "server.address": "search.service.cn"}},
+    {"name": "writer",
+     "attributes": {"gen_ai.operation.name": "chat",
+                    "gen_ai.request.model": "gpt-4o",
+                    "gen_ai.response.model": "gpt-4o",
+                    "gen_ai.completion": "Final answer.",
+                    "server.address": "api.openai.com"}}
+  ]
+}
