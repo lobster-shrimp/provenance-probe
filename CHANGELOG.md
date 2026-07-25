@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.9.0] - 2026-07-25 — Adversarial red-team corpus (E8)
+
+### Fixed (pre-merge adversarial review — Codex)
+- **`redteam` requires `--i-am-authorized`** (an explicit per-run attestation, not
+  just config) — the prompts are deliberately adversarial.
+- **Adapter-aware identity:** reads `Response.echoed_model()` / `.text()`, so
+  template / Anthropic / raw endpoints are covered, not just OpenAI-shaped JSON.
+- **`model_id` is the hard switch signal** (drives exit 2); a changing `self_id`
+  is an advisory `self_id_flags` entry — the corpus asks about "underlying"
+  identity, so a refusal/negation can trip the self-ID regex and must not fire a
+  false alert. Baseline signals backfill (a never-seen signal is seeded, not a
+  switch). A non-2xx transport response is recorded as an error, not a clean
+  no-identity scenario.
+
+### Added
+- **`redteam` command.** Drives an authorized endpoint through a corpus of
+  stress / adversarial prompts (`provenance_probe/redteam.py`) and detects whether
+  the served model's identity **changes under pressure** — a router that swaps to a
+  cheaper or fallback model when pushed, or reveals a different origin. Reuses the
+  same passive identity (echoed model id + self-ID) as the sentinel, so a
+  switch-under-stress is reported like a mid-session switch. `--cap N` bounds the
+  quota/abuse budget; one scenario erroring never aborts the run; **exit 2** on a
+  switch. Authorized-use only (the prompts are deliberately provocative).
+
 ## [0.8.0] - 2026-07-25 — Live agent board (E4)
 
 ### Fixed (pre-merge adversarial review — Codex)
