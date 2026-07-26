@@ -367,9 +367,11 @@ def wizard_add():
     capture = request.form.get("capture", "")
 
     def _err(msg):
+        # Do NOT echo the pasted capture back — it may contain the session cookie,
+        # and reflecting it into the error HTML would leak the credential (Codex).
         return Response(_WIZARD_FORM.format(
-            err=f'<div class="err">{html.escape(msg)}</div>', name=html.escape(name),
-            prompt=html.escape(prompt), capture=html.escape(capture),
+            err=f'<div class="err">{html.escape(msg)}<br>Re-paste the capture and try again.</div>',
+            name=html.escape(name), prompt=html.escape(prompt), capture="",
             c="selected" if fmt == "curl" else "", h="selected" if fmt == "har" else ""),
             mimetype="text/html")
     try:

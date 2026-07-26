@@ -284,6 +284,25 @@ def test_wizard_post_bad_capture_shows_error():
     assert r.status_code == 200 and b"Could not parse capture" in r.data
 
 
+def test_wizard_parse_error_does_not_leak_cookie():
+    # a malformed cURL (no URL) that still carries a cookie must not be echoed back
+    bad = "curl -X POST -H 'cookie: sid=LEAKME2' -H 'accept: */*'"
+    r = _client().post("/wizard", data={"name": "x", "prompt": "hi", "fmt": "curl", "capture": bad})
+    assert r.status_code == 200 and b"Could not parse capture" in r.data
+    assert b"LEAKME2" not in r.data          # capture (with cookie) not reflected into error HTML
+
+
+def test_write_target_output_is_loadable_after_unknown_keys_stripped(tmp_path):
+    from provenance_probe import config
+    cfg = tmp_path / "targets.json"
+    target = {"name": "wz", "base_url": "https://x.ai", "api_style": "template",
+              "chat_path": "/c", "bogus_field": 1, "another_typo": "z"}   # unknown keys
+    wizard.write_target(target, "", config_path=str(cfg),
+                        env_path=str(tmp_path / ".env"), repo_root=str(tmp_path))
+    loaded = config.load_targets(str(cfg))          # must NOT raise on unknown kwargs
+    assert loaded[0].name == "wz" and loaded[0].api_style == "template"
+
+
 def test_wizard_save_expired_token():
     r = _client().post("/wizard/save", data={"token": "nope", "target": "{}"})
     assert r.status_code == 200 and b"expired" in r.data

@@ -420,6 +420,8 @@ def sanitize_target(target: dict) -> tuple[dict, list]:
     smuggle a `cookie` value or a Cookie/Authorization header into the config
     (design D3 + Codex). Returns (clean_copy, removed_field_names).
     """
+    from dataclasses import fields
+    from .config import Target
     clean = dict(target)
     removed = []
     if clean.pop("cookie", None):
@@ -433,6 +435,12 @@ def sanitize_target(target: dict) -> tuple[dict, list]:
             else:
                 kept[k] = v
         clean["extra_headers"] = kept
+    # Drop any key that isn't a real Target field, so a hand-edited target can't
+    # produce a config that config.load_targets (Target(**t)) chokes on (Codex).
+    allowed = {f.name for f in fields(Target)}
+    for k in [k for k in clean if k not in allowed]:
+        clean.pop(k)
+        removed.append(f"unknown:{k}")
     return clean, removed
 
 
