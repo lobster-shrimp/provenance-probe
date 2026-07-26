@@ -135,6 +135,40 @@ def test_authz_gate_passes_when_authorized():
     agent.assert_backends_authorized(backends, i_am_authorized=True)  # no raise
 
 
+def test_anthropic_target_autoconfigures_path_and_auth():
+    from provenance_probe.config import Target
+    t = Target(name="a", base_url="https://api.anthropic.com", model="claude-opus-4-8",
+               api_style="anthropic", auth_value_env="ANTHROPIC_API_KEY")
+    assert t.chat_path == "/v1/messages"          # not the openai /chat/completions
+    assert t.auth_header == "x-api-key" and t.auth_prefix == ""
+    # openai style is untouched
+    o = Target(name="o", base_url="https://api.openai.com/v1", model="gpt-4o", api_style="openai")
+    assert o.chat_path == "/chat/completions" and o.auth_header == "Authorization"
+
+
+def test_anthropic_explicit_overrides_kept():
+    from provenance_probe.config import Target
+    t = Target(name="a", base_url="https://x", model="m", api_style="anthropic",
+               chat_path="/custom", auth_header="X-Custom")
+    assert t.chat_path == "/custom" and t.auth_header == "X-Custom"   # explicit wins
+
+
+def test_serve_key_uses_target_auth_scheme():
+    # serve puts the UI-entered key on the target's configured auth header, so an
+    # anthropic target authenticates with x-api-key (no Bearer), not Authorization.
+    from provenance_probe.config import Target
+    for style, exp_header, exp_val in [
+        ("anthropic", "x-api-key", "sk-ant-xxx"),
+        ("openai", "Authorization", "Bearer sk-xxx"),
+    ]:
+        t = Target(name="t", base_url="https://x", model="m", api_style=style)
+        key = exp_val.split(" ")[-1]
+        t.extra_headers[t.auth_header] = f"{t.auth_prefix}{key}"
+        assert t.extra_headers.get(exp_header) == exp_val
+        if style == "anthropic":
+            assert "Authorization" not in t.extra_headers
+
+
 def test_agent_target_coerces_backend_dicts():
     at = AgentTarget(name="acme", backends=[{"base_url": "https://b/v1", "authorized": True}])
     assert isinstance(at.backends[0], AgentBackend)

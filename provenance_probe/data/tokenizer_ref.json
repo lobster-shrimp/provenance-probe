@@ -760,6 +760,68 @@
         "mixed_script_cjk_code": 111,
         "newline_storm": 5
       }
+    },
+    "Claude": {
+      "label": "Claude",
+      "family": "Claude/Anthropic",
+      "origin": "US",
+      "vocab_size": null,
+      "source": "live-first-party-api",
+      "endpoint": "https://api.anthropic.com",
+      "note": "Measured from the genuine first-party API; this family does not publish its tokenizer, so the live endpoint is the ground truth.",
+      "vector": {
+        "cjk_dense": 144,
+        "cjk_mixed": 63,
+        "jp_kana": 71,
+        "ko_hangul": 54,
+        "ws_runs": 107,
+        "tabs_deep": 58,
+        "digits_long": 190,
+        "punct_repeat": 89,
+        "emoji_zwj": 388,
+        "rare_unicode": 479,
+        "diacritics": 276,
+        "arabic_hebrew": 78,
+        "cyrillic": 48,
+        "code_json": 213,
+        "code_regex": 326,
+        "url_paths": 227,
+        "base64ish": 270,
+        "md_table": 161,
+        "mixed_script_cjk_code": 161,
+        "newline_storm": 12
+      }
+    },
+    "Gemini": {
+      "label": "Gemini",
+      "family": "Gemini/Google",
+      "origin": "US",
+      "vocab_size": null,
+      "source": "live-first-party-api",
+      "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "note": "Measured from the genuine first-party API; this family does not publish its tokenizer, so the live endpoint is the ground truth.",
+      "vector": {
+        "cjk_dense": 73,
+        "cjk_mixed": 32,
+        "jp_kana": 37,
+        "ko_hangul": 30,
+        "ws_runs": 88,
+        "tabs_deep": 52,
+        "digits_long": 335,
+        "punct_repeat": 22,
+        "emoji_zwj": 193,
+        "rare_unicode": 357,
+        "diacritics": 150,
+        "arabic_hebrew": 41,
+        "cyrillic": 27,
+        "code_json": 156,
+        "code_regex": 237,
+        "url_paths": 212,
+        "base64ish": 175,
+        "md_table": 124,
+        "mixed_script_cjk_code": 112,
+        "newline_storm": 6
+      }
     }
   }
 }

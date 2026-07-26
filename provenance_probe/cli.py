@@ -194,6 +194,25 @@ def cmd_verify_reference(a):
     sys.exit(reference.verify())
 
 
+def cmd_build_reference_endpoint(a):
+    """Measure a reference vector from a live authorized first-party endpoint.
+
+    For families whose tokenizer is not published (Claude, Gemini): the genuine
+    first-party API IS the ground truth. Requires --i-am-authorized.
+    """
+    if not a.i_am_authorized:
+        sys.exit("[abort] build-reference-endpoint runs an active probe. Pass "
+                 "--i-am-authorized to attest you are authorized to probe this "
+                 "endpoint AND that it is the genuine first party for the family.")
+    targets = load_targets(a.config)
+    t = next((x for x in targets if not a.name or x.name == a.name), None)
+    if t is None:
+        sys.exit(f"[abort] no target named '{a.name}' in {a.config}.")
+    _assert_scope(t, a.i_am_authorized)
+    reference.build_from_endpoint(Client(t), label=a.label, family=a.family,
+                                  origin=a.origin, overwrite=a.overwrite)
+
+
 def cmd_transcript(a):
     """Analyze a captured conversation for identity deception + model switches."""
     result = transcript.analyze(transcript.load(a.file),
@@ -409,6 +428,20 @@ def main(argv=None):
 
     s = sub.add_parser("verify-reference", help="self-check the reference file")
     s.set_defaults(func=cmd_verify_reference)
+
+    s = sub.add_parser("build-reference-endpoint",
+                       help="measure a reference vector from a live authorized first-party "
+                            "endpoint (for families with no published tokenizer, e.g. Claude/Gemini)")
+    s.add_argument("--config", required=True, help="target config (JSON) with the endpoint")
+    s.add_argument("--name", default=None, help="target name to use (default: first in config)")
+    s.add_argument("--label", required=True, help="reference entry label, e.g. 'Claude'")
+    s.add_argument("--family", required=True, help="family label, e.g. 'Claude/Anthropic'")
+    s.add_argument("--origin", required=True, help="origin tag, e.g. 'US' / 'CN' / 'EU'")
+    s.add_argument("--overwrite", action="store_true",
+                   help="replace an existing entry even if it came from another source")
+    s.add_argument("--i-am-authorized", action="store_true",
+                   help="attest written authorization AND that this is the genuine first party")
+    s.set_defaults(func=cmd_build_reference_endpoint)
 
     s = sub.add_parser("assess", help="full multi-layer assessment of configured targets")
     s.add_argument("--config", default="targets.json")

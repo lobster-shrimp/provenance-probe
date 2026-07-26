@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.9.1] - 2026-07-26
+
+### Fixed
+- **Anthropic endpoints now measure provenance instead of flooring at
+  INDETERMINATE.** `api_style: "anthropic"` auto-configures the `/v1/messages`
+  path and `x-api-key` auth (they were defaulting to the OpenAI
+  `/chat/completions` + `Authorization: Bearer`, so probes 404'd and no usage came
+  back). Anthropic returns `usage.input_tokens`, which the tokenizer battery reads.
+- **`serve` web UI now honours the target's auth scheme.** It injected the entered
+  key as a hardcoded `Authorization: Bearer`, bypassing the anthropic `x-api-key`;
+  it now uses the target's configured `auth_header`/`auth_prefix`.
+
+### Added
+- **Claude and Gemini reference vectors.** Both families now clear to a firm non-CN
+  **NO EVIDENCE** (were UNLIKELY / INDETERMINATE). Their tokenizers aren't published,
+  so the vectors are measured from the genuine first-party API — a genuine endpoint
+  matches its own family ≈1.0 with CN families near zero.
+- **`build-reference-endpoint`** — measure a reference vector from a live authorized
+  first-party endpoint (requires `--i-am-authorized`; entries tagged
+  `source: "live-first-party-api"`). This is the supported path for families with no
+  published tokenizer.
+- **[`docs/EXTENDING.md`](docs/EXTENDING.md)** — the coverage playbook: adding API
+  / web-app / **agent** sources, adding a **model family to the reference corpus**
+  (including the live-endpoint path for Claude/Gemini), and continuous monitoring.
+
 ## [0.9.0] - 2026-07-25 — Adversarial red-team corpus (E8)
 
 ### Fixed (pre-merge adversarial review — Codex)
