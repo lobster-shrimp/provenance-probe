@@ -59,21 +59,21 @@ $EDITOR targets.json
 ```json
 {
   "name": "anthropic",
-  "base_url": "https://api.anthropic.com/v1",
-  "chat_path": "/messages",
-  "model": "claude-3-5-haiku-20241022",
+  "base_url": "https://api.anthropic.com",
+  "model": "claude-opus-4-8",
   "api_style": "anthropic",
-  "auth_header": "x-api-key",
-  "auth_prefix": "",
   "auth_value_env": "ANTHROPIC_API_KEY",
   "authorized": true
 }
 ```
 
-`api_style: anthropic` uses `/messages` semantics and adds the
-`anthropic-version` header automatically. Note: Anthropic does not expose
-prompt-token usage in a way the tokenizer battery can use, so provenance
-degrades to INDETERMINATE — expected, not a bug.
+`api_style: anthropic` **auto-configures** the `/v1/messages` chat path, the
+`x-api-key` auth header, and the `anthropic-version` header — set `chat_path` /
+`auth_header` only to override. Anthropic returns `usage.input_tokens`, which the
+tokenizer battery reads, so provenance is genuinely measured (a Claude endpoint
+clears to UNLIKELY today, since no Claude-specific reference vector exists yet —
+see [`EXTENDING.md` §4](EXTENDING.md) to add one). Use a model id your account can
+call (`claude-opus-4-8`, etc.).
 
 ### 4. Run it
 

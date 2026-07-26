@@ -345,6 +345,10 @@ companion project, which consumes this `monitor` contract as a black-box CLI.
   detail, and the open-source rationale**, for consumers, security practitioners,
   legal/compliance, and federal/policy audiences.
 - [`QUICKSTART.md`](QUICKSTART.md) — five-step install with checkpoints.
+- [`docs/EXTENDING.md`](docs/EXTENDING.md) — **the coverage playbook**: how to add
+  APIs, web apps, and **agents** (trace / active-probe / live-proxy), how to add a
+  **model family to the reference corpus**, and how to put a source under
+  continuous monitoring. Start here to grow what the system can assess.
 - [`docs/adding-sources.md`](docs/adding-sources.md) — **add a new API or
   web-app source**: OpenAI/Anthropic styles, the `template` adapter (captured
   request, placeholders, dotted response paths, cookies, SSE), the full `Target`

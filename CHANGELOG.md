@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.9.1] - 2026-07-26
+
+### Fixed
+- **Anthropic endpoints now measure provenance instead of flooring at
+  INDETERMINATE.** `api_style: "anthropic"` auto-configures the `/v1/messages`
+  path and `x-api-key` auth (they were defaulting to the OpenAI
+  `/chat/completions` + `Authorization: Bearer`, so probes 404'd and no usage came
+  back). Anthropic returns `usage.input_tokens`, which the tokenizer battery reads
+  — a Claude endpoint now clears to a measured UNLIKELY.
+
+### Added
+- **[`docs/EXTENDING.md`](docs/EXTENDING.md)** — the coverage playbook: adding API
+  / web-app / **agent** sources, adding a **model family to the reference corpus**,
+  and putting a source under continuous monitoring. Notes the Claude/Gemini
+  reference-vector gap (they clear to UNLIKELY/INDETERMINATE, not a firm NO
+  EVIDENCE, until a dedicated vector is added).
+
 ## [0.9.0] - 2026-07-25 — Adversarial red-team corpus (E8)
 
 ### Fixed (pre-merge adversarial review — Codex)

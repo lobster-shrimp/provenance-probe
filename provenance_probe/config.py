@@ -39,6 +39,15 @@ class Target:
     authorized: bool = False
     notes: str = ""
 
+    def __post_init__(self):
+        # Anthropic adapter defaults, so `api_style="anthropic"` alone works: its
+        # chat endpoint is /v1/messages and its auth is `x-api-key`, not Bearer.
+        if self.api_style == "anthropic":
+            if self.chat_path == "/chat/completions":
+                self.chat_path = "/v1/messages"
+            if self.auth_header == "Authorization":
+                self.auth_header, self.auth_prefix = "x-api-key", ""
+
     def headers(self) -> dict[str, str]:
         h = {"Content-Type": "application/json", "Accept": "application/json"}
         h.update(self.extra_headers)
