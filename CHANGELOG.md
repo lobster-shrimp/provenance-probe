@@ -1,6 +1,20 @@
 # Changelog
 
-## [Unreleased]
+## [0.10.0] - 2026-07-26 — Add-target wizard (paste-first)
+
+### Added
+- **Add-a-target wizard in the local `serve` UI (`/wizard`, 127.0.0.1 only).**
+  Paste a captured web-app chat request (DevTools → Copy-as-cURL, or a saved HAR)
+  and it synthesizes a `template` target: `base_url`/`chat_path`, a
+  `request_template` (your prompt → `__PROMPT__`; stateful conversation/message
+  ids blanked for replay-safety), response dotted-paths (text/usage/model, from a
+  HAR response), SSE detection, and CSRF/origin headers (dynamic ones flagged).
+  A 2-probe **dry-run** checks HTTP health, usage exposure, and replay-safety
+  before saving. **Security:** the session cookie is written only to a gitignored
+  `.env.capture` (auto-added to `.gitignore`) and referenced by `cookie_env` — it
+  never enters the committed config; saved targets default `authorized: false`.
+  Paste-first v1 (no browser dependency); `provenance_probe/wizard.py` +28 tests.
+  Playwright auto-capture is a planned optional `[capture]` extra.
 
 ### Changed
 - **Publication policy is now full transparency.** The observatory publishes the

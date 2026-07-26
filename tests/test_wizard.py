@@ -218,3 +218,41 @@ def test_ensure_gitignored_idempotent(tmp_path):
     wizard.ensure_gitignored(str(tmp_path), ".env.capture")
     wizard.ensure_gitignored(str(tmp_path), ".env.capture")   # second call no dupe
     assert (tmp_path / ".gitignore").read_text().count(".env.capture") == 1
+
+
+# --- serve UI routes ---------------------------------------------------------
+
+_CURL = ("curl 'https://chat.example.com/api/chat' -X POST "
+         "-H 'content-type: application/json' -H 'cookie: sid=LEAKME' "
+         "--data-raw '{\"messages\":[{\"role\":\"user\",\"content\":\"fingerprint me\"}]}'")
+
+
+def _client():
+    from provenance_probe import serve
+    return serve.app.test_client()
+
+
+def test_wizard_get_renders_form():
+    r = _client().get("/wizard")
+    assert r.status_code == 200 and b"Add-target wizard" in r.data
+
+
+def test_wizard_post_previews_and_hides_cookie_from_editable_target():
+    r = _client().post("/wizard", data={"name": "demo", "prompt": "fingerprint me",
+                                         "fmt": "curl", "capture": _CURL})
+    assert r.status_code == 200 and b"Confirm" in r.data and b"__PROMPT__" in r.data
+    # the editable target JSON (after the target textarea marker) must not carry the cookie
+    editable = r.data.split(b"name=target")[-1]
+    assert b"LEAKME" not in editable
+
+
+def test_wizard_post_bad_capture_shows_error():
+    r = _client().post("/wizard", data={"name": "x", "prompt": "hi", "fmt": "curl",
+                                        "capture": "not a curl command"})
+    assert r.status_code == 200 and b"Could not parse capture" in r.data
+
+
+def test_wizard_save_rejects_bad_json():
+    r = _client().post("/wizard/save", data={"fmt": "curl", "capture": _CURL,
+                                             "prompt": "fingerprint me", "target": "{not json"})
+    assert r.status_code == 200 and b"not valid JSON" in r.data

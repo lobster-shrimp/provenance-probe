@@ -299,6 +299,128 @@ def agent_board():
                     mimetype="text/html")
 
 
+_WIZARD_FORM = """<!doctype html><meta charset=utf-8><title>Add-target wizard · provenance-probe</title>
+<style>body{{font:15px system-ui;margin:2rem auto;max-width:760px;color:#16181d}}
+textarea{{width:100%;font:12px ui-monospace;min-height:140px}}input{{font:14px system-ui;padding:4px}}
+.err{{background:#fdecec;border:1px solid #f5b5b5;padding:.6rem;border-radius:6px}}
+.warn{{background:#fff7e6;border:1px solid #ffd591;padding:.5rem;border-radius:6px;margin:.3rem 0}}
+label{{display:block;margin:.7rem 0 .2rem;font-weight:600}}.sub{{color:#6b7280}}</style>
+<h1>Add-target wizard</h1>
+<p class=sub>Paste a captured web-app chat request (DevTools &rarr; Copy-as-cURL, or a saved HAR).
+Log in and send one message in your OWN browser first, then copy that request. Local only; the
+session cookie is written to a gitignored env file, never committed. <a href="/">&larr; probe tool</a></p>
+{err}
+<form method=post action="/wizard">
+<label>Target name</label><input name=name value="{name}" placeholder="lindy-chat" required>
+<label>The exact message text you sent (so we can find it in the request)</label>
+<input name=prompt value="{prompt}" style="width:100%" placeholder="fingerprint me" required>
+<label>Format</label>
+<select name=fmt><option value=curl {c}>cURL (Copy as cURL)</option><option value=har {h}>HAR (saved)</option></select>
+<label>Pasted capture</label><textarea name=capture required>{capture}</textarea>
+<p><button type=submit>Synthesize &rarr;</button></p></form>"""
+
+_WIZARD_PREVIEW = """<!doctype html><meta charset=utf-8><title>Confirm target · provenance-probe</title>
+<style>body{{font:15px system-ui;margin:2rem auto;max-width:760px;color:#16181d}}
+textarea{{width:100%;font:12px ui-monospace;min-height:220px}}
+.warn{{background:#fff7e6;border:1px solid #ffd591;padding:.5rem;border-radius:6px;margin:.3rem 0}}
+.ok{{background:#eaf7ec;border:1px solid #a3d9a5;padding:.6rem;border-radius:6px}}</style>
+<h1>Confirm &amp; save</h1>
+<p class=sub>Review the synthesized target. Every field is a best-effort guess &mdash; edit before saving.
+Then Save runs a 2-probe dry-run (replay-safety + usage check) and writes the config; the cookie
+goes to <code>.env.capture</code> (gitignored). <a href="/wizard">&larr; start over</a></p>
+{warnings}
+<form method=post action="/wizard/save">
+<input type=hidden name=capture value="{capture_esc}">
+<input type=hidden name=fmt value="{fmt}">
+<input type=hidden name=name value="{name}">
+<input type=hidden name=prompt value="{prompt_esc}">
+<label>Synthesized target (editable JSON)</label>
+<textarea name=target>{target_json}</textarea>
+<p><button type=submit>Dry-run &amp; save</button></p></form>"""
+
+
+def _wiz_warnings(ws):
+    return "".join(f'<div class="warn">&#9888; {html.escape(w)}</div>' for w in ws)
+
+
+@app.route("/wizard", methods=["GET", "POST"])
+def wizard_add():
+    from . import wizard
+    if request.method == "GET":
+        return Response(_WIZARD_FORM.format(err="", name="", prompt="", capture="",
+                                            c="selected", h=""), mimetype="text/html")
+    name = request.form.get("name", "").strip()
+    prompt = request.form.get("prompt", "")
+    fmt = request.form.get("fmt", "curl")
+    capture = request.form.get("capture", "")
+
+    def _err(msg):
+        return Response(_WIZARD_FORM.format(
+            err=f'<div class="err">{html.escape(msg)}</div>', name=html.escape(name),
+            prompt=html.escape(prompt), capture=html.escape(capture),
+            c="selected" if fmt == "curl" else "", h="selected" if fmt == "har" else ""),
+            mimetype="text/html")
+    try:
+        cap = wizard.parse_har(capture, prompt) if fmt == "har" else wizard.parse_curl(capture)
+        syn = wizard.synthesize(cap, prompt, name)
+    except ValueError as e:
+        return _err(f"Could not parse capture: {e}")
+    return Response(_WIZARD_PREVIEW.format(
+        warnings=_wiz_warnings(syn.warnings),
+        capture_esc=html.escape(capture, quote=True), fmt=html.escape(fmt),
+        name=html.escape(name), prompt_esc=html.escape(prompt, quote=True),
+        target_json=html.escape(json.dumps(syn.target, indent=2))), mimetype="text/html")
+
+
+@app.route("/wizard/save", methods=["POST"])
+def wizard_save():
+    from . import wizard
+    fmt = request.form.get("fmt", "curl")
+    capture = request.form.get("capture", "")
+    prompt = request.form.get("prompt", "")
+    try:
+        target = json.loads(request.form.get("target", "{}"))
+    except json.JSONDecodeError as e:
+        return Response(f'<p class="err">Edited target is not valid JSON: {html.escape(str(e))}</p>'
+                        '<p><a href="/wizard">&larr; back</a></p>', mimetype="text/html")
+    # Re-derive the cookie server-side from the original paste (kept out of the
+    # editable JSON so it never round-trips as an editable field).
+    cap = wizard.parse_har(capture, prompt) if fmt == "har" else wizard.parse_curl(capture)
+    t = Target(name=target.get("name", "target"), base_url=target.get("base_url", ""),
+               chat_path=target.get("chat_path", "/"), api_style="template",
+               request_template=target.get("request_template", {}),
+               response_text_path=target.get("response_text_path", ""),
+               response_prompt_tokens_path=target.get("response_prompt_tokens_path", ""),
+               response_model_path=target.get("response_model_path", ""),
+               stream_mode=target.get("stream_mode", "none"),
+               stream_delta_path=target.get("stream_delta_path", ""),
+               extra_headers=target.get("extra_headers", {}), cookie=cap.cookie)
+    dr = wizard.dry_run(Client(t))
+    if not dr["ok"]:
+        return Response(f'<p class="err">Dry-run failed: {html.escape(dr["error"])}</p>'
+                        '<p><a href="/wizard">&larr; re-capture</a></p>', mimetype="text/html")
+    root = os.getcwd()
+    res = wizard.write_target(target, cap.cookie, config_path=os.path.join(root, "targets.json"),
+                              env_path=os.path.join(root, ".env.capture"), repo_root=root)
+    notes = []
+    if not dr["usage_exposed"]:
+        notes.append("usage.prompt_tokens NOT exposed — tokenizer fingerprint unavailable (degraded).")
+    if not dr["replay_safe"]:
+        notes.append("replay looked stateful/unstable — verify the app allows repeated single-turn calls.")
+    body = (f'<!doctype html><meta charset=utf-8><title>Saved</title>'
+            f'<style>body{{font:15px system-ui;margin:2rem auto;max-width:680px}}'
+            f'.ok{{background:#eaf7ec;border:1px solid #a3d9a5;padding:.6rem;border-radius:6px}}'
+            f'.warn{{background:#fff7e6;border:1px solid #ffd591;padding:.5rem;margin:.3rem 0}}</style>'
+            f'<h1>Saved: {html.escape(res["added"])}</h1>'
+            f'<div class="ok">Target written to <code>{html.escape(res["config_path"])}</code>. '
+            f'Cookie written to <code>.env.capture</code> (gitignored) as '
+            f'<code>{html.escape(res["cookie_env"])}</code> &mdash; run '
+            f'<code>source .env.capture</code> before probing (or set it as a CI secret).</div>'
+            + "".join(f'<div class="warn">&#9888; {html.escape(n)}</div>' for n in notes)
+            + '<p><a href="/wizard">Add another</a> · <a href="/">probe tool</a></p>')
+    return Response(body, mimetype="text/html")
+
+
 PAGE = r"""<!doctype html><meta charset=utf-8><title>provenance-probe</title>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <style>
@@ -350,7 +472,7 @@ margin:0 0 14px;border-bottom:1px solid var(--line);padding-bottom:8px}
 .sev{font-size:10px;letter-spacing:.07em;text-transform:uppercase;font-weight:700;padding:1px 6px;border-radius:4px}
 .sev.critical{background:#fdf2f2;color:#8b1a1a}.sev.high{background:#fff8f0;color:#a8500f}.sev.medium{background:#fffdf0;color:#7a6a12}
 </style><div class=w>
-<div class=topnav><span class=active>Live probe tool</span><a href="/agent">Agent board &rarr;</a><a href="__OBSERVATORY_URL__">Observatory &rarr;</a></div>
+<div class=topnav><span class=active>Live probe tool</span><a href="/agent">Agent board &rarr;</a><a href="/wizard">Add target &rarr;</a><a href="__OBSERVATORY_URL__">Observatory &rarr;</a></div>
 <h1>provenance-probe</h1>
 <div class=sub>Local model provenance &amp; jurisdiction assurance · binds to 127.0.0.1 · nothing leaves this machine except requests to the endpoint you name</div>
 
