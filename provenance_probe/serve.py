@@ -72,7 +72,9 @@ def _run(run_id: str, spec: dict):
             authorized=True,
         )
         if spec.get("api_key"):
-            t.extra_headers["Authorization"] = "Bearer " + spec["api_key"]
+            # respect the target's auth scheme (anthropic -> x-api-key, no Bearer),
+            # not a hardcoded Authorization: Bearer.
+            t.extra_headers[t.auth_header] = f"{t.auth_prefix}{spec['api_key']}"
 
         c = Client(t)
         b = {"target": {"name": t.name, "base_url": t.base_url, "model": t.model,

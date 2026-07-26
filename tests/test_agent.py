@@ -153,6 +153,22 @@ def test_anthropic_explicit_overrides_kept():
     assert t.chat_path == "/custom" and t.auth_header == "X-Custom"   # explicit wins
 
 
+def test_serve_key_uses_target_auth_scheme():
+    # serve puts the UI-entered key on the target's configured auth header, so an
+    # anthropic target authenticates with x-api-key (no Bearer), not Authorization.
+    from provenance_probe.config import Target
+    for style, exp_header, exp_val in [
+        ("anthropic", "x-api-key", "sk-ant-xxx"),
+        ("openai", "Authorization", "Bearer sk-xxx"),
+    ]:
+        t = Target(name="t", base_url="https://x", model="m", api_style=style)
+        key = exp_val.split(" ")[-1]
+        t.extra_headers[t.auth_header] = f"{t.auth_prefix}{key}"
+        assert t.extra_headers.get(exp_header) == exp_val
+        if style == "anthropic":
+            assert "Authorization" not in t.extra_headers
+
+
 def test_agent_target_coerces_backend_dicts():
     at = AgentTarget(name="acme", backends=[{"base_url": "https://b/v1", "authorized": True}])
     assert isinstance(at.backends[0], AgentBackend)
