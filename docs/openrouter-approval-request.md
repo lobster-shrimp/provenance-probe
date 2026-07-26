@@ -1,12 +1,11 @@
 # Draft: approval request to OpenRouter
 
-> **Purpose.** A ready-to-send email requesting OpenRouter's written approval to
-> run automated model-identity benchmarking (and, separately, red-teaming) under
-> our own paid account. Their terms permit benchmarking but prohibit "Red
-> Teaming of Models" without prior written approval and restrict
-> reverse-engineering the Service (see `docs/tos-notes.md`). Getting this in
-> writing converts OpenRouter from the plan's highest-risk target into a cleared
-> one. Fill in **[BRACKETS]**; have counsel review before sending.
+> **Status: optional courtesy — no longer a gate.** Publication does not wait on
+> a reply (the project publishes findings in full; see `DISCLOSURE.md`). This
+> draft is retained for a maintainer who wants to request OpenRouter's written
+> approval as a good-faith courtesy and to open a coordination channel —
+> particularly before running the optional red-teaming layer, which OpenRouter's
+> terms do require approval for. Fill in **[BRACKETS]**.
 
 **To:** [OpenRouter legal / support — e.g. support@openrouter.ai, and any legal
 contact in their ToS]

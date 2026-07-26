@@ -1,10 +1,12 @@
 # Counsel engagement brief — Provenance Observatory
 
-> **Purpose.** A one-page brief to hand to a lawyer so they can scope the legal
-> review that gates public launch (Gate 1). Read alongside `DISCLOSURE.md` (our
-> responsible-disclosure policy) and `docs/tos-notes.md` (per-provider terms
-> analysis + the specific questions). Placeholders in **[BRACKETS]** are for you
-> to fill in.
+> **Status: optional — retained for a maintainer who wants a legal read.**
+> Publication no longer waits on this: the project publishes the complete work
+> behind every finding in full (see `DISCLOSURE.md`), and the two-tier
+> withholding gate has been removed by the maintainer's decision. This brief
+> stays available for anyone who still wants to engage counsel about the
+> defamation / ToS risks below; it is a scoping aid, not a launch gate.
+> Placeholders in **[BRACKETS]** are for you to fill in.
 
 ## What we are building
 

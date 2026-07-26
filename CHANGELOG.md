@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- **Publication policy is now full transparency.** The observatory publishes the
+  complete work behind every finding — measurements **and** the interpreted
+  provenance/jurisdiction verdict — as collected, in an append-only signed log,
+  so consumers can see exactly how each verdict was reached. The prior two-tier
+  withholding + 30-day disclosure-window gate is removed. Accuracy safeguards are
+  retained and emphasized: known-answer + negative controls, a published
+  false-positive rate, per-verdict confidence labels, and prominent
+  corrections/retractions. `DISCLOSURE.md` rewritten as the operative policy;
+  `docs/tos-notes.md` / `counsel-brief.md` / `openrouter-approval-request.md`
+  retained as risk context (no longer gates); README/WHITEPAPER/EXTENDING updated.
+
 ## [0.9.1] - 2026-07-26
 
 ### Fixed

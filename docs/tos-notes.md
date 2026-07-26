@@ -1,11 +1,12 @@
 # Terms-of-Service Analysis — Observatory Launch Targets
 
-> **Status: DRAFT — not legal advice.** This is a structured research summary
-> prepared for counsel. It records what the operators' public terms say (as of
-> July 2026), maps our probe activity to those terms, and lists the specific
-> questions counsel must answer before the Provenance Observatory probes and
-> publishes about these operators by name. Nothing here clears the activity;
-> Gate 1 in the design doc is not satisfied until counsel signs off.
+> **Status: risk documentation (retained), not a publication gate.** The project
+> now publishes the complete work behind every finding in full (see
+> [`DISCLOSURE.md`](../DISCLOSURE.md)); the earlier two-tier withholding gate has
+> been removed by the maintainer's decision. This document is retained as an
+> honest record of the terms-of-service landscape and the open legal questions —
+> so readers can see the risks were understood and transparency was chosen
+> deliberately. It is **not legal advice** and no longer blocks publication.
 
 ## Decision context
 
