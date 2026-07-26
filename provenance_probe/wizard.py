@@ -327,3 +327,98 @@ def synthesize(cap: Captured, prompt_text: str, name: str) -> Synthesis:
     }
     return Synthesis(target=target, cookie_value=cap.cookie, cookie_env=cookie_env,
                      warnings=warnings, fields_to_confirm=confirm)
+
+
+# --------------------------------------------------------------------------- #
+# Dry-run (replay safety) — validate before saving
+# --------------------------------------------------------------------------- #
+
+def dry_run(client, probes=None) -> dict:
+    """Send >=2 probes through the synthesized target and check replay safety.
+
+    Design (P1): the tokenizer battery replays ~20 messages; if the captured
+    request carried conversation state we blanked, replay may still 401 or
+    append to the operator's real chat. Two independent probes surface that
+    BEFORE save: both must return a reply and reported prompt-token usage that
+    is stable (a stateful backend typically errors or drifts the count wildly).
+
+    `client` is a provenance_probe.client.Client for the synthesized Target.
+    Returns {ok, usage_exposed, replay_safe, prompt_tokens, error}.
+    """
+    probes = probes or ["Say hi.", "Reply with the word ok."]
+    seen = []
+    for text in probes[:2]:
+        r = client.chat(text, max_tokens=1, temperature=0.0)
+        if not r.ok():
+            return {"ok": False, "usage_exposed": False, "replay_safe": False,
+                    "prompt_tokens": None,
+                    "error": f"probe returned HTTP {r.status} — capture may be stale "
+                             f"(cookie expired / stateful request); re-capture."}
+        seen.append(r.usage_prompt_tokens())
+    usable = [n for n in seen if n is not None]
+    usage_exposed = len(usable) == len(seen) and bool(usable)
+    # Two different one-token prompts should give close prompt-token counts; a
+    # wildly different or missing second count signals stateful/append behavior.
+    replay_safe = usage_exposed and max(usable) - min(usable) <= 3 if usable else False
+    return {"ok": True, "usage_exposed": usage_exposed, "replay_safe": replay_safe,
+            "prompt_tokens": usable, "error": None}
+
+
+# --------------------------------------------------------------------------- #
+# Save — committable config + gitignored cookie (never committed)
+# --------------------------------------------------------------------------- #
+
+def ensure_gitignored(repo_root: str, rel_path: str) -> None:
+    """Guarantee `rel_path` is in the repo's .gitignore (design: no-footgun)."""
+    import os
+    gi = os.path.join(repo_root, ".gitignore")
+    lines = []
+    if os.path.exists(gi):
+        with open(gi) as f:
+            lines = f.read().splitlines()
+    if rel_path not in lines:
+        with open(gi, "a") as f:
+            if lines and lines[-1].strip():
+                f.write("\n")
+            f.write(f"# add-target wizard: captured session credentials — never commit\n{rel_path}\n")
+
+
+def write_target(target: dict, cookie_value: str, *, config_path: str,
+                 env_path: str, repo_root: str) -> dict:
+    """Append the target to a JSON config (no-clobber on name) and write the
+    cookie to a gitignored env file. The cookie NEVER enters `config_path`.
+    Returns {config_path, env_path, cookie_env, added}.
+    """
+    import os
+    name = target.get("name") or "target"
+    # config: load existing list-or-{"targets":[...]}, refuse to clobber a name.
+    existing = {"targets": []}
+    if os.path.exists(config_path):
+        with open(config_path) as f:
+            loaded = json.load(f)
+        existing = loaded if isinstance(loaded, dict) else {"targets": loaded}
+    targets = existing.setdefault("targets", [])
+    if any((t.get("name") == name) for t in targets):
+        raise ValueError(f"a target named '{name}' already exists in {config_path}; "
+                         f"choose a distinct name (no clobber).")
+    targets.append(target)
+    os.makedirs(os.path.dirname(config_path) or ".", exist_ok=True)
+    with open(config_path, "w") as f:
+        json.dump(existing, f, indent=2)
+
+    # cookie -> gitignored env file (KEY=VALUE), and make sure it's ignored.
+    cookie_env = target.get("cookie_env") or "TARGET_COOKIE"
+    if cookie_value:
+        env_rel = os.path.relpath(env_path, repo_root) if repo_root else os.path.basename(env_path)
+        ensure_gitignored(repo_root or os.path.dirname(env_path), env_rel)
+        prior = ""
+        if os.path.exists(env_path):
+            with open(env_path) as f:
+                prior = "".join(l for l in f if not l.startswith(f"{cookie_env}="))
+        with open(env_path, "w") as f:
+            f.write(prior)
+            if prior and not prior.endswith("\n"):
+                f.write("\n")
+            f.write(f"{cookie_env}={cookie_value}\n")
+    return {"config_path": config_path, "env_path": env_path if cookie_value else None,
+            "cookie_env": cookie_env, "added": name}

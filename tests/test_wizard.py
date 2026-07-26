@@ -150,3 +150,71 @@ def test_synthesize_non_json_body_warns():
                           body="q=hi&n=1", cookie="s=1")
     s = wizard.synthesize(cap, "hi", "t")
     assert any("not JSON" in w for w in s.warnings)
+
+
+# --- dry-run -----------------------------------------------------------------
+
+class _Resp:
+    def __init__(self, status, n):
+        self.status, self._n = status, n
+    def ok(self):
+        return 200 <= self.status < 300
+    def usage_prompt_tokens(self):
+        return self._n
+
+
+class _Client:
+    def __init__(self, script):
+        self.script, self.i = list(script), -1
+    def chat(self, prompt, **kw):
+        self.i += 1
+        return _Resp(*self.script[min(self.i, len(self.script) - 1)])
+
+
+def test_dry_run_usable_and_replay_safe():
+    out = wizard.dry_run(_Client([(200, 7), (200, 8)]))
+    assert out["ok"] and out["usage_exposed"] and out["replay_safe"]
+
+
+def test_dry_run_http_error_is_not_ok():
+    out = wizard.dry_run(_Client([(401, None)]))
+    assert not out["ok"] and "HTTP 401" in out["error"]
+
+
+def test_dry_run_usage_suppressed_not_exposed():
+    out = wizard.dry_run(_Client([(200, None), (200, None)]))
+    assert out["ok"] and not out["usage_exposed"] and not out["replay_safe"]
+
+
+def test_dry_run_unstable_counts_flag_replay_unsafe():
+    out = wizard.dry_run(_Client([(200, 7), (200, 900)]))   # wild drift = stateful
+    assert out["usage_exposed"] and not out["replay_safe"]
+
+
+# --- save --------------------------------------------------------------------
+
+def test_write_target_appends_and_keeps_cookie_out_of_config(tmp_path):
+    cfg = tmp_path / "targets.json"
+    env = tmp_path / ".env.capture"
+    target = {"name": "lindy", "base_url": "https://chat.lindy.ai", "api_style": "template",
+              "cookie_env": "LINDY_COOKIE", "authorized": False}
+    res = wizard.write_target(target, "sess=SECRET", config_path=str(cfg),
+                              env_path=str(env), repo_root=str(tmp_path))
+    assert "SECRET" not in cfg.read_text()               # cookie never in committed config
+    assert "LINDY_COOKIE=sess=SECRET" in env.read_text()  # cookie in the env file only
+    assert ".env.capture" in (tmp_path / ".gitignore").read_text()   # env file gitignored
+    assert res["added"] == "lindy"
+
+
+def test_write_target_refuses_name_clobber(tmp_path):
+    cfg = tmp_path / "targets.json"
+    cfg.write_text(json.dumps({"targets": [{"name": "lindy"}]}))
+    with pytest.raises(ValueError):
+        wizard.write_target({"name": "lindy"}, "", config_path=str(cfg),
+                            env_path=str(tmp_path / ".env"), repo_root=str(tmp_path))
+
+
+def test_ensure_gitignored_idempotent(tmp_path):
+    wizard.ensure_gitignored(str(tmp_path), ".env.capture")
+    wizard.ensure_gitignored(str(tmp_path), ".env.capture")   # second call no dupe
+    assert (tmp_path / ".gitignore").read_text().count(".env.capture") == 1
