@@ -70,10 +70,11 @@ $EDITOR targets.json
 `api_style: anthropic` **auto-configures** the `/v1/messages` chat path, the
 `x-api-key` auth header, and the `anthropic-version` header — set `chat_path` /
 `auth_header` only to override. Anthropic returns `usage.input_tokens`, which the
-tokenizer battery reads, so provenance is genuinely measured (a Claude endpoint
-clears to UNLIKELY today, since no Claude-specific reference vector exists yet —
-see [`EXTENDING.md` §4](EXTENDING.md) to add one). Use a model id your account can
-call (`claude-opus-4-8`, etc.).
+tokenizer battery reads, so provenance is genuinely measured. The shipped reference
+now carries a Claude family vector (measured from the first-party API — Claude's
+tokenizer is not published; see [`EXTENDING.md` §4](EXTENDING.md)), so a genuine
+Claude endpoint clears to a firm non-CN **NO EVIDENCE**. Use a model id your account
+can call (`claude-opus-4-8`, etc.).
 
 ### 4. Run it
 

@@ -109,9 +109,27 @@ provenance-probe verify-reference          # self-check the merged file
 A good reference addition: the real tokenizer (HF repo or GGUF vocab), the correct
 `origin`, and — if you rotate the probe corpus for evasion-hardening
 (`--variant-seed N`) — a reference built for the **same seed** (a comparison only
-trusts a matching seed). Known gap worth filling: **Claude and Gemini** have no
-dedicated reference vector yet, so they clear only to UNLIKELY/INDETERMINATE rather
-than a firm non-CN NO EVIDENCE; adding their tokenizers would tighten that.
+trusts a matching seed).
+
+### Families with no published tokenizer (Claude, Gemini)
+
+Some providers don't publish their tokenizer, so the HF/GGUF path above can't reach
+them. But the reference is just an overhead-invariant *shape* vector, and the
+definitional ground truth for "what does the Claude tokenizer do" is the genuine
+first-party Anthropic API itself. Measure it through the same battery used against
+targets — both paths go through `prompt_tokens` + overhead correction, so they are
+maximally comparable:
+```bash
+provenance-probe build-reference-endpoint --config claude.json \
+  --label Claude --family "Claude/Anthropic" --origin US --i-am-authorized
+```
+The entry is tagged `source: "live-first-party-api"` so its distinct provenance is
+auditable next to the GGUF/tiktoken entries. **Only run this against an endpoint you
+are authorized to probe AND that you know first-hand is the genuine first party** —
+otherwise you would enshrine a spoofed vector as ground truth. This is how the
+shipped reference now clears **Claude** and **Gemini** to a firm non-CN NO EVIDENCE
+(a genuine endpoint matches its own family ≈1.0, with CN families near zero) instead
+of flooring at UNLIKELY/INDETERMINATE.
 
 ## §5. Put it under continuous monitoring (observatory)
 

@@ -121,6 +121,7 @@ Produces console output plus JSON and standalone HTML per target.
 |---|---|
 | `init` | Write an example target config |
 | `build-reference` | Compute local tokenizer reference vectors (the strongest signal) |
+| `build-reference-endpoint` | Measure a reference vector from a live authorized first-party API (families with no published tokenizer, e.g. Claude/Gemini) |
 | `assess` | Full multi-layer assessment |
 | `monitor --baseline A.json --current B.json` | Diff two runs; **exit 2 on drift** — wire this into CI |
 | `transcript <file> --true-origin CN` | Analyze a captured conversation for identity deception + **mid-session model switches** (the z.ai "I am Gemini" → "actually GLM" case); records model-change events, **exit 2** to alert |

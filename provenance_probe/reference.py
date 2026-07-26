@@ -57,6 +57,50 @@ def _vector(encode_fn, variant_seed=0):
     return {pid: len(encode_fn(text)) for pid, text in variant_probes(variant_seed)}
 
 
+def build_from_endpoint(client, label, family, origin, out=OUT, overwrite=False) -> dict:
+    """Add a reference vector MEASURED from a live authorized first-party endpoint.
+
+    Some families (Claude, Gemini) do not publish their tokenizer, so the usual
+    HF/GGUF path in build() can't reach them. But the reference is just an
+    overhead-invariant shape vector, and the *definitional* ground truth for
+    "what does the Claude tokenizer do" is the first-party Anthropic endpoint
+    itself. Measuring it through the exact same battery used against targets makes
+    the reference maximally comparable (both paths go through prompt_tokens +
+    overhead correction).
+
+    ONLY run this against an endpoint you are authorized to probe AND that you
+    know first-hand is the genuine first party for that family — otherwise you
+    would enshrine a spoofed vector as ground truth. The entry is tagged
+    source="live-first-party-api" so its distinct provenance is auditable.
+    """
+    from .probes import tokenizer
+    ref = _load(out)
+    seed = ref.get("variant_seed", 0) or 0
+    vec = tokenizer.measure(client, variant_seed=seed)
+    if not vec.get("usable"):
+        raise SystemExit(f"[!] endpoint did not yield a usable vector "
+                         f"({len(vec.get('vector', {}))} probes, need >=6; "
+                         f"errors: {list(vec.get('errors', {}))[:3]}). "
+                         f"Is prompt_tokens usage exposed?")
+    existing = ref["models"].get(label)
+    if existing and existing.get("source") not in (None, "live-first-party-api") and not overwrite:
+        raise SystemExit(f"[!] '{label}' already exists from source "
+                         f"'{existing.get('source')}'. Pass overwrite=True to replace it.")
+    host = getattr(getattr(client, "t", None), "base_url", "") or ""
+    ref["models"][label] = {
+        "label": label, "family": family, "origin": origin,
+        "vocab_size": None, "source": "live-first-party-api", "endpoint": host,
+        "note": ("Measured from the genuine first-party API; this family does not "
+                 "publish its tokenizer, so the live endpoint is the ground truth."),
+        "vector": vec["vector"],
+    }
+    _save(ref, out)
+    n = len(vec["vector"])
+    print(f"[+] {label} ({family}, origin={origin}): {n} probes measured from {host}")
+    print(f"    merged into {out} (source=live-first-party-api, seed={seed})")
+    return ref
+
+
 def build(models=None, out=OUT, hf_token=None, overwrite=False,
           allow_remote_code=False, only=None, variant_seed=0) -> dict:
     ref = _load(out)
