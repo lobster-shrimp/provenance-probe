@@ -364,10 +364,11 @@ companion project, which consumes this `monitor` contract as a black-box CLI.
 - [`docs/provider-jurisdiction-corpus.md`](docs/provider-jurisdiction-corpus.md) —
   registry-based jurisdiction snapshot of ~26 LLM API hosts, and why CDN-fronting
   makes IP geolocation unreliable.
-- **Gate-1 / assurance materials** (for anyone publishing findings about named
-  vendors): [`DISCLOSURE.md`](DISCLOSURE.md) (responsible-disclosure policy),
-  [`docs/tos-notes.md`](docs/tos-notes.md) (per-provider ToS analysis + counsel
-  questions), [`docs/counsel-brief.md`](docs/counsel-brief.md),
+- **Publication / assurance materials** (for anyone publishing findings about
+  named vendors): [`DISCLOSURE.md`](DISCLOSURE.md) (the operative
+  full-transparency publication policy), and — retained as risk context, not as
+  gates — [`docs/tos-notes.md`](docs/tos-notes.md) (per-provider ToS analysis),
+  [`docs/counsel-brief.md`](docs/counsel-brief.md),
   [`docs/openrouter-approval-request.md`](docs/openrouter-approval-request.md).
 
 ### The Observatory (companion repo)
@@ -380,7 +381,7 @@ turns this engine into continuous public monitoring:
 | Cadence | Point-in-time, on demand | Nightly (Actions cron) |
 | Targets | Any endpoint / web app you're authorized to test | A curated `targets.yaml` watch list |
 | Output | Console + JSON/HTML report + local UI | Signed append-only evidence log + Variant C public site + numbered advisories |
-| Trust model | You run it, you read it | Two-tier publication: neutral evidence public, interpreted verdicts disclosure-gated |
+| Trust model | You run it, you read it | Full transparency: measurements **and** interpreted verdicts published as collected, append-only + signed |
 | Dependency | — | Consumes this package's `assess` / `monitor` as a black-box CLI |
 
 The two local UIs cross-link: the probe web UI (`serve`, :8770) has an

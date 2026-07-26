@@ -254,15 +254,18 @@ budget. The continuous monitoring service additionally runs live known-answer
 controls, a self-hosted Chinese-origin positive and a Western negative, so a
 published false-positive rate is measured, not asserted.
 
-### 3.6 Two-tier publication
+### 3.6 Full-transparency publication
 
-Neutral evidence, the token counts, wire fingerprint, latency, drift, and signed
-manifests, is published as collected. Interpreted verdicts about a *named*
-operator are withheld behind a two-part gate: a responsible-disclosure window in
-which the operator is notified and may respond, and a legal-review clearance
-before an accusation is published. When a verdict change clears both, it becomes
-a numbered advisory (format MPA-YYYY-NNN) that a practitioner can cite. This is
-what separates the system from a rumor mill.
+The system publishes the complete work behind every finding as collected: the
+measurements (token counts, wire fingerprint, latency, drift, signed manifests)
+*and* the interpreted provenance/jurisdiction verdict, together, so a reader can
+see exactly how each verdict was reached and judge its confidence. A verdict is
+never published without the evidence that produced it. What keeps this from being
+a rumor mill is not withholding but rigor: every verdict carries a confidence
+label, is anchored by known-answer and negative controls with a measured and
+published false-positive rate, and a wrong verdict is prominently retracted in the
+same append-only, signed log. Material verdict changes are issued as numbered
+advisories (format MPA-YYYY-NNN) a practitioner can cite.
 
 ### 3.7 From endpoints to agents: the flight recorder
 

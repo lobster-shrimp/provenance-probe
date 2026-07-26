@@ -14,8 +14,8 @@ independent — you can add any one without touching the others:
 Throughout: **only assess what you are authorized in writing to test.** Targets
 carry an `authorized` flag and active probing aborts without it; agent backends
 carry a *per-backend* flag (the consent surface is the operator AND each backend).
-Named-vendor *interpreted* verdicts stay behind the two-tier Gate-1 gate until
-cleared — see [DISCLOSURE.md](../DISCLOSURE.md).
+Findings are published in full — measurements and the interpreted verdict
+together — as collected; see the full-transparency [DISCLOSURE.md](../DISCLOSURE.md).
 
 ---
 
@@ -139,8 +139,8 @@ observatory watch list. Endpoint/web-app targets:
 Agent targets (E2/E3): add a target with an `agent_trace` to `targets.yaml`; the
 nightly runner assesses it, fingerprints its model composition, and opens an
 MPA advisory when the composition drifts. Records land under `data/agents/` and
-are covered by the daily cosign+Rekor manifest, and render on the observatory
-page's **Agent & platform assessments** panel (verdicts gated by `public:` / Gate-1).
+are covered by the daily cosign+Rekor manifest, and render in full on the
+observatory page's **Agent & platform assessments** panel.
 
 ---
 
@@ -152,5 +152,5 @@ page's **Agent & platform assessments** panel (verdicts gated by `public:` / Gat
       `verify-reference` passes — otherwise the verdict floors at "measured but
       inconclusive," not a firm match.
 - [ ] Ran once locally and eyeballed the board / report before trusting it.
-- [ ] For continuous monitoring: added to the observatory watch list, `public:`
-      left false until Gate-1 clears a named-vendor verdict.
+- [ ] For continuous monitoring: added to the observatory watch list (findings
+      publish in full once the target is probed).
