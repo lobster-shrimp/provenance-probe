@@ -330,17 +330,29 @@ Then Save runs a 2-probe dry-run (replay-safety + usage check) and writes the co
 goes to <code>.env.capture</code> (gitignored). <a href="/wizard">&larr; start over</a></p>
 {warnings}
 <form method=post action="/wizard/save">
-<input type=hidden name=capture value="{capture_esc}">
-<input type=hidden name=fmt value="{fmt}">
-<input type=hidden name=name value="{name}">
-<input type=hidden name=prompt value="{prompt_esc}">
+<input type=hidden name=token value="{token}">
 <label>Synthesized target (editable JSON)</label>
 <textarea name=target>{target_json}</textarea>
 <p><button type=submit>Dry-run &amp; save</button></p></form>"""
 
+# Server-side stash so the captured request (which holds the session COOKIE) is
+# NEVER reflected back into the browser between preview and save (Codex). Keyed
+# by a one-shot token; single-process local Flask, so an in-memory dict is fine.
+_WIZARD_PENDING: dict = {}
+
 
 def _wiz_warnings(ws):
     return "".join(f'<div class="warn">&#9888; {html.escape(w)}</div>' for w in ws)
+
+
+def _wiz_page(title, inner):
+    return Response(
+        f'<!doctype html><meta charset=utf-8><title>{title}</title>'
+        '<style>body{font:15px system-ui;margin:2rem auto;max-width:680px;color:#16181d}'
+        '.err{background:#fdecec;border:1px solid #f5b5b5;padding:.6rem;border-radius:6px}'
+        '.ok{background:#eaf7ec;border:1px solid #a3d9a5;padding:.6rem;border-radius:6px}'
+        '.warn{background:#fff7e6;border:1px solid #ffd591;padding:.5rem;margin:.3rem 0}</style>'
+        + inner, mimetype="text/html")
 
 
 @app.route("/wizard", methods=["GET", "POST"])
@@ -363,62 +375,86 @@ def wizard_add():
     try:
         cap = wizard.parse_har(capture, prompt) if fmt == "har" else wizard.parse_curl(capture)
         syn = wizard.synthesize(cap, prompt, name)
-    except ValueError as e:
+    except (ValueError, KeyError, TypeError) as e:
         return _err(f"Could not parse capture: {e}")
+    # Stash the captured request (holds the cookie) server-side; hand the browser
+    # only a token. The editable target JSON already carries no cookie (cookie_env
+    # only), so nothing sensitive is reflected.
+    token = uuid.uuid4().hex
+    if len(_WIZARD_PENDING) > 20:            # bound the stash
+        _WIZARD_PENDING.clear()
+    _WIZARD_PENDING[token] = {"cookie": cap.cookie}
     return Response(_WIZARD_PREVIEW.format(
-        warnings=_wiz_warnings(syn.warnings),
-        capture_esc=html.escape(capture, quote=True), fmt=html.escape(fmt),
-        name=html.escape(name), prompt_esc=html.escape(prompt, quote=True),
+        warnings=_wiz_warnings(syn.warnings), token=token,
         target_json=html.escape(json.dumps(syn.target, indent=2))), mimetype="text/html")
 
 
 @app.route("/wizard/save", methods=["POST"])
 def wizard_save():
     from . import wizard
-    fmt = request.form.get("fmt", "curl")
-    capture = request.form.get("capture", "")
-    prompt = request.form.get("prompt", "")
+    token = request.form.get("token", "")
+    pending = _WIZARD_PENDING.get(token)
+    if pending is None:
+        return _wiz_page("Expired", '<p class="err">This capture session expired or was '
+                         'already saved. Start over.</p><p><a href="/wizard">&larr; wizard</a></p>')
+    cookie = pending["cookie"]
     try:
         target = json.loads(request.form.get("target", "{}"))
-    except json.JSONDecodeError as e:
-        return Response(f'<p class="err">Edited target is not valid JSON: {html.escape(str(e))}</p>'
-                        '<p><a href="/wizard">&larr; back</a></p>', mimetype="text/html")
-    # Re-derive the cookie server-side from the original paste (kept out of the
-    # editable JSON so it never round-trips as an editable field).
-    cap = wizard.parse_har(capture, prompt) if fmt == "har" else wizard.parse_curl(capture)
-    t = Target(name=target.get("name", "target"), base_url=target.get("base_url", ""),
-               chat_path=target.get("chat_path", "/"), api_style="template",
-               request_template=target.get("request_template", {}),
-               response_text_path=target.get("response_text_path", ""),
-               response_prompt_tokens_path=target.get("response_prompt_tokens_path", ""),
-               response_model_path=target.get("response_model_path", ""),
-               stream_mode=target.get("stream_mode", "none"),
-               stream_delta_path=target.get("stream_delta_path", ""),
-               extra_headers=target.get("extra_headers", {}), cookie=cap.cookie)
-    dr = wizard.dry_run(Client(t))
+        if not isinstance(target, dict):
+            raise ValueError("target must be a JSON object")
+    except (json.JSONDecodeError, ValueError) as e:
+        return _wiz_page("Invalid", f'<p class="err">Edited target is not valid JSON: '
+                         f'{html.escape(str(e))}</p><p><a href="/wizard">&larr; back</a></p>')
+    try:
+        t = Target(name=target.get("name", "target"), base_url=target.get("base_url", ""),
+                   chat_path=target.get("chat_path", "/"), api_style="template",
+                   request_template=target.get("request_template", {}),
+                   response_text_path=target.get("response_text_path", ""),
+                   response_prompt_tokens_path=target.get("response_prompt_tokens_path", ""),
+                   response_model_path=target.get("response_model_path", ""),
+                   stream_mode=target.get("stream_mode", "none"),
+                   stream_delta_path=target.get("stream_delta_path", ""),
+                   extra_headers=target.get("extra_headers", {}) if isinstance(
+                       target.get("extra_headers"), dict) else {},
+                   cookie=cookie)                      # cookie from the server-side stash only
+        dr = wizard.dry_run(Client(t))
+    except Exception as e:                              # never 500 the operator
+        return _wiz_page("Dry-run error", f'<p class="err">Dry-run could not run: '
+                         f'{html.escape(str(e))}</p><p><a href="/wizard">&larr; re-capture</a></p>')
     if not dr["ok"]:
-        return Response(f'<p class="err">Dry-run failed: {html.escape(dr["error"])}</p>'
-                        '<p><a href="/wizard">&larr; re-capture</a></p>', mimetype="text/html")
-    root = os.getcwd()
-    res = wizard.write_target(target, cap.cookie, config_path=os.path.join(root, "targets.json"),
-                              env_path=os.path.join(root, ".env.capture"), repo_root=root)
-    notes = []
-    if not dr["usage_exposed"]:
-        notes.append("usage.prompt_tokens NOT exposed — tokenizer fingerprint unavailable (degraded).")
+        return _wiz_page("Dry-run failed", f'<p class="err">Dry-run failed: '
+                         f'{html.escape(dr["error"])}</p><p><a href="/wizard">&larr; re-capture</a></p>')
     if not dr["replay_safe"]:
-        notes.append("replay looked stateful/unstable — verify the app allows repeated single-turn calls.")
-    body = (f'<!doctype html><meta charset=utf-8><title>Saved</title>'
-            f'<style>body{{font:15px system-ui;margin:2rem auto;max-width:680px}}'
-            f'.ok{{background:#eaf7ec;border:1px solid #a3d9a5;padding:.6rem;border-radius:6px}}'
-            f'.warn{{background:#fff7e6;border:1px solid #ffd591;padding:.5rem;margin:.3rem 0}}</style>'
-            f'<h1>Saved: {html.escape(res["added"])}</h1>'
-            f'<div class="ok">Target written to <code>{html.escape(res["config_path"])}</code>. '
-            f'Cookie written to <code>.env.capture</code> (gitignored) as '
-            f'<code>{html.escape(res["cookie_env"])}</code> &mdash; run '
-            f'<code>source .env.capture</code> before probing (or set it as a CI secret).</div>'
-            + "".join(f'<div class="warn">&#9888; {html.escape(n)}</div>' for n in notes)
-            + '<p><a href="/wizard">Add another</a> · <a href="/">probe tool</a></p>')
-    return Response(body, mimetype="text/html")
+        # design: refuse to save a stateful/unstable target (replay would fail or
+        # spam the operator's real chat). usage-suppressed-but-stable stays safe.
+        return _wiz_page("Not replay-safe", '<p class="err">Refusing to save: the two dry-run '
+                         'probes did not behave independently (missing reply or unstable '
+                         'prompt-token counts). Replaying ~20 probes could fail or append to your '
+                         'real chat. Re-capture a single-turn request, or fix the response paths.'
+                         '</p><p><a href="/wizard">&larr; re-capture</a></p>')
+    try:
+        root = os.getcwd()
+        res = wizard.write_target(target, cookie, config_path=os.path.join(root, "targets.json"),
+                                  env_path=os.path.join(root, ".env.capture"), repo_root=root)
+    except ValueError as e:                             # e.g. name clobber
+        return _wiz_page("Not saved", f'<p class="err">{html.escape(str(e))}</p>'
+                         '<p><a href="/wizard">&larr; back</a></p>')
+    except OSError as e:
+        return _wiz_page("Write error", f'<p class="err">Could not write config: '
+                         f'{html.escape(str(e))}</p>')
+    _WIZARD_PENDING.pop(token, None)                    # one-shot
+    notes = list(res.get("warnings", []))
+    if not dr["usage_exposed"]:
+        notes.append("usage.prompt_tokens NOT exposed — tokenizer fingerprint unavailable "
+                     "(provenance floors at INDETERMINATE; wire/behavioral only).")
+    inner = (f'<h1>Saved: {html.escape(res["added"])}</h1>'
+             f'<div class="ok">Target written to <code>{html.escape(res["config_path"])}</code>. '
+             f'Cookie stored in <code>.env.capture</code> (gitignored) as '
+             f'<code>{html.escape(res["cookie_env"])}</code> &mdash; run '
+             f'<code>source .env.capture</code> before probing (or set it as a CI secret).</div>'
+             + "".join(f'<div class="warn">&#9888; {html.escape(n)}</div>' for n in notes)
+             + '<p><a href="/wizard">Add another</a> · <a href="/">probe tool</a></p>')
+    return _wiz_page("Saved", inner)
 
 
 PAGE = r"""<!doctype html><meta charset=utf-8><title>provenance-probe</title>

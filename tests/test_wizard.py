@@ -155,12 +155,14 @@ def test_synthesize_non_json_body_warns():
 # --- dry-run -----------------------------------------------------------------
 
 class _Resp:
-    def __init__(self, status, n):
-        self.status, self._n = status, n
+    def __init__(self, status, n, text="reply"):
+        self.status, self._n, self._t = status, n, text
     def ok(self):
         return 200 <= self.status < 300
     def usage_prompt_tokens(self):
         return self._n
+    def text(self):
+        return self._t
 
 
 class _Client:
@@ -172,43 +174,74 @@ class _Client:
 
 
 def test_dry_run_usable_and_replay_safe():
-    out = wizard.dry_run(_Client([(200, 7), (200, 8)]))
+    out = wizard.dry_run(_Client([(200, 7, "hi"), (200, 8, "ok")]))
     assert out["ok"] and out["usage_exposed"] and out["replay_safe"]
 
 
 def test_dry_run_http_error_is_not_ok():
-    out = wizard.dry_run(_Client([(401, None)]))
+    out = wizard.dry_run(_Client([(401, None, "")]))
     assert not out["ok"] and "HTTP 401" in out["error"]
 
 
-def test_dry_run_usage_suppressed_not_exposed():
-    out = wizard.dry_run(_Client([(200, None), (200, None)]))
-    assert out["ok"] and not out["usage_exposed"] and not out["replay_safe"]
+def test_dry_run_usage_suppressed_is_degraded_but_replay_safe():
+    out = wizard.dry_run(_Client([(200, None, "hi"), (200, None, "ok")]))
+    assert out["ok"] and not out["usage_exposed"] and out["replay_safe"]  # stateless, degraded
 
 
 def test_dry_run_unstable_counts_flag_replay_unsafe():
-    out = wizard.dry_run(_Client([(200, 7), (200, 900)]))   # wild drift = stateful
+    out = wizard.dry_run(_Client([(200, 7, "hi"), (200, 900, "ok")]))   # wild drift = stateful
     assert out["usage_exposed"] and not out["replay_safe"]
+
+
+def test_dry_run_no_reply_is_not_ok():
+    out = wizard.dry_run(_Client([(200, 7, ""), (200, 7, "")]))   # HTTP ok but empty replies
+    assert not out["ok"] and "no reply" in out["error"]
+
+
+# --- sanitize (defense-in-depth at the write boundary) -----------------------
+
+def test_sanitize_strips_cookie_and_auth_headers():
+    dirty = {"name": "x", "cookie": "sess=SECRET",
+             "extra_headers": {"x-csrf-token": "ok", "Cookie": "c=SECRET", "Authorization": "Bearer S"}}
+    clean, removed = wizard.sanitize_target(dirty)
+    assert "cookie" not in clean
+    assert clean["extra_headers"] == {"x-csrf-token": "ok"}
+    assert "cookie" in removed and any("Cookie" in r for r in removed) and any("Authorization" in r for r in removed)
 
 
 # --- save --------------------------------------------------------------------
 
-def test_write_target_appends_and_keeps_cookie_out_of_config(tmp_path):
+def test_write_target_appends_list_and_keeps_cookie_out_of_config(tmp_path):
     cfg = tmp_path / "targets.json"
     env = tmp_path / ".env.capture"
     target = {"name": "lindy", "base_url": "https://chat.lindy.ai", "api_style": "template",
               "cookie_env": "LINDY_COOKIE", "authorized": False}
     res = wizard.write_target(target, "sess=SECRET", config_path=str(cfg),
                               env_path=str(env), repo_root=str(tmp_path))
+    written = json.loads(cfg.read_text())
+    assert isinstance(written, list) and written[0]["name"] == "lindy"   # loader-consumable shape
     assert "SECRET" not in cfg.read_text()               # cookie never in committed config
     assert "LINDY_COOKIE=sess=SECRET" in env.read_text()  # cookie in the env file only
     assert ".env.capture" in (tmp_path / ".gitignore").read_text()   # env file gitignored
     assert res["added"] == "lindy"
 
 
+def test_write_target_sanitizes_smuggled_cookie_in_edited_target(tmp_path):
+    cfg = tmp_path / "targets.json"
+    # a hand-edited target that tries to smuggle a cookie into the committed config
+    target = {"name": "x", "api_style": "template", "cookie": "sess=SMUGGLED",
+              "extra_headers": {"Cookie": "c=SMUGGLED", "x-csrf-token": "keep"}}
+    res = wizard.write_target(target, "", config_path=str(cfg),
+                              env_path=str(tmp_path / ".env"), repo_root=str(tmp_path))
+    text = cfg.read_text()
+    assert "SMUGGLED" not in text                        # sanitized at the write boundary
+    assert "keep" in text                                # non-secret header preserved
+    assert any("stripped credential" in w for w in res["warnings"])
+
+
 def test_write_target_refuses_name_clobber(tmp_path):
     cfg = tmp_path / "targets.json"
-    cfg.write_text(json.dumps({"targets": [{"name": "lindy"}]}))
+    cfg.write_text(json.dumps([{"name": "lindy"}]))      # loader shape = list
     with pytest.raises(ValueError):
         wizard.write_target({"name": "lindy"}, "", config_path=str(cfg),
                             env_path=str(tmp_path / ".env"), repo_root=str(tmp_path))
@@ -237,13 +270,12 @@ def test_wizard_get_renders_form():
     assert r.status_code == 200 and b"Add-target wizard" in r.data
 
 
-def test_wizard_post_previews_and_hides_cookie_from_editable_target():
+def test_wizard_post_previews_and_never_reflects_cookie():
     r = _client().post("/wizard", data={"name": "demo", "prompt": "fingerprint me",
                                          "fmt": "curl", "capture": _CURL})
     assert r.status_code == 200 and b"Confirm" in r.data and b"__PROMPT__" in r.data
-    # the editable target JSON (after the target textarea marker) must not carry the cookie
-    editable = r.data.split(b"name=target")[-1]
-    assert b"LEAKME" not in editable
+    assert b"LEAKME" not in r.data          # cookie NOWHERE in the response (no hidden round-trip)
+    assert b"name=token" in r.data          # server-side stash token instead
 
 
 def test_wizard_post_bad_capture_shows_error():
@@ -252,7 +284,16 @@ def test_wizard_post_bad_capture_shows_error():
     assert r.status_code == 200 and b"Could not parse capture" in r.data
 
 
-def test_wizard_save_rejects_bad_json():
-    r = _client().post("/wizard/save", data={"fmt": "curl", "capture": _CURL,
-                                             "prompt": "fingerprint me", "target": "{not json"})
+def test_wizard_save_expired_token():
+    r = _client().post("/wizard/save", data={"token": "nope", "target": "{}"})
+    assert r.status_code == 200 and b"expired" in r.data
+
+
+def test_wizard_save_rejects_bad_json_with_valid_token():
+    import re as _re
+    c = _client()
+    prev = c.post("/wizard", data={"name": "demo", "prompt": "fingerprint me",
+                                   "fmt": "curl", "capture": _CURL})
+    token = _re.search(rb'name=token value="([0-9a-f]+)"', prev.data).group(1).decode()
+    r = c.post("/wizard/save", data={"token": token, "target": "{not json"})
     assert r.status_code == 200 and b"not valid JSON" in r.data

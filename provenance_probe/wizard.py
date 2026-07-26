@@ -138,12 +138,15 @@ def parse_har(text: str, prompt_hint: str = "") -> Captured:
         har = json.loads(text)
     except json.JSONDecodeError as e:
         raise ValueError(f"not valid HAR JSON: {e}") from e
-    entries = (((har or {}).get("log") or {}).get("entries")) or []
+    if not isinstance(har, dict):
+        raise ValueError("HAR root is not an object")
+    entries = (((har.get("log") or {}) if isinstance(har.get("log"), dict) else {}).get("entries")) or []
+    entries = [e for e in entries if isinstance(e, dict)]
     if not entries:
-        raise ValueError("HAR has no entries")
+        raise ValueError("HAR has no usable entries")
 
     def _score(entry) -> tuple:
-        req = entry.get("request") or {}
+        req = entry.get("request") if isinstance(entry.get("request"), dict) else {}
         method = (req.get("method") or "").upper()
         body = ((req.get("postData") or {}).get("text")) or ""
         url = req.get("url") or ""
@@ -157,6 +160,8 @@ def parse_har(text: str, prompt_hint: str = "") -> Captured:
         raise ValueError("no POST chat request found in HAR (websocket/GET app?)")
     headers, cookie = {}, ""
     for h in req.get("headers") or []:
+        if not isinstance(h, dict):
+            continue
         name, val = h.get("name", ""), h.get("value", "")
         if name.lower() == "cookie":
             cookie = val
@@ -166,7 +171,7 @@ def parse_har(text: str, prompt_hint: str = "") -> Captured:
     resp_text = ((resp.get("content") or {}).get("text")) or ""
     resp_ct = ""
     for h in resp.get("headers") or []:
-        if h.get("name", "").lower() == "content-type":
+        if isinstance(h, dict) and h.get("name", "").lower() == "content-type":
             resp_ct = h.get("value", "")
     resp_json = None
     try:
@@ -346,7 +351,7 @@ def dry_run(client, probes=None) -> dict:
     Returns {ok, usage_exposed, replay_safe, prompt_tokens, error}.
     """
     probes = probes or ["Say hi.", "Reply with the word ok."]
-    seen = []
+    seen, got_reply = [], 0
     for text in probes[:2]:
         r = client.chat(text, max_tokens=1, temperature=0.0)
         if not r.ok():
@@ -354,12 +359,29 @@ def dry_run(client, probes=None) -> dict:
                     "prompt_tokens": None,
                     "error": f"probe returned HTTP {r.status} — capture may be stale "
                              f"(cookie expired / stateful request); re-capture."}
+        if (r.text() or "").strip():
+            got_reply += 1
         seen.append(r.usage_prompt_tokens())
+    if got_reply == 0:
+        return {"ok": False, "usage_exposed": False, "replay_safe": False,
+                "prompt_tokens": None,
+                "error": "endpoint returned no reply text on either probe — the "
+                         "response paths are likely wrong, or the app didn't answer; "
+                         "re-check response_text_path / re-capture."}
     usable = [n for n in seen if n is not None]
     usage_exposed = len(usable) == len(seen) and bool(usable)
-    # Two different one-token prompts should give close prompt-token counts; a
-    # wildly different or missing second count signals stateful/append behavior.
-    replay_safe = usage_exposed and max(usable) - min(usable) <= 3 if usable else False
+    # Replay-safety: both probes must have replied independently. If usage is
+    # exposed, the two one-token prompts should give close counts (a wild swing =
+    # stateful/append). Usage-suppressed-but-both-replied is DEGRADED yet stateless
+    # -> still safe to save. Inconsistent exposure (one count, one not) = unsafe.
+    if got_reply < 2:
+        replay_safe = False
+    elif len(usable) == 2:
+        replay_safe = max(usable) - min(usable) <= 3
+    elif len(usable) == 0:
+        replay_safe = True
+    else:
+        replay_safe = False
     return {"ok": True, "usage_exposed": usage_exposed, "replay_safe": replay_safe,
             "prompt_tokens": usable, "error": None}
 
@@ -383,34 +405,86 @@ def ensure_gitignored(repo_root: str, rel_path: str) -> None:
             f.write(f"# add-target wizard: captured session credentials — never commit\n{rel_path}\n")
 
 
+# Config keys / header names that carry credentials and must NEVER be written
+# to the committed config, no matter what the (possibly hand-edited) target says.
+_SECRET_HEADER_RE = re.compile(
+    r"^(cookie|authorization|proxy-authorization|x-api-key|x-auth|x-goog-api-key)$",
+    re.IGNORECASE,
+)
+
+
+def sanitize_target(target: dict) -> tuple[dict, list]:
+    """Strip credential-bearing fields from a target before it is committed.
+
+    Runs at the write boundary so a hand-edited or injected target dict can't
+    smuggle a `cookie` value or a Cookie/Authorization header into the config
+    (design D3 + Codex). Returns (clean_copy, removed_field_names).
+    """
+    clean = dict(target)
+    removed = []
+    if clean.pop("cookie", None):
+        removed.append("cookie")
+    eh = clean.get("extra_headers")
+    if isinstance(eh, dict):
+        kept = {}
+        for k, v in eh.items():
+            if _SECRET_HEADER_RE.match(str(k).strip()):
+                removed.append(f"extra_headers.{k}")
+            else:
+                kept[k] = v
+        clean["extra_headers"] = kept
+    return clean, removed
+
+
+def _is_git_tracked(path: str) -> bool:
+    import subprocess
+    try:
+        r = subprocess.run(["git", "ls-files", "--error-unmatch", path],
+                           capture_output=True, cwd=os.path.dirname(path) or ".", timeout=5)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def write_target(target: dict, cookie_value: str, *, config_path: str,
                  env_path: str, repo_root: str) -> dict:
     """Append the target to a JSON config (no-clobber on name) and write the
     cookie to a gitignored env file. The cookie NEVER enters `config_path`.
-    Returns {config_path, env_path, cookie_env, added}.
+
+    The config is written as a JSON LIST (the shape `config.load_targets`
+    consumes). The target is sanitized first so no credential can reach the
+    committed file even if the caller edited it. Returns a summary dict.
     """
     import os
-    name = target.get("name") or "target"
-    # config: load existing list-or-{"targets":[...]}, refuse to clobber a name.
-    existing = {"targets": []}
+    clean, removed = sanitize_target(target)
+    name = clean.get("name") or "target"
+    # config.load_targets accepts a JSON list (or a lone dict = one target).
+    existing = []
     if os.path.exists(config_path):
         with open(config_path) as f:
             loaded = json.load(f)
-        existing = loaded if isinstance(loaded, dict) else {"targets": loaded}
-    targets = existing.setdefault("targets", [])
-    if any((t.get("name") == name) for t in targets):
+        existing = loaded if isinstance(loaded, list) else [loaded]
+    if any(isinstance(t, dict) and t.get("name") == name for t in existing):
         raise ValueError(f"a target named '{name}' already exists in {config_path}; "
                          f"choose a distinct name (no clobber).")
-    targets.append(target)
+    existing.append(clean)
     os.makedirs(os.path.dirname(config_path) or ".", exist_ok=True)
     with open(config_path, "w") as f:
         json.dump(existing, f, indent=2)
 
+    warnings = []
+    if removed:
+        warnings.append(f"stripped credential field(s) from the saved config: "
+                        f"{', '.join(removed)} (kept out of git).")
     # cookie -> gitignored env file (KEY=VALUE), and make sure it's ignored.
-    cookie_env = target.get("cookie_env") or "TARGET_COOKIE"
+    cookie_env = clean.get("cookie_env") or "TARGET_COOKIE"
     if cookie_value:
         env_rel = os.path.relpath(env_path, repo_root) if repo_root else os.path.basename(env_path)
         ensure_gitignored(repo_root or os.path.dirname(env_path), env_rel)
+        if _is_git_tracked(env_path):
+            warnings.append(f"WARNING: {env_rel} is already git-tracked — the .gitignore "
+                            f"line won't help; run `git rm --cached {env_rel}` or the cookie "
+                            f"WILL be committed.")
         prior = ""
         if os.path.exists(env_path):
             with open(env_path) as f:
@@ -421,4 +495,4 @@ def write_target(target: dict, cookie_value: str, *, config_path: str,
                 f.write("\n")
             f.write(f"{cookie_env}={cookie_value}\n")
     return {"config_path": config_path, "env_path": env_path if cookie_value else None,
-            "cookie_env": cookie_env, "added": name}
+            "cookie_env": cookie_env, "added": name, "warnings": warnings}
