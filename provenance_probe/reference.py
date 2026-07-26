@@ -83,9 +83,13 @@ def build_from_endpoint(client, label, family, origin, out=OUT, overwrite=False)
                          f"errors: {list(vec.get('errors', {}))[:3]}). "
                          f"Is prompt_tokens usage exposed?")
     existing = ref["models"].get(label)
-    if existing and existing.get("source") not in (None, "live-first-party-api") and not overwrite:
+    # Only re-measuring our own live entry is allowed silently. GGUF entries carry
+    # no `source` field, so `None` must be PROTECTED, not treated as re-writable —
+    # otherwise --label Qwen2/Qwen2.5 could clobber a real CN reference vector.
+    if existing and existing.get("source") != "live-first-party-api" and not overwrite:
         raise SystemExit(f"[!] '{label}' already exists from source "
-                         f"'{existing.get('source')}'. Pass overwrite=True to replace it.")
+                         f"'{existing.get('source')}' (GGUF/tiktoken entries have no "
+                         f"source field). Pass overwrite=True to replace it.")
     host = getattr(getattr(client, "t", None), "base_url", "") or ""
     ref["models"][label] = {
         "label": label, "family": family, "origin": origin,

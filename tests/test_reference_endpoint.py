@@ -65,8 +65,19 @@ def test_build_from_endpoint_refuses_unusable(tmp_path):
 
 def test_build_from_endpoint_protects_foreign_source(tmp_path):
     out = _seed_ref(tmp_path, models={"Claude": {"source": "tiktoken", "vector": {}}})
-    with pytest.raises(SystemExit):                 # won't clobber a GGUF/tiktoken entry
+    with pytest.raises(SystemExit):                 # won't clobber a tiktoken entry
         reference.build_from_endpoint(_Client(), label="Claude", family="C", origin="US", out=out)
+
+
+def test_build_from_endpoint_protects_sourceless_gguf_entry(tmp_path):
+    # GGUF-derived entries carry NO `source` field; they must still be protected.
+    out = _seed_ref(tmp_path, models={"Qwen2/Qwen2.5": {"family": "Qwen", "origin": "CN",
+                                                        "vector": {"a": 1}}})
+    with pytest.raises(SystemExit):
+        reference.build_from_endpoint(_Client(), label="Qwen2/Qwen2.5", family="X",
+                                      origin="US", out=out)
+    # the original CN entry is untouched
+    assert json.loads(open(out).read())["models"]["Qwen2/Qwen2.5"]["origin"] == "CN"
 
 
 def test_build_from_endpoint_reruns_over_own_source(tmp_path):
