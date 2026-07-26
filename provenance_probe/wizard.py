@@ -1,0 +1,329 @@
+"""Add-a-target wizard: parse a captured web-app request and synthesize a
+`template` Target config for probing.
+
+Paste-first v1 (design 2026-07-26): the operator captures ONE real chat request
+in their own browser (DevTools -> Copy-as-cURL, or Save HAR) and pastes it; this
+module parses it and synthesizes a `template`-adapter target + a dry-run-ready
+spec. No browser automation, no network. Playwright auto-capture is a P2 add-on
+that would feed the same `synthesize()`.
+
+SECURITY (design D3): the session cookie is a credential. `synthesize()` returns
+the committable config and the cookie VALUE as SEPARATE fields. The cookie value
+is NEVER placed in the returned `target` dict — the config carries only
+`cookie_env` (a name). The caller writes the value to a gitignored env file.
+
+Synthesis is best-effort and every guessed field is returned for the operator to
+confirm/edit — never trusted silently (design: response-path synthesis is
+inherently brittle).
+"""
+from __future__ import annotations
+
+import json
+import re
+import shlex
+from dataclasses import dataclass, field
+from urllib.parse import urlsplit
+
+# Body keys that carry per-conversation state. Replaying a captured request 20x
+# (the tokenizer battery) with a frozen conversation/message id can fail or
+# append to the operator's real chat, so we blank them and warn (design: replay
+# safety is P1). Matched case-insensitively as whole-ish tokens.
+_STATEFUL_KEY_RE = re.compile(
+    r"(conversation|thread|message|parent|session|request|idempotenc|nonce|trace)"
+    r".*(id|key|token)$|^(id|nonce|timestamp|ts)$",
+    re.IGNORECASE,
+)
+
+# Request headers worth carrying to make replay work (CSRF / origin / tenant).
+# Cookie is handled separately (-> cookie_env); hop-by-hop / volatile are dropped.
+_KEEP_HEADER_RE = re.compile(
+    r"^(x-csrf|x-xsrf|csrf|origin|referer|x-request|x-tenant|x-org|"
+    r"x-client|anthropic-version|openai-|x-api|x-requested-with)",
+    re.IGNORECASE,
+)
+_DROP_HEADERS = {
+    "host", "content-length", "connection", "accept-encoding", "cookie",
+    "authorization",  # captured separately if present; never auto-committed
+}
+# Header values that look dynamic/rotating -> replay may break; flag them.
+_DYNAMIC_HEADER_RE = re.compile(r"^(x-csrf|x-xsrf|csrf|x-request|nonce)", re.IGNORECASE)
+
+_USAGE_KEY_RE = re.compile(r"(prompt_tokens|input_tokens|prompt_token_count)$", re.IGNORECASE)
+_MODEL_VALUE_RE = re.compile(r"^[\w.:-]+$")  # a model-id-looking scalar
+
+
+@dataclass
+class Captured:
+    """One captured chat request (+ its response, if a HAR provided it)."""
+    url: str
+    method: str = "POST"
+    headers: dict = field(default_factory=dict)
+    body: str = ""                      # raw request body text
+    cookie: str = ""                    # raw Cookie header value (credential)
+    response: object = None             # parsed response JSON, if available
+    content_type: str = ""              # response content-type (for SSE detect)
+
+
+@dataclass
+class Synthesis:
+    """Result of synthesize(): a committable target + the cookie held apart."""
+    target: dict                        # committable config (NO cookie value)
+    cookie_value: str                   # the credential — caller stores in env, never commits
+    cookie_env: str                     # env var name the config references
+    warnings: list                      # operator-facing caveats (each a string)
+    fields_to_confirm: list             # synthesized fields the operator should verify
+
+
+# --------------------------------------------------------------------------- #
+# Parsers
+# --------------------------------------------------------------------------- #
+
+def parse_curl(text: str) -> Captured:
+    """Parse a `curl '...'` command (DevTools 'Copy as cURL').
+
+    Handles -X/--request, -H/--header, --data/--data-raw/--data-binary/-d,
+    -b/--cookie, and the URL as the lone bare argument.
+    """
+    text = text.strip()
+    if not text:
+        raise ValueError("empty cURL input")
+    # Normalize line-continuations, then shell-tokenize so quotes are honored.
+    text = re.sub(r"\\\r?\n", " ", text)
+    try:
+        toks = shlex.split(text)
+    except ValueError as e:
+        raise ValueError(f"could not parse cURL (unbalanced quotes?): {e}") from e
+    if toks and toks[0] == "curl":
+        toks = toks[1:]
+
+    url, method, body, cookie = "", "", "", ""
+    headers: dict = {}
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        if t in ("-X", "--request") and i + 1 < len(toks):
+            method = toks[i + 1]; i += 2; continue
+        if t in ("-H", "--header") and i + 1 < len(toks):
+            k, _, v = toks[i + 1].partition(":")
+            k, v = k.strip(), v.strip()
+            if k.lower() == "cookie":
+                cookie = v
+            elif k:
+                headers[k] = v
+            i += 2; continue
+        if t in ("-b", "--cookie") and i + 1 < len(toks):
+            cookie = toks[i + 1]; i += 2; continue
+        if t in ("--data", "--data-raw", "--data-binary", "--data-ascii", "-d") and i + 1 < len(toks):
+            body = toks[i + 1]; i += 2; continue
+        if t.startswith("http://") or t.startswith("https://"):
+            url = t; i += 1; continue
+        i += 1
+
+    if not url:
+        raise ValueError("no URL found in cURL input")
+    if not method:
+        method = "POST" if body else "GET"
+    return Captured(url=url, method=method, headers=headers, body=body, cookie=cookie)
+
+
+def parse_har(text: str, prompt_hint: str = "") -> Captured:
+    """Parse a HAR export and pick the best chat-request entry.
+
+    Preference: a POST whose request body contains `prompt_hint` (the message
+    the operator sent); else a POST with a JSON body to a chat-ish path; else
+    the first POST with a body. HAR uniquely also carries the RESPONSE body,
+    which lets synthesize() locate the reply/usage/model paths.
+    """
+    try:
+        har = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"not valid HAR JSON: {e}") from e
+    entries = (((har or {}).get("log") or {}).get("entries")) or []
+    if not entries:
+        raise ValueError("HAR has no entries")
+
+    def _score(entry) -> tuple:
+        req = entry.get("request") or {}
+        method = (req.get("method") or "").upper()
+        body = ((req.get("postData") or {}).get("text")) or ""
+        url = req.get("url") or ""
+        has_prompt = bool(prompt_hint) and prompt_hint in body
+        looks_chat = bool(re.search(r"chat|complet|message|conversation|generate|ask", url, re.I))
+        return (has_prompt, method == "POST" and bool(body), looks_chat, len(body))
+
+    entry = max(entries, key=_score)
+    req = entry.get("request") or {}
+    if (req.get("method") or "").upper() != "POST":
+        raise ValueError("no POST chat request found in HAR (websocket/GET app?)")
+    headers, cookie = {}, ""
+    for h in req.get("headers") or []:
+        name, val = h.get("name", ""), h.get("value", "")
+        if name.lower() == "cookie":
+            cookie = val
+        elif name and not name.startswith(":"):   # skip HTTP/2 pseudo-headers
+            headers[name] = val
+    resp = entry.get("response") or {}
+    resp_text = ((resp.get("content") or {}).get("text")) or ""
+    resp_ct = ""
+    for h in resp.get("headers") or []:
+        if h.get("name", "").lower() == "content-type":
+            resp_ct = h.get("value", "")
+    resp_json = None
+    try:
+        resp_json = json.loads(resp_text) if resp_text else None
+    except json.JSONDecodeError:
+        resp_json = None   # streamed/SSE or non-JSON; handled downstream
+    return Captured(
+        url=req.get("url", ""), method="POST", headers=headers,
+        body=((req.get("postData") or {}).get("text")) or "",
+        cookie=cookie, response=resp_json, content_type=resp_ct,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Dotted-path search (for response field synthesis)
+# --------------------------------------------------------------------------- #
+
+def _walk(obj, prefix=""):
+    """Yield (dotted_path, value) for every scalar-bearing node."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            yield from _walk(v, f"{prefix}.{k}" if prefix else str(k))
+    elif isinstance(obj, list):
+        for idx, v in enumerate(obj):
+            yield from _walk(v, f"{prefix}.{idx}" if prefix else str(idx))
+    else:
+        yield prefix, obj
+
+
+def find_text_path(resp, reply_text: str) -> str | None:
+    """Path whose string value equals (or contains) the assistant reply."""
+    if resp is None or not reply_text:
+        return None
+    norm = " ".join(reply_text.split())
+    best = None
+    for path, val in _walk(resp):
+        if isinstance(val, str) and val.strip():
+            v = " ".join(val.split())
+            if v == norm:
+                return path
+            if norm and (norm in v or v in norm) and len(v) >= 8:
+                best = best or path
+    return best
+
+
+def find_usage_path(resp) -> str | None:
+    for path, val in _walk(resp or {}):
+        leaf = path.rsplit(".", 1)[-1]
+        if isinstance(val, int) and _USAGE_KEY_RE.search(leaf):
+            return path
+    return None
+
+
+def find_model_path(resp) -> str | None:
+    for path, val in _walk(resp or {}):
+        leaf = path.rsplit(".", 1)[-1]
+        if leaf.lower() == "model" and isinstance(val, str) and _MODEL_VALUE_RE.match(val):
+            return path
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# Synthesis
+# --------------------------------------------------------------------------- #
+
+def _templatize(node, prompt_text, warnings):
+    """Deep-copy the request body, swapping the prompt + stripping stateful ids."""
+    if isinstance(node, dict):
+        out = {}
+        for k, v in node.items():
+            if _STATEFUL_KEY_RE.search(k):
+                warnings.append(f"blanked stateful field '{k}' (replay-safety); "
+                                f"confirm the app accepts a fresh/empty value")
+                out[k] = ""
+            else:
+                out[k] = _templatize(v, prompt_text, warnings)
+        return out
+    if isinstance(node, list):
+        return [_templatize(v, prompt_text, warnings) for v in node]
+    if isinstance(node, str) and prompt_text and node == prompt_text:
+        return "__PROMPT__"
+    if isinstance(node, str) and prompt_text and prompt_text in node:
+        return node.replace(prompt_text, "__PROMPT__")
+    return node
+
+
+def synthesize(cap: Captured, prompt_text: str, name: str) -> Synthesis:
+    """Turn a Captured request into a committable `template` target + held cookie."""
+    warnings: list = []
+    confirm: list = []
+    parts = urlsplit(cap.url)
+    base_url = f"{parts.scheme}://{parts.netloc}"
+    chat_path = parts.path or "/"
+
+    body_json = None
+    if cap.body:
+        try:
+            body_json = json.loads(cap.body)
+        except json.JSONDecodeError:
+            warnings.append("request body is not JSON — the template adapter needs "
+                            "a JSON body; this app may be unsupported (form/multipart/ws).")
+    request_template = _templatize(body_json, prompt_text, warnings) if body_json is not None else {}
+    if body_json is not None and json.dumps(request_template) == json.dumps(body_json):
+        warnings.append("could not locate the prompt text in the request body — "
+                        "set the __PROMPT__ placeholder by hand.")
+    confirm.append("request_template")
+
+    # Response field paths (only when a HAR gave us the response body).
+    text_path = find_text_path(cap.response, "") if cap.response else ""
+    resp_text_path = find_text_path(cap.response, prompt_text) or "" if cap.response else ""
+    usage_path = find_usage_path(cap.response) if cap.response else ""
+    model_path = find_model_path(cap.response) if cap.response else ""
+    if cap.response is None:
+        warnings.append("no response body captured (cURL paste) — set "
+                        "response_text_path / response_prompt_tokens_path by hand, "
+                        "or paste a HAR so they can be synthesized.")
+    if cap.response is not None and not usage_path:
+        warnings.append("no prompt-token usage found in the response — the tokenizer "
+                        "fingerprint will be UNAVAILABLE; provenance floors at "
+                        "INDETERMINATE (wire/behavioral only).")
+    for f in ("response_text_path", "response_prompt_tokens_path", "response_model_path"):
+        confirm.append(f)
+
+    stream_mode = "sse" if "text/event-stream" in (cap.content_type or "").lower() else "none"
+    if stream_mode == "sse":
+        warnings.append("response is SSE — set stream_delta_path to the per-chunk "
+                        "delta; the shipped parser handles `data:` JSON chunks only.")
+
+    extra_headers = {}
+    for k, v in (cap.headers or {}).items():
+        if k.lower() in _DROP_HEADERS:
+            continue
+        if _KEEP_HEADER_RE.match(k):
+            extra_headers[k] = v
+            if _DYNAMIC_HEADER_RE.match(k):
+                warnings.append(f"header '{k}' looks dynamic/rotating — replay may "
+                                f"fail when it expires; re-capture if probes 401.")
+
+    cookie_env = re.sub(r"[^A-Z0-9]", "_", (name or "target").upper()) + "_COOKIE"
+    if not cap.cookie:
+        warnings.append("no Cookie captured — if the app is authenticated the probe "
+                        "will fail; re-capture a logged-in request.")
+
+    target = {
+        "name": name,
+        "base_url": base_url,
+        "chat_path": chat_path,
+        "api_style": "template",
+        "request_template": request_template,
+        "response_text_path": resp_text_path or text_path or "",
+        "response_prompt_tokens_path": usage_path or "",
+        "response_model_path": model_path or "",
+        "stream_mode": stream_mode,
+        "stream_delta_path": "",
+        "cookie_env": cookie_env,          # NAME only — never the value
+        "extra_headers": extra_headers,
+        "authorized": False,               # design: never auto-authorize probing
+    }
+    return Synthesis(target=target, cookie_value=cap.cookie, cookie_env=cookie_env,
+                     warnings=warnings, fields_to_confirm=confirm)
