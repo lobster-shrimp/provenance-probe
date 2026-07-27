@@ -121,6 +121,10 @@ Reports persist to `/data` in the container (`~/.provenance-probe/reports` local
 - **🧙 Add target** (`/wizard`) — paste a Copy-as-cURL / HAR from any web-app chat, and it auto-builds a probe target, dry-runs it, and stores the session cookie in a gitignored file (never committed).
 - **🤖 Agent board** (`/agent`) — paste an agent trace (OpenTelemetry GenAI or minimal JSON) for a per-step provenance + model-switch + tool-egress board.
 
+![the add-target wizard: paste a captured request, get a synthesized probe target](docs/media/wizard-demo.gif)
+
+*The wizard synthesizes a `template` target from a pasted request — note it blanks the stateful `conversation_id` for replay-safety, flags the rotating CSRF header, and keeps the session cookie out of the config entirely.*
+
 ## 🧰 Commands
 
 | Command | Purpose |
@@ -133,6 +137,14 @@ Reports persist to `/data` in the container (`~/.provenance-probe/reports` local
 | `monitor` | Diff two runs; **exit 2 on drift** — wire into CI to catch silent swaps |
 | `build-reference` / `build-reference-endpoint` / `verify-reference` | Manage the tokenizer reference corpus |
 | `init` | Write an example `targets.json` |
+
+### 🛰️ Live agent flight recorder (`sentinel`)
+
+Point an agent's `base_url` at the sentinel; it tees every model call, fingerprints in parallel, and serves a live board (`/agent/live`) that updates as calls arrive:
+
+![the sentinel live board updating as an agent makes calls through the proxy](docs/media/sentinel-board.gif)
+
+*The board ticks up live (3 → 4 steps here) with a plain-language "what happened / what the tool did" summary. A passive proxy can't run the tokenizer probe, so trace-only provenance honestly floors at INDETERMINATE — only the active backend probe reaches CONFIRMED.*
 
 ## 🔒 Scope & authorization
 
