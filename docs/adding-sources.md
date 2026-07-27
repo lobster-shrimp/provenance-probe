@@ -96,6 +96,11 @@ field automatically — no config needed.
 Browser chat apps aren't clean REST APIs: custom bodies, cookie auth, SSE. The
 `template` adapter drives any of them from one captured request.
 
+> **Easiest path — the wizard.** `provenance-probe serve` → **Add target** (`/wizard`)
+> parses a pasted Copy-as-cURL / HAR and synthesizes the `template` target below
+> for you, dry-runs it, and stores the session cookie in a gitignored `.env.capture`
+> (never in the config). The manual steps below are what the wizard automates.
+
 ### 1. Capture a real request
 
 Open the app, send a message, and in DevTools → Network grab the chat request
