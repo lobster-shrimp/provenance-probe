@@ -79,17 +79,27 @@ provenance-probe build-reference   # optional: extend the reference corpus (need
 <details>
 <summary><b>🪟 Windows (PowerShell)</b></summary>
 
-`install.sh` is bash-only, so install manually:
+**📖 Full walkthrough with prerequisites, WSL2 & Docker options, and troubleshooting: [docs/INSTALL-WINDOWS.md](docs/INSTALL-WINDOWS.md).**
+
+**Prerequisites** (once): install **Python 3.12** (not the newest — best wheel coverage) and **Git**:
+
+```powershell
+winget install Python.Python.3.12
+winget install Git.Git
+```
+
+Then, in a fresh PowerShell (`install.sh` is bash-only, so install manually — no C++ compiler needed, everything ships as wheels):
 
 ```powershell
 git clone https://github.com/lobster-shrimp/provenance-probe; cd provenance-probe
-py -3 -m venv .venv
-.\.venv\Scripts\Activate.ps1
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1        # if blocked: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+pip install --upgrade pip
 pip install -e ".[reference]"
-provenance-probe serve             # http://127.0.0.1:8770
+provenance-probe serve              # http://127.0.0.1:8770
 ```
 
-The 11 GGUF-derived reference families ship pre-built, so you can probe immediately. `build-reference` (to add more families) needs a HuggingFace account. WSL2 users can follow the Linux path instead.
+The 11 GGUF-derived reference families ship pre-built, so you can probe immediately. Prefer a Linux-parity experience (one-command `./install.sh` + the full demo)? Use **WSL2** — see the guide.
 </details>
 
 <details>
