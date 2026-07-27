@@ -1,397 +1,142 @@
-# provenance-probe
+<div align="center">
 
-Black-box assurance harness for determining **which model is actually serving your requests**, and whether it is Chinese-origin or PRC-jurisdiction — including when a vendor is silently routing, swapping, or rebranding.
+# 🕵️ provenance-probe
 
-> **New to this?** Read the **[whitepaper](WHITEPAPER.md)** — the problem, the
-> solution, the technical detail, and why it's open source (written for
-> consumers, security practitioners, legal/compliance, and policy makers).
+### A lie detector for AI APIs — find out *which model is actually serving you*, and whether it's **Chinese-origin** or running under **PRC jurisdiction**.
 
-> **Scope control.** Only run against systems you are authorized in writing to test. Targets carry an `authorized` flag; active probing aborts without it. The behavioral probes send politically sensitive prompts — get that into your test authorization explicitly.
+Vendors can silently swap models, reroute your requests, or resell a Chinese model under a Western name. `provenance-probe` catches it with black-box measurements — **no vendor cooperation, no API key for the demo, runs 100% on your machine.**
 
-> **Companion project — [provenance-observatory](https://github.com/lobster-shrimp/provenance-observatory).**
-> This repo is the **engine + CLI + local web UI**: a point-in-time assessment you
-> run against an endpoint or web app you're authorized to test. The
-> **Observatory** is the **continuous, public monitoring layer** built on top of
-> it — nightly probes, a signed append-only evidence log, disclosure-gated
-> advisories, and a published site. Same fingerprinting core, two use cases. See
-> [Documentation & related project](#documentation--related-project) below.
+![python](https://img.shields.io/badge/python-3.10%2B-blue)
+![version](https://img.shields.io/badge/version-0.10.0-informational)
+![tests](https://img.shields.io/badge/tests-179%20passing-brightgreen)
+![tokenizer families](https://img.shields.io/badge/reference%20families-27-blueviolet)
+![local](https://img.shields.io/badge/runs-100%25%20local-success)
 
-## In plain terms
+![provenance-probe unmasking a Chinese model hiding behind a US name](docs/media/unmask-cn-model.gif)
 
-When you pay for an AI model through an API, you are trusting the vendor to
-actually run the model they advertise. They might quietly swap in a cheaper or
-different model, route your requests to someone else's servers, or resell a
-Chinese-made model under a Western-sounding name — and you would usually have no
-way to tell.
+*Above: a vendor's `northstar-secure-1` is fingerprinted as **Qwen2 (Chinese-origin), 20/20 exact match** — with no API key.*
 
-This tool is a lie detector for that situation. It sends an AI endpoint a set of
-carefully chosen text snippets and watches *how the model chops the text into
-pieces* (its "tokenizer"). Every model family does this slightly differently,
-like a fingerprint, and it is very hard to fake without breaking the service.
-From that fingerprint plus other signals, the tool estimates two separate
-things:
+</div>
 
-- **Who is running it** — is inference happening on servers in China (which
-  carries legal and data-exposure consequences under PRC law)?
-- **Where the model came from** — are the underlying model weights
-  Chinese-origin, no matter where they are served?
+---
 
-It keeps those two questions apart on purpose (a model can be one without the
-other), reports how confident it is rather than pretending to be certain, and
-can re-check an endpoint over time to catch a silent swap months after you
-signed the contract. It is meant for people doing security, compliance, or
-vendor assessments who need evidence, not vibes.
+## 🤔 The problem
 
-## The two risks it separates
+When you pay for an AI model through an API, you're trusting the vendor to actually run what they advertise. They might quietly swap in a cheaper model, route your requests to someone else's servers, or resell a Chinese-made model under a Western-sounding name — and normally **you have no way to tell.**
 
-The tool never collapses these into one verdict, because controls differ:
+That matters for two very different reasons, and this tool keeps them apart on purpose:
 
-| Risk | Question | Exposure |
+| Risk | The question | Why it bites |
 |---|---|---|
-| **Jurisdictional** | Is inference executed by a PRC-domiciled operator or on PRC soil? | PIPL, DSL, CSL, National Intelligence Law Art. 7 — data egress |
-| **Provenance** | Are the weights Chinese-origin, wherever served? | Embedded alignment/censorship, poisoning, procurement policy |
+| 🌏 **Jurisdiction** | Is inference executed by a PRC-domiciled operator or on PRC soil? | PIPL / DSL / CSL / National Intelligence Law Art. 7 — your data can be compelled |
+| 🧬 **Provenance** | Are the model *weights* Chinese-origin, wherever they run? | Embedded alignment/censorship, poisoning, procurement policy |
 
-A vendor can be clean on one and dirty on the other. Chinese open weights running inside your own accreditation boundary carry **zero** PRC data-jurisdiction exposure — treating that as an egress problem misdirects your controls.
+A vendor can be clean on one and dirty on the other. Chinese open weights running **inside your own boundary** carry zero data-jurisdiction exposure — treating that as an egress problem misdirects your controls. So we never collapse the two into one verdict.
 
-## Deploy locally
+## 💡 How it works
+
+The tool sends an endpoint a set of carefully chosen text snippets and watches **how the model chops text into tokens** — its tokenizer. Every model family does this slightly differently, like a fingerprint, and it's very hard to fake without breaking the service. That fingerprint (plus wire-headers, latency, behavioral and network signals) is matched against **27 real tokenizer families** to estimate provenance and jurisdiction — with an honest confidence label, never false certainty.
+
+It reports in plain language first ("**this app uses an AI model built in China**"), technical evidence below, and can re-check an endpoint over time to catch a **silent swap months after you signed the contract.**
+
+## ⚡ Quick start (60 seconds, no API key)
 
 ```bash
-./install.sh            # venv + install + build tokenizer references
+git clone https://github.com/lobster-shrimp/provenance-probe && cd provenance-probe
+./install.sh                       # venv + install + pre-built reference vectors
 source .venv/bin/activate
-provenance-probe serve  # http://127.0.0.1:8770
+provenance-probe serve             # open http://127.0.0.1:8770
 ```
 
-`install.sh` creates `.venv`, installs the package with its `provenance-probe` entrypoint, pulls the optional tokenizer extras, and attempts `build-reference`. Each step degrades gracefully — if HuggingFace is unreachable the install still succeeds and the tokenizer layer stays inert until you run `build-reference` later.
+`install.sh` degrades gracefully — if HuggingFace is unreachable the install still succeeds (11 real tokenizer families ship pre-built). Try the exact demo from the GIF:
 
-Manual equivalent:
+```bash
+python mock_real_qwen.py &         # a fake "safe US model" that's really Qwen2
+provenance-probe assess --config docs/media/demo-target.json --i-am-authorized --no-behavioral
+```
+
+## 📦 Install — Mac · Linux · Windows
+
+<details open>
+<summary><b>🍎 macOS / 🐧 Linux</b></summary>
+
+```bash
+git clone https://github.com/lobster-shrimp/provenance-probe && cd provenance-probe
+./install.sh                       # one command: venv, package, reference vectors
+source .venv/bin/activate
+provenance-probe --help
+```
+
+Manual (if you want control):
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e '.[reference]'
-provenance-probe build-reference
-provenance-probe serve
+pip install -e '.[reference]'      # '.[reference]' adds the tokenizer extras
+provenance-probe build-reference   # optional: extend the reference corpus (needs HF access)
+```
+</details>
+
+<details>
+<summary><b>🪟 Windows (PowerShell)</b></summary>
+
+`install.sh` is bash-only, so install manually:
+
+```powershell
+git clone https://github.com/lobster-shrimp/provenance-probe; cd provenance-probe
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e ".[reference]"
+provenance-probe serve             # http://127.0.0.1:8770
 ```
 
-Docker:
+The 11 GGUF-derived reference families ship pre-built, so you can probe immediately. `build-reference` (to add more families) needs a HuggingFace account. WSL2 users can follow the Linux path instead.
+</details>
+
+<details>
+<summary><b>🐳 Docker (any OS)</b></summary>
 
 ```bash
-docker compose up --build          # published to 127.0.0.1:8770 only
+docker compose up --build                                   # binds 127.0.0.1:8770 only
 docker compose exec provenance-probe provenance-probe build-reference
 ```
 
-Reports persist to `~/.provenance-probe/reports` (or `/data` under Docker); override with `PROVENANCE_PROBE_HOME`.
+Reports persist to `/data` in the container (`~/.provenance-probe/reports` locally); override with `PROVENANCE_PROBE_HOME`.
+</details>
 
-### The local web UI
+## 🖥️ The local web UI
 
-`provenance-probe serve` gives you the whole harness in a browser: endpoint + model, optional client-source URL or directory, confrontation backend and its false control, proxy, and the advanced toggles. An **Agent board** tab (`/agent`) takes a pasted agent trace and renders the tooltip-rich per-step board with a plain-language "what happened / what the tool did / evidence" summary. It streams progress, then renders the plain-language warning first and the technical detail below it, with a local run history linking to both report formats.
+`provenance-probe serve` (binds to loopback, no auth — keep it local) gives you the whole harness in a browser:
 
-**Deployment notes.** It binds to loopback and has **no authentication** — if you change `--host`, put it behind something that does. The authorization checkbox is enforced server-side, not just in the UI. API keys you enter are held in memory for the run and never written to the report files. Nothing is transmitted anywhere except to the endpoint you name.
+- **Live probe tool** — endpoint + model → streamed multi-layer assessment → plain-language warning + technical report.
+- **🧙 Add target** (`/wizard`) — paste a Copy-as-cURL / HAR from any web-app chat, and it auto-builds a probe target, dry-runs it, and stores the session cookie in a gitignored file (never committed).
+- **🤖 Agent board** (`/agent`) — paste an agent trace (OpenTelemetry GenAI or minimal JSON) for a per-step provenance + model-switch + tool-egress board.
 
-## Install (library / CLI only)
-
-```bash
-pip install -e .
-provenance-probe init
-```
-
-## Quick start
-
-```bash
-# 1. Reference vectors: 11 REAL tokenizers ship pre-built (no HF account needed).
-#    To rebuild or extend them from llama.cpp's bundled GGUF vocabs:
-bash provenance_probe/tools/fetch_gguf_vocabs.sh
-python -m provenance_probe.tools.build_reference_from_gguf
-#    To add families GGUF does not cover (GLM, Yi, InternLM, Gemma, Mistral),
-#    run this on a network with HuggingFace access - it merges, not overwrites:
-provenance-probe build-reference
-
-# 2. Configure targets
-$EDITOR targets.json          # set base_url, model, auth env var, authorized=true
-
-# 3. Full assessment
-export VENDOR_API_KEY=sk-...
-python -m provenance_probe.cli assess --config targets.json --out ./reports --latency
-```
-
-Produces console output plus JSON and standalone HTML per target.
-
-## Commands
+## 🧰 Commands
 
 | Command | Purpose |
 |---|---|
-| `init` | Write an example target config |
-| `build-reference` | Compute local tokenizer reference vectors (the strongest signal) |
-| `build-reference-endpoint` | Measure a reference vector from a live authorized first-party API (families with no published tokenizer, e.g. Claude/Gemini) |
-| `assess` | Full multi-layer assessment |
-| `monitor --baseline A.json --current B.json` | Diff two runs; **exit 2 on drift** — wire this into CI |
-| `transcript <file> --true-origin CN` | Analyze a captured conversation for identity deception + **mid-session model switches** (the z.ai "I am Gemini" → "actually GLM" case); records model-change events, **exit 2** to alert |
-| `session --config t.json --gap-probes N` | Fingerprint a live endpoint at session **start + end**; **exit 2** if the served model **switched mid-session** (a load balancer rotating models within one session) |
-| `sentinel --upstream URL` | **Real-time** in-line guardrail + **agent flight recorder**: OpenAI-compatible reverse proxy the agent routes through. Tees SSE (forwards bytes unchanged, fail-open), passes through all paths, alerts on a mid-session switch (`X-Provenance-Alert` + `/sentinel/events`), and accumulates each call as a step — `GET /agent/report?session=<X-Provenance-Session>` returns the per-step board |
-| `agent-trace <file>` | **Agent** provenance: ingest a captured agent run (OpenTelemetry GenAI spans or minimal JSON) and print a **per-step board** — which model each step ran on, model switches across steps, and where tool calls sent data; the jurisdiction column shows the operator-vs-soil basis (`PRC-soil` / `PRC-operator` / `non-PRC-1p`); **exit 2** on a switch. `--html out.html` writes a report with hover tooltips explaining every term. See [`docs/CONOPS.md`](docs/CONOPS.md) |
-| `agent --config a.json --i-am-authorized` | Config-driven agent assessment: trace ingest + optional **active backend probe** (the only route to CONFIRMED provenance; per-backend authorization enforced) |
-| `redteam --config t.json --i-am-authorized` | Drive an authorized endpoint through an **adversarial corpus** and detect a served-model **switch under stress** (a router swapping to a cheaper/fallback model when pushed); `--cap N` bounds volume; **exit 2** on a switch |
-| `artifacts <dir>` | Inspect on-prem model files; exit 2 on critical findings |
-| `network --host X --hosts-file f` | Jurisdiction-analyze SNI/DNS names harvested from an egress capture |
+| `serve` | Local web UI (probe tool + add-target wizard + agent board) |
+| `assess` | Full multi-layer assessment of a configured target |
+| `agent-trace` / `agent` | Assess an **agent** (trace ingest, or active backend probe) |
+| `sentinel` | Live reverse-proxy flight recorder — tees an agent's model calls, live board |
+| `redteam` | Drive an authorized endpoint through an adversarial corpus; detect a model switch |
+| `monitor` | Diff two runs; **exit 2 on drift** — wire into CI to catch silent swaps |
+| `build-reference` / `build-reference-endpoint` / `verify-reference` | Manage the tokenizer reference corpus |
+| `init` | Write an example `targets.json` |
 
-> **Agent provenance (Phase 1).** The unit of assessment can be an *agent*, not
-> just one endpoint. Trace-only provenance is honest — it floors at INDETERMINATE
-> because a post-hoc trace carries no tokenizer signal; the reliable trace signals
-> are **tool-call egress jurisdiction** and **model switch**. CONFIRMED provenance
-> needs the active backend probe. Full concept of operations for executive /
-> federal audiences: [`docs/CONOPS.md`](docs/CONOPS.md).
+## 🔒 Scope & authorization
 
-## Testing web apps and platform tools (not just OpenAI-style APIs)
+Only run against systems you are **authorized in writing** to test. Targets carry an `authorized` flag and active probing aborts without it. The behavioral probes send politically sensitive prompts — put that in your test authorization explicitly. API keys you enter are held in memory for the run and never written to report files; nothing is sent anywhere except the endpoint you name.
 
-> **Full step-by-step for adding any source (API or web app), the complete
-> `Target` field reference, and troubleshooting:
-> [`docs/adding-sources.md`](docs/adding-sources.md).** The rest of this section
-> is the short version.
+## 📚 Documentation
 
-Many targets are browser-based chat apps (chat.z.ai, and other platform tools),
-not clean OpenAI REST APIs — they use custom request/response shapes, cookie
-sessions, and SSE streaming. Use `api_style: "template"` to drive any of them:
-bring one request captured from the app's browser traffic (DevTools → Network →
-Copy as cURL / the JSON body), and describe where the reply lives.
+- **[WHITEPAPER.md](WHITEPAPER.md)** — the problem, the method, and why it's open (for consumers, security, legal/compliance, policy).
+- **[QUICKSTART.md](QUICKSTART.md)** — project layout and first run.
+- **[docs/adding-sources.md](docs/adding-sources.md)** — point the probe at a new API or web app.
+- **[docs/EXTENDING.md](docs/EXTENDING.md)** — grow coverage: endpoints, web apps, agents, reference families.
+- **[docs/CONOPS.md](docs/CONOPS.md)** — executive / federal concept of operations.
+- **[DISCLOSURE.md](DISCLOSURE.md)** — the full-transparency publication policy.
 
-```json
-{
-  "name": "chat.z.ai",
-  "base_url": "https://chat.z.ai",
-  "chat_path": "/api/paas/v4/chat/completions",
-  "models_path": "/api/paas/v4/models",
-  "api_style": "template",
-  "cookie_env": "ZAI_COOKIE",
-  "request_template": {
-    "model": "glm-4.6",
-    "messages": [{"role": "user", "content": "__PROMPT__"}],
-    "max_tokens": "__MAX_TOKENS__",
-    "temperature": "__TEMPERATURE__"
-  },
-  "response_text_path": "choices.0.message.content",
-  "response_prompt_tokens_path": "usage.prompt_tokens",
-  "response_model_path": "model",
-  "authorized": true
-}
-```
+## 🛰️ Companion — the Observatory
 
-- `__PROMPT__` / `__MAX_TOKENS__` / `__TEMPERATURE__` / `__SYSTEM__` are
-  substituted into `request_template` for each probe (a whole-value
-  placeholder keeps its type; in-string use is stringified).
-- `response_*_path` fields read the reply by dotted path (numeric indices ok),
-  so any nested shape works.
-- For streaming apps set `"stream_mode": "sse"` and `"stream_delta_path":
-  "choices.0.delta.content"` — the per-chunk deltas are accumulated into the
-  full reply for the behavioral layers.
-- Session auth: put the browser `Cookie` header in `cookie` (or, better, an env
-  var via `cookie_env`); add anything else to `extra_headers`.
-
-What works on web apps: the **behavioral and deception layers are the primary
-signal** here (self-ID, persona vs. jurisdiction claims, confrontation, CJK
-leakage) plus network and wire. The tokenizer fingerprint only works if the app
-exposes prompt-token usage; many web apps don't (logged as a transparency
-finding). This is the chat.z.ai case — a GLM backend asserting a Google Gemini
-persona and denying PRC jurisdiction gets caught as a **material
-misrepresentation** even when the tokenizer layer is unavailable.
-
-## Catching a model that switches identity
-
-A model swap happens on four time horizons, and the tool catches each — all
-reduce to the same stable fingerprint + diff:
-
-| Horizon | Command | What it catches |
-|---|---|---|
-| **After the fact** | `transcript <chat.json> --true-origin CN` | Identity flips in a captured conversation (the z.ai "I am Gemini" → "actually GLM" case); records the exact turn + a misrepresentation verdict |
-| **Per run** | `session --config t.json --gap-probes N` | A swap *within one session* (a load balancer rotating models mid-conversation) — fingerprints at session start + end |
-| **Between runs** | `monitor --baseline A.json --current B.json` | A silent backend change day-over-day; exit 2 on drift |
-| **Real time** | `sentinel --upstream URL` | A reverse proxy that alerts (`X-Provenance-Alert` header + `/sentinel/events`) the **instant** the served model switches mid-stream |
-
-Full rationale and the deception model: see the [whitepaper](WHITEPAPER.md) §3.3.
-
-## What each layer does
-
-**Layer 2 — Network / jurisdiction** (`probes/network.py`)
-Resolves the endpoint, matches against ~25 known PRC-operated inference hosts, checks `.cn` TLDs, and does RDAP lookups for CN registration and PRC ASN operators. Also classifies neutral aggregators (OpenRouter, Together, Fireworks, DeepInfra, Bedrock, Vertex…) — these resolve *jurisdiction* but leave *provenance* open.
-
-Point `proxy` at your inspecting proxy in the target config to route probe traffic through your capture. For hosts you harvested from a firewall capture rather than tested directly, use `network --hosts-file`.
-
-**Layer 3 — Wire fingerprint** (`probes/wire.py`)
-Vendor-specific response headers (`x-tt-logid` → ByteDance, `x-ca-request-id` → Alibaba Gateway, `x-bce-request-id` → Baidu, `x-tc-requestid` → Tencent), the echoed `model` field, a hashed error-schema signature from six deliberate malformed requests, SSE chunk structure, and the `/models` catalog scanned for PRC-origin model IDs.
-
-### Reference vector coverage
-
-`data/tokenizer_ref.json` ships **real** production tokenizers, not surrogates —
-25 vectors, each measured over all 20 probes, every vocab size checked against
-its published value. Run `provenance-probe verify-reference` to print the full
-table.
-
-The core set is GGUF-derived (extracted from llama.cpp's bundled vocabs):
-
-| GGUF-derived | Origin | Han tokens/char |
-|---|---|---|
-| Qwen2 / Qwen2.5 | CN | 0.53 |
-| DeepSeek-LLM | CN | 0.55 |
-| DeepSeek-Coder | CN | 0.68 |
-| Command-R | CA | 0.61 |
-| Llama-3 | US | 0.73 |
-| StarCoder · Refact | EU | 0.83 |
-| Falcon | AE | 1.20 |
-| MPT · GPT-NeoX | US | 1.40 |
-| GPT-2 | US | 2.32 |
-
-The families GGUF does not cover are now **also shipped**, built from HuggingFace
-via `build-reference` and merged in: GLM-4.5 and GLM-4-9B (GLM/Zhipu — the one
-that matters most for z.ai-style cases), Yi-1.5, InternLM2.5, MiniCPM3, Qwen3,
-DeepSeek-V3, Moonshot, Baichuan2 (CN); Mistral-v0.3 and Gemma-2 (EU/US); Phi-3.5
-and the OpenAI `cl100k` / `o200k` tiktoken encodings (US). **CN families
-covered: 12.** Every family in the original coverage gap now ships.
-
-Two required a manual `build-reference` step at build time (both now done and
-merged): Gemma-2 is gated (accept Google's licence, set `HF_TOKEN`, then
-`build-reference --only Gemma-2`); Baichuan2 ships a custom tokenizer class
-needing `trust_remote_code`, which `build-reference` refuses by default
-(executing unvetted repo code in a provenance tool is self-defeating) — its
-vector was built in a throwaway container. To rebuild Baichuan2, run
-`build-reference --only Baichuan2 --allow-remote-code` in a disposable
-environment only.
-
-Verified blind: a mock endpoint serving genuine Qwen2 token counts under the brand name `northstar-secure-1` was identified as **Qwen2, 20/20 probes exact, score 1.0**, with next-best Llama-3 at 0.175.
-
-### A correction worth knowing about
-
-An earlier version of this tool used `cjk_dense / cyrillic` as the Han-compression discriminator. Measuring it against real tokenizers showed that was wrong — it conflated Han compression with Cyrillic compression and ranked **Falcon** as more CJK-optimized than Qwen. It is now tokens-per-Han-character, normalized against the probe's actual Han count.
-
-The corrected measurement also demoted the signal. Cohere's **Command-R reaches 0.61**, sitting between the Chinese families and Llama-3 — so low Han cost alone does not establish Chinese origin. Modern multilingual Western models overlap the range. Its scoring weight was cut from 1.8 to 0.9, and it is now explicitly a corroborating signal. The full 20-probe vector match is what identifies a family.
-
-**Layer 4 — Tokenizer fingerprint** (`probes/tokenizer.py`) — *highest signal-to-effort*
-Sends 20 probes engineered to tokenize differently across vocab families, reads `usage.prompt_tokens`, and compares against locally computed reference vectors. Chat-template overhead is auto-corrected via the modal delta. The Han-compression ratio (`cjk_dense / cyrillic`) alone separates CN from non-CN families.
-
-If the endpoint strips `usage`, that's logged as a transparency finding in its own right.
-
-**Probe randomization (evasion hardening).** Because the probe corpus is
-public, a monitored vendor could special-case the exact strings and return
-doctored token counts. Pass `--variant-seed N` to `build-reference` and `assess`
-(matching seeds) to rotate the exact bytes sent on the wire while preserving
-each probe's dominant script, so identification still works but exact-string
-special-casing does not. Seed 0 is the canonical corpus; the shipped reference
-is seed 0. Rotate the seed periodically and do not publish it. See
-`probe_variants.py`. This raises the cost of evasion; it is not a guarantee (a
-determined adversary who detects a salted variant could still try to normalize).
-
-**Layer 5 — Logprob / determinism** (`probes/logprob.py`)
-Captures top-k distributions at temperature 0 for comparison against locally served references, plus a greedy-continuation signature hash that feeds drift detection.
-
-**Layer 6 — Behavioral** (`probes/behavioral.py`)
-- *Self-ID*: nine direct and indirect probes (cutoff, context window, tokenizer, system-prompt elicitation).
-- *Alignment asymmetry*: **matched pairs** — each PRC-sensitive prompt paired with a structurally equivalent Western-sensitive control. Scores the delta, not the refusal. A model that refuses both is merely conservative; one that refuses only the treatment is the finding.
-- *CJK leakage*: long-reasoning prompts at elevated temperature, inspecting output and any exposed `reasoning_content` for Han characters.
-
-**Layer 6b — Latency** (`probes/latency.py`)
-TTFT / inter-token distributions with z-score drift detection. This is how you catch a post-award backend swap.
-
-**Layer 7 — Artifacts** (`probes/artifact.py`)
-For self-hosted deployments: `config.json` architecture and `_name_or_path`, vocab-size lookup against known CN families, GGUF metadata (`general.name`, `general.architecture`, `general.basename`), safetensors headers, tokenizer file hashes, and HuggingFace cache path leakage.
-
-## Scoring
-
-Signals accumulate as log-odds into two independent likelihoods, mapped to `CONFIRMED / LIKELY / INDETERMINATE / UNLIKELY / NO EVIDENCE`. A separate `confidence` field reports how many evidence layers actually returned data — a verdict from two layers is explicitly labeled unreliable. Weights live in `scoring.py:WEIGHTS`; tune them to your risk appetite.
-
-## Continuous monitoring
-
-The real threat model isn't the point-in-time check at ATO — it's the silent swap three months later.
-
-```bash
-# after award, store the accepted baseline
-python -m provenance_probe.cli assess --config targets.json --out ./baseline
-
-# scheduled job
-python -m provenance_probe.cli assess --config targets.json --out ./nightly
-python -m provenance_probe.cli monitor \
-  --baseline baseline/vendor_*.json --current nightly/vendor_*.json \
-  --json-out drift.json || alert
-```
-
-`fingerprint_id` is a composite of the tokenizer vector, error signature, header shape, greedy signature, and streaming fields. Any change means the backend moved. The `fingerprint_id` hashes the *overhead-corrected* tokenizer shape, so a benign chat-template change does not trip a false drift.
-
-For a **productized** version of this — nightly monitoring across many targets,
-committed and cryptographically signed evidence, numbered advisories on drift,
-and a public Certificate-Transparency-style site — see the
-[provenance-observatory](https://github.com/lobster-shrimp/provenance-observatory)
-companion project, which consumes this `monitor` contract as a black-box CLI.
-
-## Extending
-
-- **New probes**: add to `data/corpus.py`, bump `CORPUS_VERSION`, rebuild references (version mismatch invalidates old vectors).
-- **Rotate probes**: `build-reference --variant-seed N` then `assess --variant-seed N` (same N) to send a rotated probe set without changing `CORPUS_VERSION`; see `probe_variants.py`.
-- **New endpoints**: extend `PRC_ENDPOINTS` / `AGGREGATOR_ENDPOINTS` / `PRC_MODEL_TOKENS`.
-- **New architectures**: extend `CN_ARCH` / `CN_VOCAB` in `probes/artifact.py`.
-- **New API / web-app sources**: see the full guide,
-  [`docs/adding-sources.md`](docs/adding-sources.md) (OpenAI/Anthropic styles,
-  the `template` adapter, auth, SSE, field reference, troubleshooting).
-- **Non-OpenAI wire formats / web apps**: use `api_style="template"` with a
-  captured `request_template` and `response_*_path` fields, or subclass
-  `Client._payload`.
-
-## Known limits — read before reporting a verdict
-
-- **Distills confound provenance.** `DeepSeek-R1-Distill-Llama-70B` is Llama architecture with DeepSeek-generated training data; `-Distill-Qwen-32B` is Qwen architecture. Tokenizer analysis identifies the *base*, behavioral analysis identifies the *training influence*. Decide in advance which your policy actually cares about — most policies are ambiguous here and vendors exploit that.
-- **Absence of censorship does not clear provenance.** Chinese open weights served offshore are frequently de-censored by fine-tuning. Presence is strong positive evidence; absence is not negative evidence.
-- **Every black-box technique degrades against active evasion**: normalized usage counts, suppressed logprobs, output post-filtering, wrapper-level refusals. Layer network and contractual evidence underneath. Probe randomization (`--variant-seed`) raises the cost of exact-string special-casing but does not eliminate active evasion.
-- **TLS pinning / in-app proxying** defeats passive capture. Escalate to contractual attestation.
-- **Wrapper vs model.** Refusals and self-ID answers may originate in the vendor's system prompt or filter, not the weights. The tokenizer and wire layers are much harder to fake than the behavioral layer — weight them accordingly.
-
-## Documentation & related project
-
-### In this repo
-- [`WHITEPAPER.md`](WHITEPAPER.md) — **the problem, the solution, the technical
-  detail, and the open-source rationale**, for consumers, security practitioners,
-  legal/compliance, and federal/policy audiences.
-- [`QUICKSTART.md`](QUICKSTART.md) — five-step install with checkpoints.
-- [`docs/EXTENDING.md`](docs/EXTENDING.md) — **the coverage playbook**: how to add
-  APIs, web apps, and **agents** (trace / active-probe / live-proxy), how to add a
-  **model family to the reference corpus**, and how to put a source under
-  continuous monitoring. Start here to grow what the system can assess.
-- [`docs/adding-sources.md`](docs/adding-sources.md) — **add a new API or
-  web-app source**: OpenAI/Anthropic styles, the `template` adapter (captured
-  request, placeholders, dotted response paths, cookies, SSE), the full `Target`
-  field reference, and troubleshooting.
-- [`eval/README.md`](eval/README.md) — the accuracy/consistency eval harness and
-  its zero-FP CI gate.
-- [`CHANGELOG.md`](CHANGELOG.md) — version history.
-- [`docs/live-fingerprint-corpus.md`](docs/live-fingerprint-corpus.md) — real
-  full-stack results against production endpoints (OpenAI clean-US anchor;
-  DeepSeek + Moonshot CONFIRMED-CN anchors), validating the shipped reference
-  vectors against live services.
-- [`docs/provider-jurisdiction-corpus.md`](docs/provider-jurisdiction-corpus.md) —
-  registry-based jurisdiction snapshot of ~26 LLM API hosts, and why CDN-fronting
-  makes IP geolocation unreliable.
-- **Publication / assurance materials** (for anyone publishing findings about
-  named vendors): [`DISCLOSURE.md`](DISCLOSURE.md) (the operative
-  full-transparency publication policy), and — retained as risk context, not as
-  gates — [`docs/tos-notes.md`](docs/tos-notes.md) (per-provider ToS analysis),
-  [`docs/counsel-brief.md`](docs/counsel-brief.md),
-  [`docs/openrouter-approval-request.md`](docs/openrouter-approval-request.md).
-
-### The Observatory (companion repo)
-[**provenance-observatory**](https://github.com/lobster-shrimp/provenance-observatory)
-turns this engine into continuous public monitoring:
-
-| | provenance-probe (this repo) | provenance-observatory |
-|---|---|---|
-| Shape | Engine + CLI + local web UI | GitHub-native monitoring service |
-| Cadence | Point-in-time, on demand | Nightly (Actions cron) |
-| Targets | Any endpoint / web app you're authorized to test | A curated `targets.yaml` watch list |
-| Output | Console + JSON/HTML report + local UI | Signed append-only evidence log + Variant C public site + numbered advisories |
-| Trust model | You run it, you read it | Full transparency: measurements **and** interpreted verdicts published as collected, append-only + signed |
-| Dependency | — | Consumes this package's `assess` / `monitor` as a black-box CLI |
-
-The two local UIs cross-link: the probe web UI (`serve`, :8770) has an
-"Observatory →" nav link and the Observatory site has a "Live probe tool →" link
-(both configurable via `PROVENANCE_OBSERVATORY_URL` / `OBSERVATORY_PROBE_URL`).
-
-## Contract language this supports
-
-Assurance is only durable if you can re-test. Require:
-1. Notification **before** any change to model weights, inference provider, or serving region.
-2. Right to run this battery against production, not a staging mirror.
-3. A named subprocessor list covering fallback and overflow routing, with update notification.
-4. Disclosure of base model for any fine-tuned or distilled offering.
+This repo is the **engine + CLI + local UI** (point-in-time, run it yourself). **[provenance-observatory](https://github.com/lobster-shrimp/provenance-observatory)** is the **continuous, public monitoring layer** built on the same core: nightly probes, a cosign/Rekor-signed append-only evidence log, numbered advisories, and a published site. Same fingerprinting engine, two use cases.
