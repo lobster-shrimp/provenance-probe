@@ -123,6 +123,77 @@ Reports are written to `%USERPROFILE%\.provenance-probe\reports` (override with 
 
 ---
 
+## Day-to-day: the virtual environment, restarts & the server
+
+### Re-activating the environment (every new terminal)
+
+Activation lasts only for the terminal window you did it in. Each time you open a **new** PowerShell, `cd` to the repo and re-activate — you do **not** reinstall:
+
+```powershell
+cd C:\path\to\provenance-probe
+.\.venv\Scripts\Activate.ps1          # prompt shows (.venv)
+```
+
+The `.venv` folder and the reference data persist on disk. You only reinstall if you delete `.venv`, move the repo, or upgrade Python. Sanity check: `where.exe provenance-probe` should point inside `...\.venv\Scripts`.
+
+### After a Windows restart or logout
+
+A reboot stops the running server and "deactivates" the venv, but it **removes nothing** — the `.venv` and reference vectors are intact. To get back to a working server:
+
+```powershell
+cd C:\path\to\provenance-probe
+.\.venv\Scripts\Activate.ps1
+provenance-probe serve                # http://127.0.0.1:8770
+```
+
+Nothing starts automatically unless you set up a scheduled task (below).
+
+### Stopping & restarting the server
+
+The server runs in the **foreground** of the window you launched it from.
+
+- **Stop it:** press `Ctrl+C` in that window (or just close the window).
+- **Restart it:** re-activate the venv if you're in a new window, then `provenance-probe serve` again.
+- **Port 8770 still busy** after the window is gone (orphaned process)? Find and kill it:
+  ```powershell
+  netstat -ano | findstr :8770        # the last column is the PID
+  taskkill /PID <pid> /F
+  ```
+- **Run it in its own window** so closing your working terminal doesn't kill it:
+  ```powershell
+  Start-Process powershell -ArgumentList '-NoExit','-Command',
+    "cd 'C:\path\to\provenance-probe'; .\.venv\Scripts\Activate.ps1; provenance-probe serve"
+  ```
+
+### Optional: auto-start the server at login (Task Scheduler)
+
+The Windows equivalent of a background service — start the UI automatically when you log in. This calls the venv's entry-point `.exe` directly, so **no activation step is needed** and it's robust across restarts:
+
+```powershell
+$exe = 'C:\path\to\provenance-probe\.venv\Scripts\provenance-probe.exe'
+$action  = New-ScheduledTaskAction -Execute $exe -Argument 'serve' -WorkingDirectory 'C:\path\to\provenance-probe'
+$trigger = New-ScheduledTaskTrigger -AtLogOn
+Register-ScheduledTask -TaskName 'provenance-probe-serve' -Action $action -Trigger $trigger `
+  -Description 'Start provenance-probe local UI at login'
+```
+
+Manage it:
+
+```powershell
+Start-ScheduledTask   -TaskName provenance-probe-serve      # start now
+Stop-ScheduledTask    -TaskName provenance-probe-serve      # stop
+Unregister-ScheduledTask -TaskName provenance-probe-serve   # remove
+```
+
+(The Task Scheduler GUI — `taskschd.msc` — shows and edits it too.) For a true always-on service that survives logout, wrap the same `.exe` with **NSSM** (`winget install NSSM.NSSM`). Either way it binds to `127.0.0.1` with **no auth** — keep it local; don't expose the port.
+
+### Docker / WSL2 restart notes
+
+- **Docker Desktop:** run detached with `docker compose up -d`; add `restart: unless-stopped` in `docker-compose.yml` to have it come back with Docker after a reboot. `docker compose restart provenance-probe` to bounce it, `docker compose down` to stop.
+- **WSL2:** same as Linux — open Ubuntu, `cd` to the repo, `source .venv/bin/activate`, `provenance-probe serve`. It won't auto-start unless you add it to your shell profile or a systemd user service (if systemd is enabled in WSL).
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |
