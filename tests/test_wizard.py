@@ -157,7 +157,8 @@ def test_synthesize_non_json_body_warns():
 class _Resp:
     def __init__(self, status, n, text="reply"):
         self.status, self._n, self._t = status, n, text
-    def ok(self):
+    @property
+    def ok(self):                      # mirror client.Response.ok (a property, not a method)
         return 200 <= self.status < 300
     def usage_prompt_tokens(self):
         return self._n

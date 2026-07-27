@@ -354,7 +354,7 @@ def dry_run(client, probes=None) -> dict:
     seen, got_reply = [], 0
     for text in probes[:2]:
         r = client.chat(text, max_tokens=1, temperature=0.0)
-        if not r.ok():
+        if not r.ok:                       # Response.ok is a property, not a method
             return {"ok": False, "usage_exposed": False, "replay_safe": False,
                     "prompt_tokens": None,
                     "error": f"probe returned HTTP {r.status} — capture may be stale "
