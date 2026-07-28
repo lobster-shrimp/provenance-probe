@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.12.0] - 2026-07-28 — OmniRoute cross-check + calibration gate (P2a)
+
+### Added
+- **`provenance_probe/omniroute.py` + `provenance-probe omniroute` CLI.** Uses a
+  local OmniRoute router (localhost:20128) as an OPTIONAL accelerator and a second
+  evidence source: fingerprint a model *through* OmniRoute and cross-check the
+  router's claimed model against the tokenizer fingerprint.
+- **Calibration gate (the honest core).** Measuring through OmniRoute only works
+  if its injected ~2000-token system prompt is a *constant* offset that cancels.
+  We test exactly that: subtract the modal overhead, then require ≥90% of probes
+  to match a known family's first-party reference **exactly**. Until a given
+  OmniRoute version calibrates, a via-OmniRoute verdict is **confidence-capped
+  (never CONFIRMED, max SUGGESTIVE)**.
+- **Three-state cross-check.** Router claim → family (maintained label→family map)
+  vs fingerprint → `CORROBORATED` / `INCONCLUSIVE` / `CONTRADICTED`. INCONCLUSIVE
+  is the default for any uncertainty (unknown label, uncalibrated, unclear family
+  relation); version drift (V4 reuses V3's tokenizer) is CORROBORATED. **A
+  CONTRADICTED result is an analyst-review signal, never an auto-published
+  verdict** (quarantined).
+- Captures `x-omniroute-*` router metadata as evidence; records a first-class
+  `measurement_path: via_omniroute`.
+
+### Finding
+- **OmniRoute v3.8.48 does NOT calibrate.** Empirically it injects ~2004 tokens
+  and lands 15/20 probes exact after offset (0.75, below the 0.90 bar); the 5
+  misses are CJK/whitespace probes — the ones that matter most for CN origin.
+  So measuring DeepSeek through this OmniRoute is reported as **SUGGESTIVE, not
+  CONFIRMED** — the calibration gate correctly refuses to over-claim what an
+  earlier n=1 observation had read as a clean match.
+
+### Hardening (adversarial review — Codex + Claude)
+- Calibration metric changed from Pearson correlation (scale-blind; false-passed
+  156 cross-family pairs, e.g. OpenAI-o200k vs DeepSeek at r≈0.99) to
+  exact-fraction-after-offset (cross-family false-passes → 4, all genuine
+  tokenizer-twins). CONFIRMED now also requires the cross-check not be
+  CONTRADICTED and a decisive fingerprint score. Router claim reads the
+  `x-omniroute-model` header, never the user's typed route. Family rooting
+  handles vendor-suffixed reference names (`GLM/Zhipu`); related roots
+  (`gpt` ⊂ `gptneox`) never produce a false CONTRADICTED.
+
 ## [0.11.0] - 2026-07-28 — One-door add-target: auto-detect API style
 
 ### Added
