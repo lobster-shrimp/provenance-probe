@@ -510,10 +510,15 @@ def write_target(target: dict, cookie_value: str, *, config_path: str,
         if os.path.exists(env_path):
             with open(env_path) as f:
                 prior = "".join(l for l in f if not l.startswith(f"{cookie_env}="))
-        with open(env_path, "w") as f:
+        # The env file holds the raw session cookie — create it OWNER-ONLY (0600)
+        # from the start, so it is never world-readable on a shared host, not even
+        # in the window between create and a later chmod (Claude adversarial, HIGH).
+        fd = os.open(env_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
             f.write(prior)
             if prior and not prior.endswith("\n"):
                 f.write("\n")
             f.write(f"{cookie_env}={cookie_value}\n")
+        os.chmod(env_path, 0o600)                # tighten a pre-existing 0644 file too
     return {"config_path": config_path, "env_path": env_path if cookie_value else None,
             "cookie_env": cookie_env, "added": name, "warnings": warnings}
