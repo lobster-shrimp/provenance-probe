@@ -393,6 +393,40 @@ def _wiz_form(err="", name="", prompt="", capture=""):
         capture=html.escape(capture)), mimetype="text/html")
 
 
+def _effective_host(target: dict) -> str | None:
+    """The host the request will ACTUALLY hit — parsed from base_url + chat_path
+    together (chat_path is separately editable and can smuggle a host, e.g.
+    base_url=good.host + chat_path=@evil.com/…). Returns None if there is no real
+    hostname or any userinfo (`@`) is present — both must refuse a cookie replay
+    (Claude adversarial, CRITICAL)."""
+    from urllib.parse import urlsplit
+    base = (target.get("base_url") or "").rstrip("/")
+    path = target.get("chat_path") or ""
+    u = urlsplit(base + path)
+    if "@" in (u.netloc or ""):
+        return None
+    return (u.hostname or "").lower() or None
+
+
+def _cookie_origin_ok(pending: dict, target: dict) -> tuple[bool, str]:
+    """A stashed cookie may only be sent to the host it was captured from. Refuse
+    when the effective host is missing/ambiguous or differs. Applies to every
+    cookie-bearing egress (replay AND dry-run-on-save)."""
+    if not pending.get("cookie"):
+        return True, ""                      # no cookie -> nothing to protect
+    captured = pending.get("origin")
+    eff = _effective_host(target)
+    if eff is None:
+        return False, ("the target's effective host is missing or ambiguous (no scheme, or a "
+                       "'@' in the URL). The session cookie is only sent to a clear host — "
+                       "use an https:// base_url with no userinfo.")
+    if eff != captured:
+        return False, (f"the request would hit '{eff}' but the captured cookie belongs to "
+                       f"'{captured or '—'}'. The session cookie is only replayed to the host "
+                       f"it was captured from. Revert base_url/chat_path, or re-capture.")
+    return True, ""
+
+
 def _wiz_preview(target: dict, cookie: str, warnings: list, prompt: str = "") -> Response:
     """Stash the credential server-side, hand the browser a token + editable JSON.
 
@@ -401,14 +435,14 @@ def _wiz_preview(target: dict, cookie: str, warnings: list, prompt: str = "") ->
     `prompt` is stashed so the "auto-detect response fields" replay can locate the
     reply in the live response.
     """
-    from urllib.parse import urlsplit
     token = uuid.uuid4().hex
     if len(_WIZARD_PENDING) > 20:            # bound the stash
         _WIZARD_PENDING.clear()
-    # Bind the stash to the CAPTURED origin so the session cookie can never be
-    # replayed to an edited/arbitrary host (Codex adversarial, HIGH).
-    origin = urlsplit(target.get("base_url", "")).netloc.lower()
-    _WIZARD_PENDING[token] = {"cookie": cookie, "prompt": prompt, "origin": origin}
+    # Bind the stash to the CAPTURED effective host (base_url + chat_path) so the
+    # session cookie can never be replayed to an edited/arbitrary host — including
+    # via a smuggled chat_path (Codex + Claude adversarial, CRITICAL).
+    _WIZARD_PENDING[token] = {"cookie": cookie, "prompt": prompt,
+                             "origin": _effective_host(target)}
     # Offer the one-request auto-detect when the response paths aren't known yet
     # (the cURL-paste case) and it's a web-app template target. Same form as save
     # (so the operator's edits are included) via HTML5 formaction — no JS.
@@ -586,16 +620,10 @@ def wizard_probe_response():
     except (json.JSONDecodeError, ValueError) as e:
         return _wiz_page("Invalid", f'<p class="err">Edited target is not valid JSON: '
                          f'{html.escape(str(e))}</p><p><a href="/wizard">&larr; back</a></p>')
-    # Origin binding: refuse to replay the captured cookie to a host other than
-    # the one it was captured from (Codex adversarial, HIGH).
-    from urllib.parse import urlsplit
-    edited_origin = urlsplit(target.get("base_url", "")).netloc.lower()
-    if pending["cookie"] and edited_origin != pending.get("origin", ""):
-        return _wiz_preview(target, pending["cookie"],
-                            [f"Refusing to auto-detect: base_url host changed to "
-                             f"'{edited_origin or '—'}' but the captured cookie belongs to "
-                             f"'{pending.get('origin') or '—'}'. The session cookie is only sent "
-                             f"to the host it was captured from. Revert base_url, or re-capture."],
+    # Origin binding: never replay the captured cookie off its captured host.
+    ok, why = _cookie_origin_ok(pending, target)
+    if not ok:
+        return _wiz_preview(target, pending["cookie"], [f"Refusing to auto-detect: {why}"],
                             prompt=pending.get("prompt", ""))
     try:
         t = Target(name=target.get("name", "target"), base_url=target.get("base_url", ""),
@@ -650,6 +678,13 @@ def wizard_save():
     except (json.JSONDecodeError, ValueError) as e:
         return _wiz_page("Invalid", f'<p class="err">Edited target is not valid JSON: '
                          f'{html.escape(str(e))}</p><p><a href="/wizard">&larr; back</a></p>')
+    # The dry-run below sends the stashed cookie to base_url+chat_path — apply the
+    # SAME origin binding as the replay so an edited host can't exfiltrate it
+    # (Claude adversarial, CRITICAL: save had no origin check).
+    ok, why = _cookie_origin_ok(pending, target)
+    if not ok:
+        return _wiz_page("Refusing to save", f'<p class="err">{html.escape(why)}</p>'
+                         '<p><a href="/wizard">&larr; re-capture</a></p>')
     # Honor the detected/edited api_style — the endpoint path is openai/anthropic,
     # the paste path is template. Only template carries a cookie.
     api_style = target.get("api_style", "template")

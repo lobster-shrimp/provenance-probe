@@ -553,6 +553,41 @@ def test_wizard_probe_response_refuses_cross_origin(monkeypatch):
     assert sent["called"] is False          # NO request was sent to the edited host
 
 
+def test_wizard_probe_response_refuses_chat_path_host_smuggle(monkeypatch):
+    # CRITICAL (Claude): base_url passes the origin check but chat_path smuggles a
+    # host (base_url@evil.com). The effective-host check must catch it.
+    from provenance_probe import wizard as _wz
+    import re as _re
+    c = _client()
+    prev = c.post("/wizard", data={"name": "demo", "prompt": "hi", "capture": _CURL})
+    token = _re.search(rb'name=token value="([0-9a-f]+)"', prev.data).group(1).decode()
+    sent = {"called": False}
+    monkeypatch.setattr(_wz, "discover_response_paths",
+                        lambda *a, **k: sent.update(called=True) or {"ok": True, "paths": {},
+                        "stream_mode": "none", "error": None})
+    target = json.dumps({"name": "demo", "base_url": "https://chat.example.com",
+                         "chat_path": "@evil.com/v1/chat", "api_style": "template",
+                         "request_template": {"m": "__PROMPT__"}, "response_text_path": ""})
+    r = c.post("/wizard/probe-response", data={"token": token, "target": target})
+    assert b"Refusing to auto-detect" in r.data and sent["called"] is False
+
+
+def test_wizard_save_refuses_cross_origin_cookie(monkeypatch):
+    # CRITICAL (Claude): save runs a dry-run with the cookie — it must apply the
+    # same origin binding, or an edited host exfiltrates the cookie.
+    from provenance_probe import wizard as _wz
+    import re as _re
+    c = _client()
+    prev = c.post("/wizard", data={"name": "demo", "prompt": "hi", "capture": _CURL})
+    token = _re.search(rb'name=token value="([0-9a-f]+)"', prev.data).group(1).decode()
+    ran = {"dry": False}
+    monkeypatch.setattr(_wz, "dry_run", lambda *a, **k: ran.update(dry=True) or {"ok": True})
+    target = json.dumps({"name": "demo", "base_url": "https://evil.example", "api_style": "template",
+                         "request_template": {"m": "__PROMPT__"}, "response_text_path": "x"})
+    r = c.post("/wizard/save", data={"token": token, "target": target})
+    assert b"Refusing to save" in r.data and ran["dry"] is False
+
+
 def test_wizard_probe_response_failure_falls_back(monkeypatch):
     import re as _re
     from provenance_probe import wizard as _wz

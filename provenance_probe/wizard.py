@@ -246,7 +246,7 @@ _STD_TEXT_PATHS = ("choices.0.message.content", "choices.0.text", "content.0.tex
 # echoed prompt as the "reply" path (Codex adversarial).
 _REPLY_SKIP_LEAF = re.compile(
     r"(cookie|authorization|token|api[-_]?key|secret|password|prompt|input|"
-    r"system|request|messages?)", re.IGNORECASE)
+    r"system|request|messages?|session|sid|csrf|xsrf|jwt|bearer|cred)", re.IGNORECASE)
 
 
 def find_reply_path(resp, *, skip_values=()) -> str | None:
