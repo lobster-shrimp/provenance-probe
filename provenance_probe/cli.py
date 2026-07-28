@@ -412,8 +412,9 @@ def cmd_omniroute(a):
     st = omni.detect_omniroute(base)
     if not st.present:
         sys.exit(f"[omniroute] not reachable at {base}: {st.error}")
+    # Banner to stderr so `--json` stdout stays pure JSON (pipeable).
     print(f"[omniroute] present at {base} (version {st.version or 'unknown'}), "
-          f"{len(st.models)} routes")
+          f"{len(st.models)} routes", file=sys.stderr)
     if a.list or not a.route:
         for m in st.models:
             print(f"  {m}")
