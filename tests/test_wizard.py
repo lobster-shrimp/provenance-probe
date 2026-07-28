@@ -1,5 +1,6 @@
 """Add-a-target wizard: cURL/HAR parse + template synthesis (paste-first v1)."""
 import json
+import os
 
 import pytest
 
@@ -210,6 +211,42 @@ def test_sanitize_strips_cookie_and_auth_headers():
     assert "cookie" in removed and any("Cookie" in r for r in removed) and any("Authorization" in r for r in removed)
 
 
+def test_sanitize_strips_smuggled_key_headers_keeps_csrf():
+    # HIGH (Codex): a key smuggled under a non-exact header name must be stripped;
+    # but a CSRF token (needed for replay) must be KEPT.
+    dirty = {"name": "x", "extra_headers": {
+        "X-Api-Key-Alt": "sk-SMUGGLED", "x-session-token": "SESS", "authorization": "Bearer S",
+        "x-csrf-token": "keep-me", "origin": "https://app.example"}}
+    clean, removed = wizard.sanitize_target(dirty)
+    assert clean["extra_headers"] == {"x-csrf-token": "keep-me", "origin": "https://app.example"}
+    assert any("X-Api-Key-Alt" in r for r in removed)
+    assert any("x-session-token" in r for r in removed)
+
+
+def test_sanitize_strips_vendor_key_and_vault_headers_keeps_idempotency():
+    # MEDIUM (Claude): vendor key + vault/security-token headers must be stripped;
+    # a non-secret idempotency-key (Stripe-style, no x- prefix) must be KEPT.
+    dirty = {"name": "x", "extra_headers": {
+        "x-anthropic-key": "sk-A", "x-openai-key": "sk-O", "x-vault-token": "V",
+        "x-amz-security-token": "T", "idempotency-key": "keep-123", "origin": "https://a.b"}}
+    clean, removed = wizard.sanitize_target(dirty)
+    assert clean["extra_headers"] == {"idempotency-key": "keep-123", "origin": "https://a.b"}
+    for smuggled in ("x-anthropic-key", "x-openai-key", "x-vault-token", "x-amz-security-token"):
+        assert any(smuggled in r for r in removed)
+
+
+def test_is_git_tracked_detects_tracked_file():
+    # HIGH (Claude): _is_git_tracked raised a swallowed NameError (os not in scope)
+    # and always returned False, silently disabling the git-tracked-cookie warning.
+    from provenance_probe import wizard as _wz
+    import subprocess
+    repo = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                          capture_output=True, text=True).stdout.strip()
+    tracked = os.path.join(repo, "pyproject.toml")     # git confirms this is tracked
+    assert _wz._is_git_tracked(tracked) is True
+    assert _wz._is_git_tracked(os.path.join(repo, "does-not-exist-xyz.tmp")) is False
+
+
 # --- save --------------------------------------------------------------------
 
 def test_write_target_appends_list_and_keeps_cookie_out_of_config(tmp_path):
@@ -268,7 +305,9 @@ def _client():
 
 def test_wizard_get_renders_form():
     r = _client().get("/wizard")
-    assert r.status_code == 200 and b"Add-target wizard" in r.data
+    assert r.status_code == 200 and b"Add a target" in r.data
+    # One door (E2): the default view never asks the operator to pick an api_style.
+    assert b"API style" not in r.data and b"api_style" not in r.data
 
 
 def test_wizard_post_previews_and_never_reflects_cookie():
@@ -280,9 +319,91 @@ def test_wizard_post_previews_and_never_reflects_cookie():
 
 
 def test_wizard_post_bad_capture_shows_error():
-    r = _client().post("/wizard", data={"name": "x", "prompt": "hi", "fmt": "curl",
-                                        "capture": "not a curl command"})
-    assert r.status_code == 200 and b"Could not parse capture" in r.data
+    # One-door: an unclassifiable paste gets the friendly "couldn't tell" message.
+    r = _client().post("/wizard", data={"name": "x", "prompt": "hi",
+                                        "capture": "not a url with spaces"})
+    assert r.status_code == 200 and b"tell what that is" in r.data
+
+
+# --------------------------------------------------------------------------- #
+# One-door endpoint path: classify -> consent gate -> detect -> preview
+# --------------------------------------------------------------------------- #
+
+import re as _re
+
+
+def _consent_token(client, name, capture):
+    """Drive the /wizard endpoint branch and return the issued consent token."""
+    r = client.post("/wizard", data={"name": name, "capture": capture})
+    assert r.status_code == 200 and b"/wizard/detect" in r.data
+    m = _re.search(rb'name=token value="([0-9a-f]+)"', r.data)
+    assert m, "consent page did not issue a token"
+    return r, m.group(1).decode()
+
+
+def test_wizard_endpoint_shows_consent_gate_no_egress():
+    # A plain URL must land on the consent gate, NOT probe anything yet.
+    r, token = _consent_token(_client(), "oai", "https://api.openai.com/v1")
+    assert b"identify test" in r.data or b"Send a short identify test" in r.data
+    assert b"api.openai.com" in r.data
+    assert token                                 # a one-shot token was issued
+
+
+def test_wizard_detect_requires_consent_token():
+    # CRITICAL (Codex): a direct POST without a valid token must send NOTHING.
+    r = _client().post("/wizard/detect", data={"passive_only": "0"})
+    assert r.status_code == 200 and b"Consent expired" in r.data
+
+
+def test_wizard_detect_token_is_one_shot():
+    c = _client()
+    _r, token = _consent_token(c, "oai", "https://api.openai.com/v1")
+    from provenance_probe import detect
+    # First use consumes the token; stub detect so no network is hit.
+    import pytest as _pt
+    _mp = _pt.MonkeyPatch()
+    _mp.setattr(detect, "detect", lambda *a, **k: detect.Detection(
+        base_url="https://api.openai.com/v1", api_style="openai", ok=True,
+        chat_path="/chat/completions", model="gpt-4o-mini", confidence="high",
+        caveat="usage is self-reported"))
+    try:
+        first = c.post("/wizard/detect", data={"token": token})
+        assert first.status_code == 200 and b"Consent expired" not in first.data
+        second = c.post("/wizard/detect", data={"token": token})   # reused
+        assert b"Consent expired" in second.data
+    finally:
+        _mp.undo()
+
+
+def test_wizard_detect_builds_openai_target(monkeypatch):
+    # Assert the preview carries the detected api_style and NO api-key value.
+    from provenance_probe import detect
+    fake = detect.Detection(ok=True, api_style="openai", base_url="https://api.deepseek.com",
+                            chat_path="/chat/completions", model="deepseek-chat",
+                            confidence="high", llm_positive=True, probes_used=3,
+                            caveat="usage is self-reported")
+    monkeypatch.setattr(detect, "detect", lambda *a, **k: fake)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-secret-should-not-leak")
+    c = _client()
+    _r, token = _consent_token(c, "ds", "https://api.deepseek.com")
+    r = c.post("/wizard/detect", data={"token": token})
+    assert r.status_code == 200
+    # JSON is html-escaped inside the editable textarea, so match the fields loosely.
+    assert b"api_style" in r.data and b"openai" in r.data
+    assert b"DEEPSEEK_API_KEY" in r.data            # the NAME is shown
+    assert b"sk-secret-should-not-leak" not in r.data   # the VALUE never is
+    assert b"self-reported" in r.data                   # forged-usage caveat surfaced
+
+
+def test_wizard_detect_html_routes_to_capture(monkeypatch):
+    from provenance_probe import detect
+    fake = detect.Detection(base_url="https://chat.app.com", route_hint="capture",
+                            error="this looks like a web app (HTML), not an API")
+    monkeypatch.setattr(detect, "detect", lambda *a, **k: fake)
+    c = _client()
+    _r, token = _consent_token(c, "wa", "https://chat.app.com")
+    r = c.post("/wizard/detect", data={"token": token})
+    assert r.status_code == 200 and b"web app" in r.data
 
 
 def test_wizard_parse_error_does_not_leak_cookie():
