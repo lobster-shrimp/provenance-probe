@@ -200,6 +200,81 @@ def test_dry_run_no_reply_is_not_ok():
     assert not out["ok"] and "no reply" in out["error"]
 
 
+# --- auto-detect response paths (replay + introspect) ------------------------
+
+class _RichResp:
+    def __init__(self, status=200, body=None, headers=None, stream_text=None, raw=""):
+        self.status, self.body, self.err = status, body, None
+        self.headers = {k.lower(): v for k, v in (headers or {}).items()}
+        self.stream_text = stream_text
+        self.raw = raw
+    @property
+    def ok(self):
+        return 200 <= self.status < 300
+    def text(self):
+        if self.stream_text is not None:
+            return self.stream_text
+        try:
+            return self.body["choices"][0]["message"]["content"]
+        except Exception:
+            return self.raw
+
+
+class _RichClient:
+    def __init__(self, resp): self.resp = resp
+    def chat(self, prompt, **kw): return self.resp
+
+
+def test_find_reply_path_prefers_standard_shape():
+    body = {"choices": [{"message": {"content": "the assistant reply here"}}],
+            "usage": {"prompt_tokens": 12}, "model": "glm-4.6"}
+    assert wizard.find_reply_path(body) == "choices.0.message.content"
+
+
+def test_find_reply_path_falls_back_to_longest_string():
+    body = {"id": "abc", "data": {"answer_blob": "a much longer assistant response string"}}
+    assert wizard.find_reply_path(body) == "data.answer_blob"
+
+
+def test_find_reply_path_skips_credential_and_echo_fields():
+    # MEDIUM (Codex): the fallback must not point at a reflected cookie/prompt.
+    body = {"echoed_cookie": "sid=" + "X" * 200,                 # credential-ish leaf → skipped
+            "prompt": "fingerprint me now please and thanks",    # echo leaf → skipped
+            "out": {"reply": "the genuine model reply text here"}}
+    p = wizard.find_reply_path(body, skip_values=("fingerprint me now please and thanks",))
+    assert p == "out.reply"          # 'reply' is a standard path, and echoes are excluded
+
+
+def test_discover_response_paths_openai_shape():
+    body = {"choices": [{"message": {"content": "hi there friend"}}],
+            "usage": {"prompt_tokens": 9}, "model": "glm-4.6"}
+    out = wizard.discover_response_paths(_RichClient(_RichResp(200, body,
+                                        {"content-type": "application/json"})), "fingerprint me")
+    assert out["ok"]
+    assert out["paths"]["response_text_path"] == "choices.0.message.content"
+    assert out["paths"]["response_prompt_tokens_path"] == "usage.prompt_tokens"
+    assert out["paths"]["response_model_path"] == "model"
+
+
+def test_discover_response_paths_detects_sse():
+    r = _RichResp(200, body="data: {...}", headers={"content-type": "text/event-stream"},
+                  stream_text="streamed reply")
+    out = wizard.discover_response_paths(_RichClient(r), "hi")
+    assert out["ok"] and out["stream_mode"] == "sse"
+    assert out["paths"]["stream_delta_path"]
+
+
+def test_discover_response_paths_http_error_is_friendly():
+    out = wizard.discover_response_paths(_RichClient(_RichResp(401, None)), "hi")
+    assert not out["ok"] and "401" in out["error"] and "re-capture" in out["error"]
+
+
+def test_discover_response_paths_non_json():
+    r = _RichResp(200, body="<html>not json</html>", headers={"content-type": "text/html"})
+    out = wizard.discover_response_paths(_RichClient(r), "hi")
+    assert not out["ok"] and "not JSON" in out["error"]
+
+
 # --- sanitize (defense-in-depth at the write boundary) -----------------------
 
 def test_sanitize_strips_cookie_and_auth_headers():
@@ -425,6 +500,107 @@ def test_write_target_output_is_loadable_after_unknown_keys_stripped(tmp_path):
                         env_path=str(tmp_path / ".env"), repo_root=str(tmp_path))
     loaded = config.load_targets(str(cfg))          # must NOT raise on unknown kwargs
     assert loaded[0].name == "wz" and loaded[0].api_style == "template"
+
+
+def test_wizard_curl_preview_offers_autodetect_button():
+    # A cURL paste (no response) should surface the one-request auto-detect.
+    r = _client().post("/wizard", data={"name": "demo", "prompt": "fingerprint me",
+                                        "capture": _CURL})
+    assert r.status_code == 200
+    assert b"/wizard/probe-response" in r.data and b"Auto-detect response fields" in r.data
+
+
+def test_wizard_probe_response_fills_paths(monkeypatch):
+    import re as _re
+    from provenance_probe import wizard as _wz
+    c = _client()
+    prev = c.post("/wizard", data={"name": "demo", "prompt": "fingerprint me", "capture": _CURL})
+    token = _re.search(rb'name=token value="([0-9a-f]+)"', prev.data).group(1).decode()
+    # Stub the live replay so no network is touched; return discovered paths.
+    monkeypatch.setattr(_wz, "discover_response_paths", lambda *a, **k: {
+        "ok": True, "stream_mode": "none", "sample": "hello from the model",
+        "paths": {"response_text_path": "choices.0.message.content",
+                  "response_prompt_tokens_path": "usage.prompt_tokens",
+                  "response_model_path": "model"}, "error": None})
+    # base_url must match the captured origin (chat.example.com) or the cookie
+    # replay is refused by origin-binding.
+    target = json.dumps({"name": "demo", "base_url": "https://chat.example.com", "api_style": "template",
+                         "chat_path": "/api/chat", "request_template": {"m": "__PROMPT__"},
+                         "response_text_path": ""})
+    r = c.post("/wizard/probe-response", data={"token": token, "target": target})
+    assert r.status_code == 200
+    assert b"Auto-detected from a live response" in r.data
+    assert b"choices.0.message.content" in r.data      # path now filled in the preview
+    assert b"usage.prompt_tokens" in r.data
+
+
+def test_wizard_probe_response_refuses_cross_origin(monkeypatch):
+    # HIGH (Codex): the captured cookie must NOT be replayed to an edited host.
+    from provenance_probe import wizard as _wz
+    import re as _re
+    c = _client()
+    prev = c.post("/wizard", data={"name": "demo", "prompt": "hi", "capture": _CURL})
+    token = _re.search(rb'name=token value="([0-9a-f]+)"', prev.data).group(1).decode()
+    sent = {"called": False}
+    monkeypatch.setattr(_wz, "discover_response_paths",
+                        lambda *a, **k: sent.update(called=True) or {"ok": True, "paths": {},
+                        "stream_mode": "none", "error": None})
+    # _CURL captures chat.example.com; point base_url at an attacker host.
+    target = json.dumps({"name": "demo", "base_url": "https://evil.example", "api_style": "template",
+                         "request_template": {"m": "__PROMPT__"}, "response_text_path": ""})
+    r = c.post("/wizard/probe-response", data={"token": token, "target": target})
+    assert r.status_code == 200 and b"Refusing to auto-detect" in r.data
+    assert sent["called"] is False          # NO request was sent to the edited host
+
+
+def test_wizard_probe_response_refuses_chat_path_host_smuggle(monkeypatch):
+    # CRITICAL (Claude): base_url passes the origin check but chat_path smuggles a
+    # host (base_url@evil.com). The effective-host check must catch it.
+    from provenance_probe import wizard as _wz
+    import re as _re
+    c = _client()
+    prev = c.post("/wizard", data={"name": "demo", "prompt": "hi", "capture": _CURL})
+    token = _re.search(rb'name=token value="([0-9a-f]+)"', prev.data).group(1).decode()
+    sent = {"called": False}
+    monkeypatch.setattr(_wz, "discover_response_paths",
+                        lambda *a, **k: sent.update(called=True) or {"ok": True, "paths": {},
+                        "stream_mode": "none", "error": None})
+    target = json.dumps({"name": "demo", "base_url": "https://chat.example.com",
+                         "chat_path": "@evil.com/v1/chat", "api_style": "template",
+                         "request_template": {"m": "__PROMPT__"}, "response_text_path": ""})
+    r = c.post("/wizard/probe-response", data={"token": token, "target": target})
+    assert b"Refusing to auto-detect" in r.data and sent["called"] is False
+
+
+def test_wizard_save_refuses_cross_origin_cookie(monkeypatch):
+    # CRITICAL (Claude): save runs a dry-run with the cookie — it must apply the
+    # same origin binding, or an edited host exfiltrates the cookie.
+    from provenance_probe import wizard as _wz
+    import re as _re
+    c = _client()
+    prev = c.post("/wizard", data={"name": "demo", "prompt": "hi", "capture": _CURL})
+    token = _re.search(rb'name=token value="([0-9a-f]+)"', prev.data).group(1).decode()
+    ran = {"dry": False}
+    monkeypatch.setattr(_wz, "dry_run", lambda *a, **k: ran.update(dry=True) or {"ok": True})
+    target = json.dumps({"name": "demo", "base_url": "https://evil.example", "api_style": "template",
+                         "request_template": {"m": "__PROMPT__"}, "response_text_path": "x"})
+    r = c.post("/wizard/save", data={"token": token, "target": target})
+    assert b"Refusing to save" in r.data and ran["dry"] is False
+
+
+def test_wizard_probe_response_failure_falls_back(monkeypatch):
+    import re as _re
+    from provenance_probe import wizard as _wz
+    c = _client()
+    prev = c.post("/wizard", data={"name": "demo", "prompt": "hi", "capture": _CURL})
+    token = _re.search(rb'name=token value="([0-9a-f]+)"', prev.data).group(1).decode()
+    monkeypatch.setattr(_wz, "discover_response_paths", lambda *a, **k: {
+        "ok": False, "paths": {}, "stream_mode": "none",
+        "error": "the request returned HTTP 403 — the capture may be stale"})
+    r = c.post("/wizard/probe-response",
+               data={"token": token, "target": json.dumps(
+                   {"api_style": "template", "base_url": "https://chat.example.com"})})
+    assert r.status_code == 200 and b"Auto-detect failed" in r.data and b"403" in r.data
 
 
 def test_wizard_save_expired_token():

@@ -234,6 +234,85 @@ def find_model_path(resp) -> str | None:
     return None
 
 
+# Well-known reply locations, tried before the longest-string heuristic so a
+# standard openai/anthropic shape is nailed exactly (not guessed).
+_STD_TEXT_PATHS = ("choices.0.message.content", "choices.0.text", "content.0.text",
+                   "message.content", "delta.content", "response", "reply", "answer",
+                   "output_text", "text")
+
+
+# Leaf names the longest-string fallback must NOT point at: credential-ish or
+# request-echo fields. Prevents auto-selecting a reflected cookie/key or the
+# echoed prompt as the "reply" path (Codex adversarial).
+_REPLY_SKIP_LEAF = re.compile(
+    r"(cookie|authorization|token|api[-_]?key|secret|password|prompt|input|"
+    r"system|request|messages?|session|sid|csrf|xsrf|jwt|bearer|cred)", re.IGNORECASE)
+
+
+def find_reply_path(resp, *, skip_values=()) -> str | None:
+    """Path to the assistant's reply in a REAL response. Tries known shapes, then
+    falls back to the longest non-trivial string value (the reply is almost always
+    the longest string), EXCLUDING credential/echo fields and any request echo.
+    Used to auto-detect response paths from a live replay so the operator never
+    hand-types them."""
+    from .client import dig
+    for p in _STD_TEXT_PATHS:
+        v = dig(resp, p)
+        if isinstance(v, str) and v.strip():
+            return p
+    skip = {s.strip() for s in skip_values if s}
+    best, best_len = None, 7          # require >= 8 chars to skip ids/short flags
+    for path, val in _walk(resp or {}):
+        if not isinstance(val, str):
+            continue
+        v = val.strip()
+        if _REPLY_SKIP_LEAF.search(path.rsplit(".", 1)[-1]):   # not a credential/echo field
+            continue
+        if v in skip:                                          # not the echoed prompt
+            continue
+        if len(v) > best_len:
+            best, best_len = path, len(v)
+    return best
+
+
+def discover_response_paths(client, prompt_text: str, *, max_tokens: int = 24) -> dict:
+    """Replay the captured request ONCE and read the response paths off the real
+    reply — the automation that removes hand-typed `response_*_path` guesswork on
+    the cURL-paste flow (a HAR gets these for free; this gets them from one live
+    call). Returns {ok, paths, stream_mode, sample, error}.
+
+    `client` is a Client for the synthesized target. This performs ONE network
+    request, so the caller must have the operator's consent (it names the host).
+    """
+    r = client.chat(prompt_text or "fingerprint me", max_tokens=max_tokens, temperature=0.0)
+    if not r.ok:
+        return {"ok": False, "paths": {}, "stream_mode": "none",
+                "error": f"the request returned HTTP {r.status or '—'}"
+                         f"{' ('+r.err+')' if r.err else ''} — the capture may be stale "
+                         f"(cookie expired) or need another header; re-capture and retry."}
+    # SSE? The client accumulates stream deltas into stream_text; the body is raw.
+    ctype = (r.headers.get("content-type") or "").lower()
+    if "text/event-stream" in ctype or (r.stream_text is not None and not isinstance(r.body, (dict, list))):
+        return {"ok": True, "stream_mode": "sse",
+                "paths": {"response_text_path": "", "response_prompt_tokens_path": "",
+                          "response_model_path": "",
+                          "stream_delta_path": "choices.0.delta.content"},
+                "sample": (r.text() or "")[:160],
+                "error": None}
+    body = r.body
+    if not isinstance(body, (dict, list)):
+        return {"ok": False, "paths": {}, "stream_mode": "none",
+                "error": "the response was not JSON — this app may stream or use a "
+                         "non-JSON protocol; paste a HAR or set the paths by hand."}
+    paths = {
+        "response_text_path": find_reply_path(body, skip_values=(prompt_text,)) or "",
+        "response_prompt_tokens_path": find_usage_path(body) or "",
+        "response_model_path": find_model_path(body) or "",
+    }
+    return {"ok": True, "paths": paths, "stream_mode": "none",
+            "sample": (r.text() or "")[:160], "error": None}
+
+
 # --------------------------------------------------------------------------- #
 # Synthesis
 # --------------------------------------------------------------------------- #
