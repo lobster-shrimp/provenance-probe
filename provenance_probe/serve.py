@@ -359,7 +359,7 @@ goes to <code>.env.capture</code> (gitignored). <a href="/wizard">&larr; start o
 <input type=hidden name=token value="{token}">
 <label>Synthesized target (editable JSON)</label>
 <textarea name=target>{target_json}</textarea>
-<p><button type=submit>Dry-run &amp; save</button></p></form>"""
+<p>{autodetect}<button type=submit>Dry-run &amp; save</button></p></form>"""
 
 # Server-side stash so the captured request (which holds the session COOKIE) is
 # NEVER reflected back into the browser between preview and save (Codex). Keyed
@@ -393,18 +393,34 @@ def _wiz_form(err="", name="", prompt="", capture=""):
         capture=html.escape(capture)), mimetype="text/html")
 
 
-def _wiz_preview(target: dict, cookie: str, warnings: list) -> Response:
+def _wiz_preview(target: dict, cookie: str, warnings: list, prompt: str = "") -> Response:
     """Stash the credential server-side, hand the browser a token + editable JSON.
 
     The editable target carries NO cookie (cookie_env only) and NO key value
     (auth_value_env name only), so nothing sensitive is reflected to the page.
+    `prompt` is stashed so the "auto-detect response fields" replay can locate the
+    reply in the live response.
     """
+    from urllib.parse import urlsplit
     token = uuid.uuid4().hex
     if len(_WIZARD_PENDING) > 20:            # bound the stash
         _WIZARD_PENDING.clear()
-    _WIZARD_PENDING[token] = {"cookie": cookie}
+    # Bind the stash to the CAPTURED origin so the session cookie can never be
+    # replayed to an edited/arbitrary host (Codex adversarial, HIGH).
+    origin = urlsplit(target.get("base_url", "")).netloc.lower()
+    _WIZARD_PENDING[token] = {"cookie": cookie, "prompt": prompt, "origin": origin}
+    # Offer the one-request auto-detect when the response paths aren't known yet
+    # (the cURL-paste case) and it's a web-app template target. Same form as save
+    # (so the operator's edits are included) via HTML5 formaction — no JS.
+    autodetect = ""
+    if target.get("api_style") == "template" and not target.get("response_text_path"):
+        autodetect = (
+            '<button type=submit formaction="/wizard/probe-response" '
+            'title="replays your captured request to the same host and reads the reply / usage / '
+            'model paths off the real response, so you don\'t hand-type them">'
+            '&#128269; Auto-detect response fields (sends a live request)</button> ')
     return Response(_WIZARD_PREVIEW.format(
-        warnings=_wiz_warnings(warnings), token=token,
+        warnings=_wiz_warnings(warnings), token=token, autodetect=autodetect,
         target_json=html.escape(json.dumps(target, indent=2))), mimetype="text/html")
 
 
@@ -457,7 +473,7 @@ def wizard_add():
     except (ValueError, KeyError, TypeError) as e:
         # Do NOT echo the capture back — it may hold the session cookie (Codex).
         return _wiz_form(f"Could not parse capture: {e} Re-paste and try again.", name, prompt)
-    return _wiz_preview(syn.target, cap.cookie, syn.warnings)
+    return _wiz_preview(syn.target, cap.cookie, syn.warnings, prompt=prompt)
 
 
 @app.route("/wizard/detect", methods=["POST"])
@@ -550,6 +566,72 @@ def wizard_capture():
         f'<p class=sub>{html.escape(g.playwright_hint)}</p>'
         f'<p><a href="/wizard">I have my capture &rarr; paste it</a></p>')
     return _wiz_page("Capture guide", inner)
+
+
+@app.route("/wizard/probe-response", methods=["POST"])
+def wizard_probe_response():
+    """Auto-detect the response paths for a cURL-derived template target by
+    replaying the captured request ONCE and reading the paths off the real
+    response — removes the hand-typed-path error the operator hit on cURL paste."""
+    from . import wizard
+    token = request.form.get("token", "")
+    pending = _WIZARD_PENDING.get(token)
+    if pending is None:
+        return _wiz_page("Expired", '<p class="err">This capture session expired. Start over.'
+                         '</p><p><a href="/wizard">&larr; wizard</a></p>')
+    try:
+        target = json.loads(request.form.get("target", "{}"))
+        if not isinstance(target, dict):
+            raise ValueError("target must be a JSON object")
+    except (json.JSONDecodeError, ValueError) as e:
+        return _wiz_page("Invalid", f'<p class="err">Edited target is not valid JSON: '
+                         f'{html.escape(str(e))}</p><p><a href="/wizard">&larr; back</a></p>')
+    # Origin binding: refuse to replay the captured cookie to a host other than
+    # the one it was captured from (Codex adversarial, HIGH).
+    from urllib.parse import urlsplit
+    edited_origin = urlsplit(target.get("base_url", "")).netloc.lower()
+    if pending["cookie"] and edited_origin != pending.get("origin", ""):
+        return _wiz_preview(target, pending["cookie"],
+                            [f"Refusing to auto-detect: base_url host changed to "
+                             f"'{edited_origin or '—'}' but the captured cookie belongs to "
+                             f"'{pending.get('origin') or '—'}'. The session cookie is only sent "
+                             f"to the host it was captured from. Revert base_url, or re-capture."],
+                            prompt=pending.get("prompt", ""))
+    try:
+        t = Target(name=target.get("name", "target"), base_url=target.get("base_url", ""),
+                   chat_path=target.get("chat_path", "/"), api_style="template",
+                   request_template=target.get("request_template", {}),
+                   stream_mode=target.get("stream_mode", "none"),
+                   stream_delta_path=target.get("stream_delta_path", ""),
+                   extra_headers=target.get("extra_headers", {}) if isinstance(
+                       target.get("extra_headers"), dict) else {},
+                   cookie=pending["cookie"])          # cookie from the server-side stash only
+        res = wizard.discover_response_paths(Client(t), pending.get("prompt", ""))
+    except Exception as e:                            # never 500 the operator
+        return _wiz_page("Auto-detect error", f'<p class="err">Could not auto-detect: '
+                         f'{html.escape(str(e))}</p><p><a href="/wizard">&larr; re-capture</a></p>')
+    if not res["ok"]:
+        # Fall back to the manual preview with the reason; keep the pending stash.
+        return _wiz_preview(target, pending["cookie"],
+                            [f"Auto-detect failed: {res['error']}",
+                             "Set response_text_path / response_prompt_tokens_path by hand, "
+                             "or paste a HAR instead."],
+                            prompt=pending.get("prompt", ""))
+    # Merge discovered paths into the target (fill from the real response).
+    for k, v in res["paths"].items():
+        if v:
+            target[k] = v
+    if res["stream_mode"] == "sse":
+        target["stream_mode"] = "sse"
+    notes = ["&#9989; Auto-detected from a live response — review below, then Dry-run &amp; save."]
+    if res.get("sample"):
+        notes.append(f"reply sample: {res['sample']}")
+    if res["stream_mode"] == "sse":
+        notes.append("response is SSE — stream_delta_path defaulted; confirm the per-chunk path.")
+    if not target.get("response_prompt_tokens_path"):
+        notes.append("no prompt-token usage in the response — tokenizer fingerprint will be "
+                     "UNAVAILABLE (provenance floors at INDETERMINATE; wire/behavioral only).")
+    return _wiz_preview(target, pending["cookie"], notes, prompt=pending.get("prompt", ""))
 
 
 @app.route("/wizard/save", methods=["POST"])
