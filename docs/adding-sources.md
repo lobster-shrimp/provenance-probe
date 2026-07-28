@@ -1,5 +1,10 @@
 # Adding sources — APIs and web apps
 
+> **Easiest path: the wizard.** `provenance-probe serve` → open
+> [`/wizard`](WIZARD.md) and paste a URL, a `curl` command, or a HAR — it
+> auto-detects the API style, dry-runs, and saves for you (no hand-editing JSON).
+> This page is the manual/reference route and explains the fields the wizard fills.
+
 How to point the probe at a new endpoint. Two kinds of source:
 
 - **API source** — an OpenAI- or Anthropic-style REST endpoint.

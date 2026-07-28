@@ -159,8 +159,11 @@ Only run against systems you are **authorized in writing** to test. Targets carr
 
 ## 📚 Documentation
 
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — technical reference: signal layers, the **tokenizer fingerprint math** (overhead correction, match score, Han compression), the OmniRoute **calibration gate** and three-state cross-check, the wizard state machine, guided capture, and the security invariants.
+- **[docs/WIZARD.md](docs/WIZARD.md)** — no-jargon guide to **adding a target** (URL / cURL / HAR / OmniRoute / automated capture) and what happens on save.
 - **[WHITEPAPER.md](WHITEPAPER.md)** — the problem, the method, and why it's open (for consumers, security, legal/compliance, policy).
 - **[QUICKSTART.md](QUICKSTART.md)** — project layout and first run.
+- **[RUNNING-LOCALLY.md](RUNNING-LOCALLY.md)** — from-scratch cross-platform local run (Windows/macOS/Linux).
 - **[docs/adding-sources.md](docs/adding-sources.md)** — point the probe at a new API or web app.
 - **[docs/EXTENDING.md](docs/EXTENDING.md)** — grow coverage: endpoints, web apps, agents, reference families.
 - **[docs/CONOPS.md](docs/CONOPS.md)** — executive / federal concept of operations.
