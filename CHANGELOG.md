@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.11.0] - 2026-07-28 — One-door add-target: auto-detect API style
+
+### Added
+- **One-door "Add a target" wizard (`/wizard`).** A single box takes whatever you
+  have — a plain API address, a `curl` command, or a saved HAR — and figures out
+  the rest. The operator never picks an "API style" (CEO plan E1/E2). A pasted
+  URL is identified by *observing* the endpoint, not guessing from the name.
+- **`provenance_probe/detect.py` — endpoint auto-detection.** A local input
+  classifier (`classify_input`) plus an API-probe state machine (`detect`) that
+  infers `api_style` (openai | anthropic) from responses. LLM-POSITIVE requires
+  the full combination — assistant content **and** integer usage **and** a model
+  id — else INDETERMINATE (no false-positive JSON detection). Ambiguous or
+  partial matches ALWAYS ask for confirmation (E6); errors are plain sentences,
+  never stack traces.
+- **Consent gate before any network egress.** A pasted endpoint runs no probe
+  until the operator approves, enforced by a one-shot **server-side consent
+  token** (a direct/CSRF POST to `/wizard/detect` sends nothing). The consent
+  copy states the real request volume (~28 for a full check), not "one test".
+- **`provenance_probe/presets.py` — known-vendor presets (E4) + env-key lookup
+  (E3).** Recognizes OpenAI/Anthropic/DeepSeek/Moonshot/OpenRouter/Gemini by
+  **hostname** (exact-or-subdomain, not substring — a look-alike host like
+  `api.openai.com.evil.test` is rejected) and offers a `{VENDOR}_API_KEY` already
+  in your environment. The key **value never touches the committed config**; only
+  the env-var NAME rides `auth_value_env`.
+- **`EgressBudget`** caps the identify phase so it can't runaway.
+- Plain-English detection card + one-click **"Probe it now"** hand-off to the
+  probe tool with the target prefilled (E5). +48 tests.
+
+### Security (hardening from adversarial review — Codex + Claude)
+- Vendor matching is hostname-aware (was substring) — closes a credential-exfil
+  path to look-alike hosts. The write-boundary secret-header filter now strips
+  smuggled key headers (`X-Api-Key-Alt`, `x-session-token`) while keeping CSRF
+  headers needed for replay. Every detection carries a self-reported-usage caveat.
+
 ## [0.10.0] - 2026-07-26 — Add-target wizard (paste-first)
 
 ### Added

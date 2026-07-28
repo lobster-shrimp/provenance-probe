@@ -299,25 +299,50 @@ def agent_board():
                     mimetype="text/html")
 
 
-_WIZARD_FORM = """<!doctype html><meta charset=utf-8><title>Add-target wizard · provenance-probe</title>
+_WIZARD_FORM = """<!doctype html><meta charset=utf-8><title>Add a target · provenance-probe</title>
 <style>body{{font:15px system-ui;margin:2rem auto;max-width:760px;color:#16181d}}
-textarea{{width:100%;font:12px ui-monospace;min-height:140px}}input{{font:14px system-ui;padding:4px}}
+textarea{{width:100%;font:12px ui-monospace;min-height:120px}}input{{font:14px system-ui;padding:5px}}
 .err{{background:#fdecec;border:1px solid #f5b5b5;padding:.6rem;border-radius:6px}}
 .warn{{background:#fff7e6;border:1px solid #ffd591;padding:.5rem;border-radius:6px;margin:.3rem 0}}
-label{{display:block;margin:.7rem 0 .2rem;font-weight:600}}.sub{{color:#6b7280}}</style>
-<h1>Add-target wizard</h1>
-<p class=sub>Paste a captured web-app chat request (DevTools &rarr; Copy-as-cURL, or a saved HAR).
-Log in and send one message in your OWN browser first, then copy that request. Local only; the
-session cookie is written to a gitignored env file, never committed. <a href="/">&larr; probe tool</a></p>
+label{{display:block;margin:.7rem 0 .2rem;font-weight:600}}.sub{{color:#6b7280}}
+.hint{{color:#6b7280;font-size:13px;margin:.2rem 0 0}}</style>
+<h1>Add a target</h1>
+<p class=sub>One box. Paste whatever you have &mdash; we figure out the rest.
+No need to know the API type. Local only; nothing is sent until you approve.
+<a href="/">&larr; probe tool</a></p>
 {err}
 <form method=post action="/wizard">
-<label>Target name</label><input name=name value="{name}" placeholder="lindy-chat" required>
-<label>The exact message text you sent (so we can find it in the request)</label>
-<input name=prompt value="{prompt}" style="width:100%" placeholder="fingerprint me" required>
-<label>Format</label>
-<select name=fmt><option value=curl {c}>cURL (Copy as cURL)</option><option value=har {h}>HAR (saved)</option></select>
-<label>Pasted capture</label><textarea name=capture required>{capture}</textarea>
-<p><button type=submit>Synthesize &rarr;</button></p></form>"""
+<label>Target name</label><input name=name value="{name}" placeholder="my-service" required>
+<label>Paste an AI service address, a <code>curl</code> command, or a saved HAR</label>
+<textarea name=capture required placeholder="https://api.vendor.com/v1
+  &mdash; or &mdash;
+curl 'https://chat.app.com/api/chat' -H 'cookie: ...' --data '...'">{capture}</textarea>
+<p class=hint>A plain address (URL) is identified with a short, consented test.
+A <code>curl</code>/HAR capture is for logged-in web apps.</p>
+<label>If you pasted a capture: the exact message text you sent <span class=sub>(optional for a plain URL)</span></label>
+<input name=prompt value="{prompt}" style="width:100%" placeholder="fingerprint me">
+<p><button type=submit>Continue &rarr;</button></p></form>"""
+
+_WIZARD_CONSENT = """<!doctype html><meta charset=utf-8><title>Confirm test · provenance-probe</title>
+<style>body{{font:15px system-ui;margin:2rem auto;max-width:680px;color:#16181d}}
+.box{{background:#f4f7fb;border:1px solid #cdd9ec;padding:1rem 1.2rem;border-radius:8px}}
+.sub{{color:#6b7280}}code{{background:#eef;padding:1px 4px;border-radius:3px}}
+button{{font:15px system-ui;padding:.5rem 1rem;margin-right:.5rem}}
+label{{display:block;margin:.6rem 0}}</style>
+<h1>Send a short identify test?</h1>
+<div class=box>
+<p>To identify <b>{host}</b> I'll send <b>a few short requests</b> (usually 2&ndash;4)
+that ask for a single token. A full provenance check afterwards is
+<b>~28 requests total</b>.</p>
+<p class=sub>Only test services you are authorized to test. Nothing has been sent yet.
+{keynote}</p>
+</div>
+<form method=post action="/wizard/detect">
+<input type=hidden name=token value="{token}">
+<label><input type=checkbox name=passive_only value=1> Passive only &mdash; just check reachability
+(<code>GET /models</code>), send no inference.</label>
+<p><button type=submit name=go value=1>Send test &rarr;</button>
+<a href="/wizard"><button type=button>Cancel</button></a></p></form>"""
 
 _WIZARD_PREVIEW = """<!doctype html><meta charset=utf-8><title>Confirm target · provenance-probe</title>
 <style>body{{font:15px system-ui;margin:2rem auto;max-width:760px;color:#16181d}}
@@ -339,6 +364,11 @@ goes to <code>.env.capture</code> (gitignored). <a href="/wizard">&larr; start o
 # NEVER reflected back into the browser between preview and save (Codex). Keyed
 # by a one-shot token; single-process local Flask, so an in-memory dict is fine.
 _WIZARD_PENDING: dict = {}
+# One-shot consent tokens issued by the /wizard endpoint branch. /wizard/detect
+# refuses (zero egress) without a valid token, so the consent gate can't be
+# bypassed by a direct/CSRF POST, and the endpoint under test comes from here
+# (server-side), not a tamperable form field (Codex adversarial, CRITICAL).
+_CONSENT_PENDING: dict = {}
 
 
 def _wiz_warnings(ws):
@@ -355,40 +385,136 @@ def _wiz_page(title, inner):
         + inner, mimetype="text/html")
 
 
-@app.route("/wizard", methods=["GET", "POST"])
-def wizard_add():
-    from . import wizard
-    if request.method == "GET":
-        return Response(_WIZARD_FORM.format(err="", name="", prompt="", capture="",
-                                            c="selected", h=""), mimetype="text/html")
-    name = request.form.get("name", "").strip()
-    prompt = request.form.get("prompt", "")
-    fmt = request.form.get("fmt", "curl")
-    capture = request.form.get("capture", "")
+def _wiz_form(err="", name="", prompt="", capture=""):
+    return Response(_WIZARD_FORM.format(
+        err=f'<div class="err">{html.escape(err)}</div>' if err else "",
+        name=html.escape(name), prompt=html.escape(prompt),
+        capture=html.escape(capture)), mimetype="text/html")
 
-    def _err(msg):
-        # Do NOT echo the pasted capture back — it may contain the session cookie,
-        # and reflecting it into the error HTML would leak the credential (Codex).
-        return Response(_WIZARD_FORM.format(
-            err=f'<div class="err">{html.escape(msg)}<br>Re-paste the capture and try again.</div>',
-            name=html.escape(name), prompt=html.escape(prompt), capture="",
-            c="selected" if fmt == "curl" else "", h="selected" if fmt == "har" else ""),
-            mimetype="text/html")
-    try:
-        cap = wizard.parse_har(capture, prompt) if fmt == "har" else wizard.parse_curl(capture)
-        syn = wizard.synthesize(cap, prompt, name)
-    except (ValueError, KeyError, TypeError) as e:
-        return _err(f"Could not parse capture: {e}")
-    # Stash the captured request (holds the cookie) server-side; hand the browser
-    # only a token. The editable target JSON already carries no cookie (cookie_env
-    # only), so nothing sensitive is reflected.
+
+def _wiz_preview(target: dict, cookie: str, warnings: list) -> Response:
+    """Stash the credential server-side, hand the browser a token + editable JSON.
+
+    The editable target carries NO cookie (cookie_env only) and NO key value
+    (auth_value_env name only), so nothing sensitive is reflected to the page.
+    """
     token = uuid.uuid4().hex
     if len(_WIZARD_PENDING) > 20:            # bound the stash
         _WIZARD_PENDING.clear()
-    _WIZARD_PENDING[token] = {"cookie": cap.cookie}
+    _WIZARD_PENDING[token] = {"cookie": cookie}
     return Response(_WIZARD_PREVIEW.format(
-        warnings=_wiz_warnings(syn.warnings), token=token,
-        target_json=html.escape(json.dumps(syn.target, indent=2))), mimetype="text/html")
+        warnings=_wiz_warnings(warnings), token=token,
+        target_json=html.escape(json.dumps(target, indent=2))), mimetype="text/html")
+
+
+@app.route("/wizard", methods=["GET", "POST"])
+def wizard_add():
+    """One door: classify the paste locally, route curl/HAR to synthesize and a
+    plain endpoint to the consent gate. api_style is never asked (E2)."""
+    from . import wizard, detect
+    if request.method == "GET":
+        return _wiz_form()
+    name = request.form.get("name", "").strip()
+    prompt = request.form.get("prompt", "")
+    capture = request.form.get("capture", "")
+    kind = detect.classify_input(capture)
+
+    if kind == "empty":
+        return _wiz_form("Paste something first — a URL, a curl command, or a HAR.", name, prompt)
+    if kind == "unknown":
+        return _wiz_form("I couldn't tell what that is. Paste a plain URL "
+                         "(https://api.vendor.com/v1), a `curl` command, or a saved HAR file.",
+                         name, prompt)
+    if kind == "endpoint":
+        # No egress yet — show the consent gate. Offer an env key if we know the vendor.
+        from . import presets
+        preset = presets.match_host(capture)
+        key_env = presets.env_key_for(preset)
+        keynote = (f"I'll use <code>{html.escape(key_env)}</code> from your environment as the key."
+                   if key_env else
+                   "No vendor key found in your environment — an authenticated API may return 401.")
+        host = ""
+        try:
+            from urllib.parse import urlsplit
+            base, _ = detect._normalize(capture)
+            host = urlsplit(base).netloc or base
+        except Exception:
+            host = capture
+        # Issue a one-shot consent token; stash the endpoint server-side so it
+        # can't be tampered and so a direct POST can't fake consent.
+        token = uuid.uuid4().hex
+        if len(_CONSENT_PENDING) > 20:
+            _CONSENT_PENDING.clear()
+        _CONSENT_PENDING[token] = {"endpoint": capture.strip(), "name": name}
+        return Response(_WIZARD_CONSENT.format(
+            host=html.escape(host), token=token, keynote=keynote), mimetype="text/html")
+
+    # curl / har — the existing paste path (credential handled apart).
+    try:
+        cap = wizard.parse_har(capture, prompt) if kind == "har" else wizard.parse_curl(capture)
+        syn = wizard.synthesize(cap, prompt, name)
+    except (ValueError, KeyError, TypeError) as e:
+        # Do NOT echo the capture back — it may hold the session cookie (Codex).
+        return _wiz_form(f"Could not parse capture: {e} Re-paste and try again.", name, prompt)
+    return _wiz_preview(syn.target, cap.cookie, syn.warnings)
+
+
+@app.route("/wizard/detect", methods=["POST"])
+def wizard_detect():
+    """Post-consent endpoint identification. Runs detect() with consented=True,
+    resolves any env key in memory (never persisted), and hands the operator the
+    same editable preview with a plain-language detection card."""
+    from . import detect, presets
+    # CONSENT GATE (server-side): refuse — and send NOTHING — without a valid
+    # one-shot token issued by the /wizard consent step (Codex adversarial).
+    token = request.form.get("token", "")
+    consent = _CONSENT_PENDING.pop(token, None)
+    if consent is None:
+        return _wiz_page("Consent expired", '<p class="err">This consent step expired or was '
+                         'already used, so no test was sent. Start over from the wizard.</p>'
+                         '<p><a href="/wizard">&larr; wizard</a></p>')
+    name = consent["name"].strip() or "target"
+    endpoint = consent["endpoint"]           # from the server stash, not the form
+    passive_only = request.form.get("passive_only") == "1"
+    preset = presets.match_host(endpoint)
+    key_env = presets.env_key_for(preset)
+    key_val = os.environ.get(key_env, "") if key_env else ""   # in-memory only
+
+    d = detect.detect(endpoint, key=key_val or None, consented=True,
+                      passive_only=passive_only)
+    if not d.base_url and d.error:
+        return _wiz_page("Couldn't identify", f'<p class="err">{html.escape(d.error)}</p>'
+                         '<p><a href="/wizard">&larr; try again</a></p>')
+    if d.route_hint == "capture":
+        return _wiz_page("Looks like a web app", f'<p class="warn">{html.escape(d.error)}</p>'
+                         '<p><a href="/wizard">&larr; use the paste flow</a></p>')
+    if not d.api_style:
+        # Reachable but shape unconfirmed — let the operator pick, don't guess.
+        note = d.error or "Reachable, but I couldn't confirm the API type from the response."
+        return _wiz_page("Needs a choice", f'<p class="warn">{html.escape(note)}</p>'
+                         f'<p class=sub>Confidence: {d.confidence}. Probes sent: {d.probes_used}.</p>'
+                         '<p>Set the API style by hand on the '
+                         '<a href="/">probe tool</a>, or re-run with an active test.</p>')
+    # Build a committable target (key rides auth_value_env NAME only, never value).
+    target = {
+        "name": name, "base_url": d.base_url, "model": d.model,
+        "api_style": d.api_style, "chat_path": d.chat_path or (
+            "/v1/messages" if d.api_style == "anthropic" else "/chat/completions"),
+        "authorized": False,
+    }
+    if key_env:
+        target["auth_value_env"] = key_env
+    conf = {"high": "&#9989; High confidence", "medium": "&#9888; Medium (please confirm)",
+            "low": "&#9888; Low (please confirm)"}.get(d.confidence, d.confidence)
+    warnings = []
+    warnings.append(f"Detected: {d.api_style} API — {conf}. Sent {d.probes_used} probe(s).")
+    if d.needs_confirm:
+        warnings.append("Ambiguous or partial signal — confirm the api_style/model below before saving.")
+    if key_env:
+        warnings.append(f"Key: will read {key_env} from your environment at probe time "
+                        f"(the value is never written to the config).")
+    warnings.append(d.caveat)
+    return _wiz_preview(target, "", warnings)
 
 
 @app.route("/wizard/save", methods=["POST"])
@@ -407,19 +533,36 @@ def wizard_save():
     except (json.JSONDecodeError, ValueError) as e:
         return _wiz_page("Invalid", f'<p class="err">Edited target is not valid JSON: '
                          f'{html.escape(str(e))}</p><p><a href="/wizard">&larr; back</a></p>')
+    # Honor the detected/edited api_style — the endpoint path is openai/anthropic,
+    # the paste path is template. Only template carries a cookie.
+    api_style = target.get("api_style", "template")
     try:
-        t = Target(name=target.get("name", "target"), base_url=target.get("base_url", ""),
-                   chat_path=target.get("chat_path", "/"), api_style="template",
-                   request_template=target.get("request_template", {}),
-                   response_text_path=target.get("response_text_path", ""),
-                   response_prompt_tokens_path=target.get("response_prompt_tokens_path", ""),
-                   response_model_path=target.get("response_model_path", ""),
-                   stream_mode=target.get("stream_mode", "none"),
-                   stream_delta_path=target.get("stream_delta_path", ""),
-                   extra_headers=target.get("extra_headers", {}) if isinstance(
-                       target.get("extra_headers"), dict) else {},
-                   cookie=cookie)                      # cookie from the server-side stash only
-        dr = wizard.dry_run(Client(t))
+        if api_style == "template":
+            t = Target(name=target.get("name", "target"), base_url=target.get("base_url", ""),
+                       chat_path=target.get("chat_path", "/"), api_style="template",
+                       request_template=target.get("request_template", {}),
+                       response_text_path=target.get("response_text_path", ""),
+                       response_prompt_tokens_path=target.get("response_prompt_tokens_path", ""),
+                       response_model_path=target.get("response_model_path", ""),
+                       stream_mode=target.get("stream_mode", "none"),
+                       stream_delta_path=target.get("stream_delta_path", ""),
+                       extra_headers=target.get("extra_headers", {}) if isinstance(
+                           target.get("extra_headers"), dict) else {},
+                       cookie=cookie)                  # cookie from the server-side stash only
+            probes = None                              # dry_run's varied-prompt defaults
+        else:
+            t = Target(name=target.get("name", "target"), base_url=target.get("base_url", ""),
+                       model=target.get("model", ""),
+                       api_style="anthropic" if api_style == "anthropic" else "openai",
+                       chat_path=target.get("chat_path",
+                                            "/v1/messages" if api_style == "anthropic"
+                                            else "/chat/completions"),
+                       auth_value_env=target.get("auth_value_env", ""))
+            # Identical prompts: a stateless API returns identical prompt-token
+            # counts for identical input, so the replay-safety stability gate
+            # (built for web-app replay) doesn't false-fail on a healthy endpoint.
+            probes = ["ping", "ping"]
+        dr = wizard.dry_run(Client(t), probes=probes)
     except Exception as e:                              # never 500 the operator
         return _wiz_page("Dry-run error", f'<p class="err">Dry-run could not run: '
                          f'{html.escape(str(e))}</p><p><a href="/wizard">&larr; re-capture</a></p>')
@@ -449,13 +592,29 @@ def wizard_save():
     if not dr["usage_exposed"]:
         notes.append("usage.prompt_tokens NOT exposed — tokenizer fingerprint unavailable "
                      "(provenance floors at INDETERMINATE; wire/behavioral only).")
+    from urllib.parse import urlencode
+    prefill = urlencode({k: v for k, v in {
+        "name": target.get("name", ""), "base_url": target.get("base_url", ""),
+        "model": target.get("model", ""), "api_style": api_style,
+        "chat_path": target.get("chat_path", "")}.items() if v})
+    cred_note = ""
+    if res.get("env_path"):                             # template path wrote a cookie
+        cred_note = (f'Cookie stored in <code>.env.capture</code> (gitignored) as '
+                     f'<code>{html.escape(res["cookie_env"])}</code> &mdash; run '
+                     f'<code>source .env.capture</code> before probing.')
+    elif target.get("auth_value_env"):                  # endpoint path uses an env key
+        cred_note = (f'Key read from <code>{html.escape(target["auth_value_env"])}</code> in '
+                     f'your environment at probe time (never written to the config).')
+    # E5: the payoff — one click to the plain-English verdict card (prefilled;
+    # the probe tool renders the existing hero warning). Authorization still
+    # required there before any provenance battery runs.
     inner = (f'<h1>Saved: {html.escape(res["added"])}</h1>'
              f'<div class="ok">Target written to <code>{html.escape(res["config_path"])}</code>. '
-             f'Cookie stored in <code>.env.capture</code> (gitignored) as '
-             f'<code>{html.escape(res["cookie_env"])}</code> &mdash; run '
-             f'<code>source .env.capture</code> before probing (or set it as a CI secret).</div>'
+             f'{cred_note}</div>'
              + "".join(f'<div class="warn">&#9888; {html.escape(n)}</div>' for n in notes)
-             + '<p><a href="/wizard">Add another</a> · <a href="/">probe tool</a></p>')
+             + f'<p style="margin-top:1rem"><a href="/?{html.escape(prefill)}">'
+             f'<button style="font:15px system-ui;padding:.5rem 1rem">Probe it now &rarr;</button></a></p>'
+             + '<p class=sub><a href="/wizard">Add another</a> · <a href="/">probe tool</a></p>')
     return _wiz_page("Saved", inner)
 
 
@@ -712,6 +871,18 @@ function compare(){
    $('mon_out').innerHTML=h;
   }).catch(e=>{$('cmp').disabled=false;$('mon_out').textContent='Compare failed: '+e});
 }
+// E5: the add-target wizard hands off here with the target prefilled, so the
+// operator lands one click from the plain-English verdict card.
+function prefillFromQuery(){
+ const q=new URLSearchParams(location.search);
+ if(![...q.keys()].length)return;
+ const set=(id,k)=>{const v=q.get(k);if(v!=null&&$(id))$(id).value=v};
+ set('base_url','base_url');set('model','model');set('name','name');
+ const st=q.get('api_style');
+ if(st&&$('api_style')){$('api_style').value=st;toggleTmpl();}
+ if(q.get('chat_path')&&$('chat_path'))$('chat_path').value=q.get('chat_path');
+}
+prefillFromQuery();
 loadHist();
 </script>"""
 

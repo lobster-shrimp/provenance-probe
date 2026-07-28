@@ -19,6 +19,7 @@ inherently brittle).
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 from dataclasses import dataclass, field
@@ -405,10 +406,22 @@ def ensure_gitignored(repo_root: str, rel_path: str) -> None:
             f.write(f"# add-target wizard: captured session credentials — never commit\n{rel_path}\n")
 
 
-# Config keys / header names that carry credentials and must NEVER be written
-# to the committed config, no matter what the (possibly hand-edited) target says.
+# Header names that carry credentials and must NEVER be written to the committed
+# config, no matter what the (possibly hand-edited/injected) target says. Matched
+# by SUBSTRING on the name so a smuggled variant like `X-Api-Key-Alt` or
+# `X-Session-Token` is caught too, not only exact names (Codex adversarial, HIGH).
+# The token/value itself rides an env var (auth_value_env / cookie_env), never a
+# committed header, so aggressive stripping here has no legitimate false-positive.
+# NB: match credential TOKENs (auth/access/session/api/refresh/bearer token) but
+# NOT `x-csrf-token` — the wizard intentionally KEEPS CSRF headers for replay, and
+# a CSRF token is not a long-lived credential. So `token` is only matched with a
+# credential-ish prefix, never bare.
 _SECRET_HEADER_RE = re.compile(
-    r"^(cookie|authorization|proxy-authorization|x-api-key|x-auth|x-goog-api-key)$",
+    r"(cookie|authorization|api[-_]?key|access[-_]?key|secret|bearer|"
+    r"(auth|access|session|api|refresh|bearer)[-_]?token|"
+    r"x-[a-z0-9]+[-_]key|"                       # vendor key headers: x-anthropic-key, x-openai-key
+    r"vault|security[-_]?token|"                 # x-vault-token, x-amz-security-token
+    r"x-auth|x-goog-api-key|password|passwd|credential)",
     re.IGNORECASE,
 )
 
@@ -430,7 +443,7 @@ def sanitize_target(target: dict) -> tuple[dict, list]:
     if isinstance(eh, dict):
         kept = {}
         for k, v in eh.items():
-            if _SECRET_HEADER_RE.match(str(k).strip()):
+            if _SECRET_HEADER_RE.search(str(k).strip()):   # substring, not anchored
                 removed.append(f"extra_headers.{k}")
             else:
                 kept[k] = v

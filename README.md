@@ -7,8 +7,8 @@
 Vendors can silently swap models, reroute your requests, or resell a Chinese model under a Western name. `provenance-probe` catches it with black-box measurements — **no vendor cooperation, no API key for the demo, runs 100% on your machine.**
 
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
-![version](https://img.shields.io/badge/version-0.10.0-informational)
-![tests](https://img.shields.io/badge/tests-179%20passing-brightgreen)
+![version](https://img.shields.io/badge/version-0.11.0-informational)
+![tests](https://img.shields.io/badge/tests-231%20passing-brightgreen)
 ![tokenizer families](https://img.shields.io/badge/reference%20families-27-blueviolet)
 ![local](https://img.shields.io/badge/runs-100%25%20local-success)
 
@@ -118,7 +118,7 @@ Reports persist to `/data` in the container (`~/.provenance-probe/reports` local
 `provenance-probe serve` (binds to loopback, no auth — keep it local) gives you the whole harness in a browser:
 
 - **Live probe tool** — endpoint + model → streamed multi-layer assessment → plain-language warning + technical report.
-- **🧙 Add target** (`/wizard`) — paste a Copy-as-cURL / HAR from any web-app chat, and it auto-builds a probe target, dry-runs it, and stores the session cookie in a gitignored file (never committed).
+- **🧙 Add target** (`/wizard`) — **one box, no "which API style?"**. Paste a plain API address, a Copy-as-cURL, or a HAR: a URL is identified by *probing* it (OpenAI vs Anthropic auto-detected, behind an explicit consent gate); a capture auto-builds a web-app target. It dry-runs, offers a known-vendor key from your environment (the value never enters the config), and hands off to the probe tool prefilled.
 - **🤖 Agent board** (`/agent`) — paste an agent trace (OpenTelemetry GenAI or minimal JSON) for a per-step provenance + model-switch + tool-egress board.
 
 ![the add-target wizard: paste a captured request, get a synthesized probe target](docs/media/wizard-demo.gif)
