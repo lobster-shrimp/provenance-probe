@@ -7,8 +7,8 @@
 Vendors can silently swap models, reroute your requests, or resell a Chinese model under a Western name. `provenance-probe` catches it with black-box measurements — **no vendor cooperation, no API key for the demo, runs 100% on your machine.**
 
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
-![version](https://img.shields.io/badge/version-0.12.0-informational)
-![tests](https://img.shields.io/badge/tests-283%20passing-brightgreen)
+![version](https://img.shields.io/badge/version-0.13.0-informational)
+![tests](https://img.shields.io/badge/tests-308%20passing-brightgreen)
 ![tokenizer families](https://img.shields.io/badge/reference%20families-27-blueviolet)
 ![local](https://img.shields.io/badge/runs-100%25%20local-success)
 
@@ -134,6 +134,7 @@ Reports persist to `/data` in the container (`~/.provenance-probe/reports` local
 | `agent-trace` / `agent` | Assess an **agent** (trace ingest, or active backend probe) |
 | `sentinel` | Live reverse-proxy flight recorder — tees an agent's model calls, live board |
 | `omniroute` | Fingerprint + cross-check a route through a local OmniRoute router (calibration-gated; confidence-capped until calibrated) |
+| `capture` | Guided web-app request capture (annotated DevTools steps; `--auto` uses optional Playwright, login never recorded) |
 | `redteam` | Drive an authorized endpoint through an adversarial corpus; detect a model switch |
 | `monitor` | Diff two runs; **exit 2 on drift** — wire into CI to catch silent swaps |
 | `build-reference` / `build-reference-endpoint` / `verify-reference` | Manage the tokenizer reference corpus |

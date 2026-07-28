@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """provenance-probe CLI."""
 from __future__ import annotations
-import argparse, json, os, sys, datetime, hashlib
+import argparse, json, os, sys, datetime, hashlib, uuid
 
 from .config import load_targets, write_example, Target
 from .client import Client
@@ -488,6 +488,68 @@ def cmd_omniroute(a):
               f"(via OmniRoute is never CONFIRMED until calibration passes)")
 
 
+def _default_har_path(url: str) -> str:
+    """A private, non-repo captures path for a credential-bearing HAR."""
+    from urllib.parse import urlsplit
+    home = os.path.expanduser(os.environ.get("PROVENANCE_PROBE_HOME", "~/.provenance-probe"))
+    host = (urlsplit(url if "://" in (url or "") else "https://" + (url or "")).hostname or "capture")
+    return os.path.join(home, "captures", f"{host}-{uuid.uuid4().hex[:8]}.har")
+
+
+def _ensure_har_gitignored(har_path: str) -> None:
+    """If the HAR landed inside a git repo, make sure it can't be committed."""
+    import subprocess
+    d = os.path.dirname(os.path.abspath(har_path))
+    try:
+        top = subprocess.run(["git", "-C", d, "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, timeout=5)
+    except Exception:
+        return
+    if top.returncode != 0:
+        return                                  # not in a repo — private dir, fine
+    from . import wizard
+    rel = os.path.relpath(os.path.abspath(har_path), top.stdout.strip())
+    try:
+        wizard.ensure_gitignored(top.stdout.strip(), rel)
+    except OSError:
+        pass
+
+
+def cmd_capture(a):
+    """Guided web-app capture (E8). Prints annotated steps; with the optional
+    Playwright extra installed and --auto, drives a browser to capture for you."""
+    from . import capture_guide
+    from . import capture_playwright as cap
+    avail = cap.playwright_available()
+    if a.auto:
+        if not avail:
+            print("[capture] Playwright not installed — showing the manual steps instead.\n",
+                  file=sys.stderr)
+            print(capture_guide.as_text(capture_guide.guide(a.url, browser=a.browser,
+                                                            playwright_available=False)))
+            return
+        if not a.i_am_authorized:
+            sys.exit("[abort] --auto drives a real browser to the target; pass "
+                     "--i-am-authorized to attest you're authorized to test it.")
+        har = a.out or _default_har_path(a.url)
+        os.makedirs(os.path.dirname(har) or ".", exist_ok=True)
+        print(f"[capture] opening a browser at {a.url}. You'll log in first, THEN send one "
+              f"message — the login is not recorded.", file=sys.stderr)
+        res = cap.capture(a.url, har)
+        if not res.ok:
+            sys.exit(f"[capture] {res.error}")
+        _ensure_har_gitignored(res.har_path)
+        print(f"[capture] wrote {res.har_path} (mode 0600). It contains your SESSION COOKIE — "
+              f"treat it as a credential; do NOT share or commit it.")
+        print(f"[capture] next: run `provenance-probe serve`, open /wizard, and paste the HAR "
+              f"contents. The wizard stores the cookie in a gitignored .env.capture and keeps "
+              f"it out of the committed config.")
+        return
+    # Default: print the guided manual steps.
+    g = capture_guide.guide(a.url, browser=a.browser, playwright_available=avail)
+    print(capture_guide.as_text(g))
+
+
 def cmd_init(a):
     write_example(a.path)
     print(f"Wrote example config -> {a.path}")
@@ -509,6 +571,19 @@ def main(argv=None):
                    help="attest authorization to actively probe this route")
     s.add_argument("--json", action="store_true", help="emit the full evidence record as JSON")
     s.set_defaults(func=cmd_omniroute)
+
+    s = sub.add_parser("capture",
+                       help="guided web-app request capture (E8); --auto uses optional Playwright")
+    s.add_argument("url", nargs="?", default="", help="the web app URL to capture from")
+    s.add_argument("--browser", default="chrome", choices=["chrome", "firefox", "safari"],
+                   help="tailor the DevTools steps to your browser")
+    s.add_argument("--auto", action="store_true",
+                   help="drive a real browser to capture (needs the [capture] extra)")
+    s.add_argument("--out", default="",
+                   help="HAR output path for --auto (default: a private 0600 ~/.provenance-probe/captures/ file)")
+    s.add_argument("--i-am-authorized", dest="i_am_authorized", action="store_true",
+                   help="attest authorization to drive a browser to this target (--auto)")
+    s.set_defaults(func=cmd_capture)
 
     s = sub.add_parser("init", help="write an example target config")
     s.add_argument("--path", default="targets.json")

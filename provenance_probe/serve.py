@@ -318,7 +318,8 @@ No need to know the API type. Local only; nothing is sent until you approve.
   &mdash; or &mdash;
 curl 'https://chat.app.com/api/chat' -H 'cookie: ...' --data '...'">{capture}</textarea>
 <p class=hint>A plain address (URL) is identified with a short, consented test.
-A <code>curl</code>/HAR capture is for logged-in web apps.</p>
+A <code>curl</code>/HAR capture is for logged-in web apps &mdash;
+<a href="/wizard/capture">never captured one? see the step-by-step guide</a>.</p>
 <label>If you pasted a capture: the exact message text you sent <span class=sub>(optional for a plain URL)</span></label>
 <input name=prompt value="{prompt}" style="width:100%" placeholder="fingerprint me">
 <p><button type=submit>Continue &rarr;</button></p></form>"""
@@ -486,8 +487,13 @@ def wizard_detect():
         return _wiz_page("Couldn't identify", f'<p class="err">{html.escape(d.error)}</p>'
                          '<p><a href="/wizard">&larr; try again</a></p>')
     if d.route_hint == "capture":
-        return _wiz_page("Looks like a web app", f'<p class="warn">{html.escape(d.error)}</p>'
-                         '<p><a href="/wizard">&larr; use the paste flow</a></p>')
+        from urllib.parse import quote
+        return _wiz_page("Looks like a web app",
+                         f'<p class="warn">{html.escape(d.error)}</p>'
+                         f'<p>Web apps need a captured request. '
+                         f'<a href="/wizard/capture?url={quote(endpoint, safe="")}">'
+                         f'Show me how to capture it &rarr;</a></p>'
+                         '<p class=sub><a href="/wizard">&larr; back</a></p>')
     if not d.api_style:
         # Reachable but shape unconfirmed — let the operator pick, don't guess.
         note = d.error or "Reachable, but I couldn't confirm the API type from the response."
@@ -515,6 +521,35 @@ def wizard_detect():
                         f"(the value is never written to the config).")
     warnings.append(d.caveat)
     return _wiz_preview(target, "", warnings)
+
+
+@app.route("/wizard/capture", methods=["GET"])
+def wizard_capture():
+    """Guided web-app capture (E8): annotated, browser-specific steps for grabbing
+    the one chat request the template adapter needs."""
+    from . import capture_guide, capture_playwright
+    url = request.args.get("url", "")
+    browser = request.args.get("browser", "chrome")
+    g = capture_guide.guide(url, browser=browser,
+                            playwright_available=capture_playwright.playwright_available())
+    picker = "".join(
+        f'<a href="/wizard/capture?url={html.escape(url)}&browser={b}"'
+        f'{" style=font-weight:700" if b == browser else ""}>{b}</a>'
+        for b in ("chrome", "firefox", "safari"))
+    steps = "".join(
+        f'<li><b>{html.escape(s.title)}</b><br>{html.escape(s.detail)}'
+        + (f'<br><span class=sub>why: {html.escape(s.why)}</span>' if s.why else "")
+        + "</li>" for s in g.steps)
+    har = "".join(f"<li>{html.escape(h)}</li>" for h in g.har_alternative)
+    inner = (
+        f'<h1>Capture a request from {html.escape(g.app)}</h1>'
+        f'<p class=sub>Browser: {picker} &nbsp;·&nbsp; <a href="/wizard">&larr; back to Add a target</a></p>'
+        f'<ol>{steps}</ol>'
+        f'<div class="warn">&#128274; {html.escape(g.security_note)}</div>'
+        f'<h3>Prefer a file?</h3><ul>{har}</ul>'
+        f'<p class=sub>{html.escape(g.playwright_hint)}</p>'
+        f'<p><a href="/wizard">I have my capture &rarr; paste it</a></p>')
+    return _wiz_page("Capture guide", inner)
 
 
 @app.route("/wizard/save", methods=["POST"])

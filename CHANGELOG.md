@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.13.0] - 2026-07-28 — Guided web-app capture (P3 / E8)
+
+### Added
+- **Guided capture (`provenance_probe/capture_guide.py` + `/wizard/capture` +
+  `provenance-probe capture`).** Annotated, browser-specific (Chrome/Firefox/
+  Safari) step-by-step instructions for capturing the one chat request the
+  `template` adapter needs — for operators who have never opened DevTools.
+  Names known apps (ChatGPT/Claude/Gemini/Lindy/Z.ai/…), tailors the "Copy as
+  cURL" label per browser, offers the HAR alternative, and always carries the
+  credential-safety note. No new dependency.
+- **Optional Playwright capture assist (`capture --auto`, `[capture]` extra).**
+  Drives a headed browser to your target and records the chat request to a HAR
+  the wizard ingests. **Two-phase so your login is never recorded:** you log in
+  in an *unrecorded* context; only the authenticated session's chat traffic is
+  captured. The tool never types or sees a password. The HAR is written 0600 to
+  a private `~/.provenance-probe/captures/` dir (gitignored if it lands in a
+  repo) and clearly flagged as credential-bearing. Absent Playwright, `--auto`
+  degrades to the manual guided steps.
+
+### Security (adversarial review — Codex + Claude)
+- Two-phase capture keeps the login POST / OAuth / password out of every HAR
+  (was: recording started before login). Credential-bearing HAR defaults to a
+  private 0600 path, never cwd, and is gitignored inside a repo.
+
 ## [0.12.0] - 2026-07-28 — OmniRoute cross-check + calibration gate (P2a)
 
 ### Added

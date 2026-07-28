@@ -262,6 +262,8 @@ def test_write_target_appends_list_and_keeps_cookie_out_of_config(tmp_path):
     assert "LINDY_COOKIE=sess=SECRET" in env.read_text()  # cookie in the env file only
     assert ".env.capture" in (tmp_path / ".gitignore").read_text()   # env file gitignored
     assert res["added"] == "lindy"
+    # HIGH (Claude): the cookie file must be owner-only (0600), never world-readable.
+    assert (os.stat(env).st_mode & 0o777) == 0o600
 
 
 def test_write_target_sanitizes_smuggled_cookie_in_edited_target(tmp_path):
