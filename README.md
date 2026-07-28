@@ -41,6 +41,11 @@ It reports in plain language first ("**this app uses an AI model built in China*
 
 ## ⚡ Quick start (60 seconds, no API key)
 
+> **On Windows, or want the full stack (engine + observatory)?** See
+> **[RUNNING-LOCALLY.md](RUNNING-LOCALLY.md)** — a from-scratch, cross-platform
+> guide (Windows PowerShell / macOS / Linux / WSL) covering the probe UI, the
+> observatory API, and the static site. The quick path below is macOS/Linux.
+
 ```bash
 git clone https://github.com/lobster-shrimp/provenance-probe && cd provenance-probe
 ./install.sh                       # venv + install + pre-built reference vectors
