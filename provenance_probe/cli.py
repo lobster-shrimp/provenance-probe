@@ -399,6 +399,94 @@ def cmd_redteam(a):
     sys.exit(rc)
 
 
+def cmd_omniroute(a):
+    """OmniRoute optional accelerator: detect, calibrate, cross-check (P2).
+
+    Fingerprints a route THROUGH a local OmniRoute and cross-checks the router's
+    claimed model against the tokenizer fingerprint — but only trusts the result
+    once the calibration gate passes for the running OmniRoute version. Until
+    then the via-OmniRoute verdict is confidence-capped (honest by construction).
+    """
+    from . import omniroute as omni
+    base = a.base
+    st = omni.detect_omniroute(base)
+    if not st.present:
+        sys.exit(f"[omniroute] not reachable at {base}: {st.error}")
+    print(f"[omniroute] present at {base} (version {st.version or 'unknown'}), "
+          f"{len(st.models)} routes")
+    if a.list or not a.route:
+        for m in st.models:
+            print(f"  {m}")
+        if not a.route:
+            print("\nPass --route <id> [--expect-ref <REFKEY> --i-am-authorized] to fingerprint + cross-check.")
+        return
+    t = Target(name=f"omniroute:{a.route}", base_url=base, model=a.route,
+               api_style="openai", chat_path="/chat/completions",
+               authorized=a.i_am_authorized)
+    _assert_scope(t, a.i_am_authorized)
+    client = Client(t)
+    r0 = client.chat("hi", max_tokens=1, temperature=0.0)
+    hdrs = omni.omniroute_headers(r0.headers)
+    version = st.version or hdrs.get("version", "")   # version rides chat headers, not /models
+    obs = tokenizer.measure(client)
+    ranked = tokenizer.compare(obs)
+    top = ranked[0] if ranked else None
+    fam = top["family"] if top else None
+    cal = None
+    if a.expect_ref:
+        ref = tokenizer.load_reference().get("models", {}).get(a.expect_ref)
+        if not ref:
+            sys.exit(f"[omniroute] unknown --expect-ref '{a.expect_ref}' (not in reference)")
+        cal = omni.calibrate(obs.get("vector", {}), ref.get("vector", {}),
+                             expected_family=ref.get("family", a.expect_ref),
+                             omniroute_version=version, route=a.route)
+    # The router's CLAIM is OmniRoute's OWN header, NOT the route the user typed.
+    # If x-omniroute-model is absent there is no independent claim -> INCONCLUSIVE
+    # (don't corroborate the user's input against the fingerprint) (Codex review).
+    router_claim = hdrs.get("model", "")
+    calibrated = bool(cal and cal.passed)
+    cc = omni.cross_check(router_claim, fam, calibrated=calibrated,
+                          router_provider=hdrs.get("provider", ""))
+    top_score = (top["score"] if top else 0.0) or 0.0
+    # Through a proxy, CONFIRMED requires everything: calibration passed AND a
+    # decisive fingerprint match AND the router claim actively CORROBORATES it.
+    # An INCONCLUSIVE cross-check (no/unmapped router claim) is not corroboration,
+    # so it caps at SUGGESTIVE; CONTRADICTED is quarantined and never published
+    # (Codex + Claude adversarial review).
+    confirmed = (calibrated and cc.state == omni.CORROBORATED and top_score >= 0.75)
+    out = {
+        "route": a.route, "measurement_path": "via_omniroute",
+        "omniroute_version": version, "router_headers": hdrs,
+        "router_claim": router_claim or None,
+        "fingerprint": {"family": fam, "origin": top["origin"] if top else None,
+                        "score": top["score"] if top else None,
+                        "exact": top["exact_matches"] if top else None,
+                        "shared": top["shared_probes"] if top else None},
+        "calibration": (cal.__dict__ if cal else {"passed": False,
+                        "note": "no --expect-ref given; not calibrated -> confidence-capped"}),
+        "cross_check": cc.__dict__,
+        "quarantined": cc.state == omni.CONTRADICTED,
+        "confidence_cap": "CONFIRMED" if confirmed else "SUGGESTIVE",
+    }
+    if a.json:
+        print(json.dumps(out, indent=2, default=str))
+    else:
+        print(f"\nfingerprint: {fam} (origin {out['fingerprint']['origin']}, "
+              f"score {out['fingerprint']['score']}, exact {out['fingerprint']['exact']}/{out['fingerprint']['shared']})")
+        if cal:
+            print(f"calibration: {'PASSED' if cal.passed else 'FAILED'} "
+                  f"(exact {cal.exact_frac}, overhead {cal.template_overhead}, "
+                  f"{cal.distorted}/{cal.shared_probes} distorted, max residual {cal.max_residual})")
+            print(f"  {cal.note}")
+        print(f"cross-check: {cc.state}")
+        print(f"  {cc.note}")
+        if out["quarantined"]:
+            print("  ** QUARANTINED: router claim contradicts the fingerprint. This is an "
+                  "analyst-review signal, NOT an auto-published verdict. **")
+        print(f"confidence cap: {out['confidence_cap']} "
+              f"(via OmniRoute is never CONFIRMED until calibration passes)")
+
+
 def cmd_init(a):
     write_example(a.path)
     print(f"Wrote example config -> {a.path}")
@@ -408,6 +496,18 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="provenance-probe", description=BANNER,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("omniroute",
+                       help="OmniRoute accelerator: detect, calibrate, cross-check a route")
+    s.add_argument("--base", default="http://localhost:20128/v1", help="OmniRoute base URL")
+    s.add_argument("--list", action="store_true", help="list available routes and exit")
+    s.add_argument("--route", default="", help="route/model id to fingerprint (e.g. oc/deepseek-v4-flash-free)")
+    s.add_argument("--expect-ref", dest="expect_ref", default="",
+                   help="reference model key of the route's KNOWN family, to run the calibration gate (e.g. DeepSeek-V3)")
+    s.add_argument("--i-am-authorized", dest="i_am_authorized", action="store_true",
+                   help="attest authorization to actively probe this route")
+    s.add_argument("--json", action="store_true", help="emit the full evidence record as JSON")
+    s.set_defaults(func=cmd_omniroute)
 
     s = sub.add_parser("init", help="write an example target config")
     s.add_argument("--path", default="targets.json")
