@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.14.0] - 2026-07-29 — Local recording-proxy web-app capture (#44)
+
+### Added
+- **Local recording-proxy capture (`provenance_probe/capture_proxy.py`).**
+  `provenance-probe capture <url>` now captures the real chat request **and**
+  response end-to-end and saves a probeable `template` target — no manual HAR
+  paste. It drives an isolated throwaway browser through a localhost
+  TLS-intercepting proxy (mitmproxy), two-phase so the login is never recorded,
+  and feeds the existing `wizard.synthesize → dry_run → write_target` pipeline.
+  The interception CA is ephemeral (per-session 0600 temp dir, removed on exit)
+  and trusted by nothing in any OS/browser store — the throwaway context uses
+  `ignore_https_errors` so no CA install is needed.
+- **Three explicit capture modes:** `capture <url>` (proxy, default),
+  `--paste` (manual copy-as-cURL / save-HAR steps), `--auto` (legacy HAR record).
+- **Streamed-response support (SSE + JSON-lines), end-to-end.** Response mode is
+  detected by sniffing the body, not the `content-type` header, so a stream
+  mislabeled `text/plain` (e.g. v0.app) is handled. JSON-lines streams replay
+  through the runtime client. `[capture]` extra now also installs `mitmproxy`.
+
+### Changed
+- **`wizard.synthesize` locates the reply path with the echo-safe detector**
+  (`find_reply_path`) so an app that echoes the user's turn no longer mis-selects
+  the prompt as the reply. Shared chat-request scorer (`score_chat_request`)
+  lifted out of `parse_har` so HAR and proxy capture pick "the chat call" the
+  same way. `Captured` gained `stream_delta_path`.
+- Stateful request fields are blanked more precisely for replay-safety
+  (`chatId`/`messageId` blanked; a `*model*` selector field is never blanked).
+
+### Security (pre-landing review — Codex + security/python specialists + Claude)
+- Flow selection is bound to the target's registrable domain, so a third-party
+  background POST can't be saved with the wrong site's session cookie.
+- Browser/contexts are torn down on the error/abort path (an abort no longer
+  leaves a headed Chromium profile holding the live session cookie).
+- A stream with no matching delta path fails the dry-run instead of saving a
+  broken target that returns raw protocol text as the "reply."
+- The recording proxy binds `127.0.0.1` only; the proxy thread is joined before
+  the ephemeral-CA dir is removed; streamed bodies are byte-capped; capture error
+  output redacts URL query strings.
+- **Note:** the mitmproxy/Playwright adapter (`_MitmRecorder`, `_default_driver`)
+  is exercised only with the `[capture]` extra installed and a real browser; it
+  still needs a real-environment validation pass (TLS interception, keychain
+  absence, abort cleanup) before it should be relied on in production.
+
 ## [0.13.0] - 2026-07-28 — Guided web-app capture (P3 / E8)
 
 ### Added
