@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import dataclass, field
 
 
@@ -123,7 +124,9 @@ def detect_response_mode(body: str, content_type: str = "") -> str:
         return "json"
     except json.JSONDecodeError:
         pass
-    lines = [ln for ln in b.splitlines() if ln.strip()]
+    # Ignore blank lines AND SSE/NDJSON comment-heartbeat lines (`: keep-alive`)
+    # so a real JSON-lines stream sprinkled with heartbeats isn't misjudged 'none'.
+    lines = [ln for ln in b.splitlines() if ln.strip() and not ln.strip().startswith(":")]
     parsed = 0
     for ln in lines:
         try:
@@ -136,12 +139,36 @@ def detect_response_mode(body: str, content_type: str = "") -> str:
     return "none"
 
 
-def select_chat_flow(flows: list[Flow], prompt_hint: str = "") -> Flow | None:
+def _reg_domain(host: str) -> str:
+    """Naive registrable domain (last two labels). No PSL, so multi-part TLDs
+    (co.uk) collapse to the TLD+1 approximation — sufficient to keep a capture
+    bound to the target site and reject an unrelated third-party origin."""
+    parts = (host or "").lower().strip(".").split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else (host or "").lower()
+
+
+def _flow_host(url: str) -> str:
+    from urllib.parse import urlsplit
+    u = url if "://" in (url or "") else "https://" + (url or "")
+    return (urlsplit(u).hostname or "").lower()
+
+
+def select_chat_flow(flows: list[Flow], prompt_hint: str = "",
+                     allowed_host: str = "") -> Flow | None:
     """Pick the flow most likely to be the model call, using the SAME scorer as
-    wizard.parse_har (one definition of "which request is the chat call")."""
+    wizard.parse_har (one definition of "which request is the chat call").
+
+    When `allowed_host` is given, candidates are restricted to the target's
+    registrable domain FIRST — the proxy records every origin the browser hits,
+    so without this a third-party background POST could outscore the real chat
+    call and get its cookie saved as the target (review #44, HIGH). If nothing
+    on the target domain qualifies, return None rather than a cross-domain flow."""
     from . import wizard
 
     posts = [f for f in flows if (f.method or "").upper() == "POST" and f.req_body]
+    if allowed_host:
+        want = _reg_domain(allowed_host)
+        posts = [f for f in posts if _reg_domain(_flow_host(f.url)) == want]
     if not posts:
         return None
     return max(posts, key=lambda f: wizard.score_chat_request(
@@ -265,24 +292,38 @@ def _run_capture_session(url, *, launcher, proxy, login_wait, send_wait, confdir
     try:
         with launcher() as pw:
             browser = pw.chromium.launch(headless=False)
-            # Phase 1 — login, NOT proxied, NOT recorded.
-            login_ctx = browser.new_context()
-            login_ctx.new_page().goto(url)
-            login_wait()
-            state = login_ctx.storage_state()
-            login_ctx.close()
-            # Phase 2 — authenticated, proxied, recorded.
-            proxy.begin_recording()
-            rec_ctx = browser.new_context(
-                storage_state=state,
-                proxy={"server": f"http://127.0.0.1:{port}"},
-                ignore_https_errors=True)
-            rec_ctx.new_page().goto(url)
-            send_wait()
-            flows = list(proxy.flows())
-            rec_ctx.close()
-            browser.close()
-        return flows
+            login_ctx = rec_ctx = None
+            try:
+                # Phase 1 — login, NOT proxied, NOT recorded.
+                login_ctx = browser.new_context()
+                login_ctx.new_page().goto(url)
+                login_wait()
+                state = login_ctx.storage_state()
+                login_ctx.close()
+                login_ctx = None
+                # Phase 2 — authenticated, proxied, recorded.
+                proxy.begin_recording()
+                rec_ctx = browser.new_context(
+                    storage_state=state,
+                    proxy={"server": f"http://127.0.0.1:{port}"},
+                    ignore_https_errors=True)
+                rec_ctx.new_page().goto(url)
+                send_wait()
+                return list(proxy.flows())
+            finally:
+                # Always tear the browser down — an abort (Ctrl-C at the prompt,
+                # nav timeout) must NOT leave a headed Chromium whose profile holds
+                # the operator's live session cookie (review #44, HIGH).
+                for ctx in (rec_ctx, login_ctx):
+                    if ctx is not None:
+                        try:
+                            ctx.close()
+                        except Exception:
+                            pass
+                try:
+                    browser.close()
+                except Exception:
+                    pass
     finally:
         proxy.stop()
 
@@ -328,8 +369,8 @@ class _MitmRecorder:
                         resp_headers={k: v for k, v in resp.headers.items()},
                         resp_body=resp.get_text(strict=False) or "",
                         resp_content_type=resp.headers.get("content-type", "")))
-                except Exception:
-                    pass                                # never let a capture crash the proxy
+                except Exception as e:                  # never let a capture crash the proxy
+                    print(f"[capture] warning: dropped a recorded flow: {e}", file=sys.stderr)
 
         def _run():
             loop = asyncio.new_event_loop()
@@ -343,8 +384,16 @@ class _MitmRecorder:
 
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
-        time.sleep(1.5)                                 # let the listener bind
-        return self._port
+        # Poll until the listener actually accepts, instead of a blind sleep — a
+        # fixed delay races a slow first-run CA generation and hides a bind failure.
+        import socket as _socket
+        for _ in range(50):
+            try:
+                with _socket.create_connection(("127.0.0.1", self._port), timeout=0.1):
+                    return self._port
+            except OSError:
+                time.sleep(0.1)
+        raise RuntimeError(f"capture proxy failed to bind 127.0.0.1:{self._port}")
 
     def begin_recording(self):
         self._recording = True
@@ -353,9 +402,17 @@ class _MitmRecorder:
         return list(self._flows)
 
     def stop(self):                                     # pragma: no cover - needs extra
+        # Signal shutdown AND wait for the proxy thread to actually exit before
+        # returning, so the caller's `proxy_confdir` rmtree can't race the still-
+        # running mitmproxy holding the ephemeral CA (review #44, HIGH).
         try:
             if self._master is not None and self._loop is not None:
                 self._loop.call_soon_threadsafe(self._master.shutdown)
+            if self._thread is not None:
+                self._thread.join(timeout=5)
+                if self._thread.is_alive():
+                    print("[capture] warning: proxy thread did not stop within 5s; "
+                          "the ephemeral CA dir may linger.", file=sys.stderr)
         except Exception:
             pass
 
@@ -389,11 +446,20 @@ def capture(url, *, prompt_hint: str = "", login_wait=None, send_wait=None,
     try:
         flows = driver(url, login_wait=login_wait, send_wait=send_wait, proxy_port=proxy_port)
     except Exception as e:                              # noqa: BLE001 - transport/user-abort
-        return ProxyCaptureResult(ok=False, error=f"capture failed: {e}")
-    flow = select_chat_flow(flows or [], prompt_hint)
+        return ProxyCaptureResult(ok=False, error=f"capture failed: {_redact(str(e))}")
+    # Bind selection to the target's domain so a third-party POST can't be saved
+    # with the wrong cookie (review #44).
+    flow = select_chat_flow(flows or [], prompt_hint, allowed_host=_flow_host(url))
     if flow is None:
         return ProxyCaptureResult(
             ok=False,
-            error="no chat request was captured — send exactly one message after "
-                  "logging in, then press Enter; re-run and try again.")
+            error="no chat request was captured from this site — send exactly one "
+                  "message after logging in, then press Enter; re-run and try again.")
     return ProxyCaptureResult(ok=True, captured=flow_to_captured(flow, prompt_hint))
+
+
+def _redact(msg: str) -> str:
+    """Strip URL query strings from an error message before it reaches the CLI/logs
+    — some apps put auth tokens in the query, and transport errors echo the URL
+    (review #44, LOW)."""
+    return re.sub(r"(https?://[^\s?]+)\?[^\s]*", r"\1?<redacted>", msg or "")

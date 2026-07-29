@@ -226,9 +226,9 @@ class _RecCtx:
 
 
 class _RecBrowser:
-    def __init__(self): self.contexts = []
+    def __init__(self): self.contexts = []; self.closed = False
     def new_context(self, **kw): self.contexts.append(kw); return _RecCtx()
-    def close(self): pass
+    def close(self): self.closed = True
 
 
 class _RecPW:
@@ -350,3 +350,87 @@ def test_synthesize_blanks_chatid():
     syn = wizard.synthesize(cap, "hi", "t")
     assert syn.target["request_template"]["chatId"] == ""     # blanked for replay-safety
     assert any("chatId" in w for w in syn.warnings)
+
+
+# --------------------------------------------------------------------------- #
+# Review fixes (#44 pre-landing review)
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.unit
+def test_synthesize_prefers_reply_over_echoed_prompt():
+    # App echoes the user's own turn in the response; response_text_path must
+    # point at the ASSISTANT reply, not the echoed prompt.
+    msg = "fingerprint me"
+    resp = {"conversation": {"messages": [
+        {"role": "user", "content": msg},
+        {"role": "assistant", "content": "Sure! Here is a fun fact about llamas and alpacas."}]}}
+    cap = CX.flow_to_captured(_flow(req_body='{"m":"' + msg + '"}', resp_body=json.dumps(resp)),
+                              prompt_hint=msg)
+    syn = wizard.synthesize(cap, msg, "app")
+    assert syn.target["response_text_path"] == "conversation.messages.1.content"
+
+
+@pytest.mark.unit
+def test_synthesize_keeps_model_selector_field_but_blanks_chat_id():
+    cap = CX.flow_to_captured(_flow(
+        req_body='{"chatModelId":"gpt-4o","chatId":"abc","messages":[{"role":"user","content":"hi"}]}'))
+    syn = wizard.synthesize(cap, "hi", "t")
+    tmpl = syn.target["request_template"]
+    assert tmpl["chatModelId"] == "gpt-4o"          # model selector preserved
+    assert tmpl["chatId"] == ""                     # conversation id still blanked
+
+
+@pytest.mark.unit
+def test_select_chat_flow_binds_to_target_host():
+    third_party = _flow(url="https://analytics.example-ads.com/collect",
+                        req_body='{"messages":[{"role":"user","content":"fingerprint me"}],"big":"'
+                                 + "x" * 500 + '"}')          # bigger + has the prompt
+    real = _flow(url="https://api.app.example/v1/chat",
+                 req_body='{"messages":[{"role":"user","content":"fingerprint me"}]}')
+    chosen = CX.select_chat_flow([third_party, real], prompt_hint="fingerprint me",
+                                 allowed_host="app.example")
+    assert chosen is real                            # same registrable domain wins over a bigger 3rd-party
+
+
+@pytest.mark.unit
+def test_select_chat_flow_none_when_only_cross_domain():
+    third_party = _flow(url="https://tracker.other.com/x",
+                        req_body='{"messages":[{"role":"user","content":"hi"}]}')
+    assert CX.select_chat_flow([third_party], allowed_host="app.example") is None
+
+
+@pytest.mark.unit
+def test_detect_response_mode_ignores_heartbeat_comments():
+    body = "\n".join([
+        ': keep-alive',
+        '{"choices":[{"delta":{"content":"Hel"}}]}',
+        ': keep-alive',
+        '{"choices":[{"delta":{"content":"lo"}}]}',
+    ])
+    assert CX.detect_response_mode(body, "text/plain") == "jsonlines"
+
+
+@pytest.mark.unit
+def test_capture_binds_to_target_host_via_driver():
+    third = _flow(url="https://ads.tracker.io/c",
+                  req_body='{"messages":[{"role":"user","content":"hi"}]}',
+                  resp_body='{"choices":[{"message":{"content":"a longer reply here"}}]}')
+    real = _flow(url="https://app.example/api/chat", req_headers={"Cookie": "sid=real"},
+                 req_body='{"messages":[{"role":"user","content":"hi"}]}',
+                 resp_body='{"choices":[{"message":{"content":"a longer real reply here"}}]}')
+    def drv(url, *, login_wait, send_wait, proxy_port=None):
+        return [third, real]
+    res = CX.capture("https://app.example", login_wait=lambda: None,
+                     send_wait=lambda: None, driver=drv)
+    assert res.ok and res.captured.cookie == "sid=real"   # not the tracker's flow
+
+
+@pytest.mark.unit
+def test_session_closes_browser_on_abort():
+    pw = _RecPW(); proxy = _FakeProxyRec([])
+    def boom(): raise RuntimeError("user aborted")
+    with pytest.raises(RuntimeError):
+        CX._run_capture_session("https://app.example", launcher=lambda: pw, proxy=proxy,
+                                login_wait=lambda: None, send_wait=boom, confdir="/tmp/x")
+    assert pw.browser.closed is True                 # browser torn down on abort (no cookie leak)
+    assert proxy.stopped

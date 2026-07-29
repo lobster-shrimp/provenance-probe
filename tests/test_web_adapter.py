@@ -112,3 +112,25 @@ def test_client_template_stream_does_not_inject_stream_flag(monkeypatch):
     monkeypatch.setattr(c.s, "post", fake_post)
     c.chat("hi")
     assert "stream" not in (seen["json"] or {})
+
+
+def test_client_stream_no_delta_match_is_not_ok(monkeypatch):
+    # A custom stream (e.g. v0's diff format) where the delta path matches nothing
+    # must NOT return the raw framed text as a "reply" — else dry_run false-passes.
+    from provenance_probe.client import Client
+    c = Client(_jl_target())
+    lines = ['{"0":{"1":[["p",{},["text",{},"ok"]]]}}', '{"1":{"finishReason":"stop"}}']
+    monkeypatch.setattr(c.s, "post", lambda *a, **k: _FakeStreamResp(lines))
+    r = c.chat("hi", max_tokens=1)
+    assert r.ok is False and "delta path" in (r.err or "")
+
+
+def test_client_stream_json_fallback_when_not_chunked(monkeypatch):
+    # If a "stream" target actually returns a single JSON object on replay, fall
+    # back to parsing it as JSON rather than treating it as framed text.
+    from provenance_probe.client import Client
+    c = Client(_jl_target())
+    monkeypatch.setattr(c.s, "post",
+                        lambda *a, **k: _FakeStreamResp(['{"choices":[{"message":{"content":"hello"}}]}']))
+    r = c.chat("hi", max_tokens=1)
+    assert r.ok and r.text() == "hello"

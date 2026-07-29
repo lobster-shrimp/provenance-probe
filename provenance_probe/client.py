@@ -5,6 +5,10 @@ import copy, json, time
 from typing import Any
 import requests
 
+# Cap accumulated bytes from a streamed response so a hostile/endless stream from
+# an untrusted target can't OOM the probe (review #44).
+_STREAM_MAX_BYTES = 8_000_000
+
 
 def dig(obj: Any, path: str):
     """Read a value by dotted path with numeric indices, e.g.
@@ -202,7 +206,7 @@ class Client:
         delta_path = getattr(t, "stream_delta_path", "") or "choices.0.delta.content"
         # Template targets replay the captured body verbatim — never inject a
         # `stream` field the app didn't send (would break replay on custom apps).
-        if (stream or sse) and t.api_style != "template":
+        if sse and t.api_style != "template":       # never inject `stream` into a verbatim template replay
             payload.setdefault("stream", True)
         start = time.perf_counter()
         ttft = None
@@ -210,12 +214,15 @@ class Client:
             r = self.s.post(url, headers=t.headers(), json=payload,
                             timeout=t.timeout, verify=t.verify_tls, stream=sse)
             if sse:
-                chunks, delta_text = [], []
+                chunks, delta_text, total = [], [], 0
                 for line in r.iter_lines():
                     if line and ttft is None:
                         ttft = time.perf_counter() - start
                     if not line:
                         continue
+                    total += len(line)
+                    if total > _STREAM_MAX_BYTES:    # bound a hostile/endless stream (review #44)
+                        break
                     s = line.decode("utf-8", "replace")
                     chunks.append(s)
                     piece = (parse_jsonline_delta(s, delta_path) if stream_mode == "jsonlines"
@@ -223,9 +230,21 @@ class Client:
                     if piece:
                         delta_text.append(piece)
                 raw = "\n".join(chunks)
-                body = raw
                 stream_text = "".join(delta_text) if delta_text else None
-                return Response(r.status_code, dict(r.headers), body, raw, ttft,
+                # No delta matched -> the configured delta path doesn't fit this
+                # stream. Don't hand the raw framed protocol text back as a "reply"
+                # (dry_run would false-pass and save a broken target, review #44).
+                # Try a plain-JSON fallback, else surface an error so ok=False.
+                if stream_text is None:
+                    try:
+                        return Response(r.status_code, dict(r.headers), json.loads(raw),
+                                        raw, ttft, time.perf_counter() - start, paths=paths)
+                    except Exception:
+                        return Response(r.status_code, dict(r.headers), None, raw, ttft,
+                                        time.perf_counter() - start,
+                                        err="stream produced no reply via the delta path "
+                                            f"'{delta_path}'", paths=paths)
+                return Response(r.status_code, dict(r.headers), raw, raw, ttft,
                                 time.perf_counter() - start, paths=paths,
                                 stream_text=stream_text)
             raw = r.text

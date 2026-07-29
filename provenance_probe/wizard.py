@@ -335,7 +335,11 @@ def _templatize(node, prompt_text, warnings):
     if isinstance(node, dict):
         out = {}
         for k, v in node.items():
-            if _STATEFUL_KEY_RE.search(k):
+            # A key like `chatModelId` matches the stateful pattern but selects
+            # WHICH model the backend calls — blanking it would probe the wrong
+            # model, corrupting the exact signal we measure (review #44). Never
+            # blank a model-selector field.
+            if _STATEFUL_KEY_RE.search(k) and "model" not in k.lower():
                 warnings.append(f"blanked stateful field '{k}' (replay-safety); "
                                 f"confirm the app accepts a fresh/empty value")
                 out[k] = ""
@@ -373,15 +377,14 @@ def synthesize(cap: Captured, prompt_text: str, name: str) -> Synthesis:
     confirm.append("request_template")
 
     # Response field paths (only when a HAR gave us the response body).
-    # Locate the reply path: first try to match the known reply text (HAR/echo
-    # case), then fall back to the standard-shape / longest-string detector
-    # (find_reply_path), which reliably nails a real captured response (proxy
-    # capture, #44) without the operator hand-typing it.
+    # Locate the reply path with the echo-safe detector. In the proxy/live flow
+    # `prompt_text` is the message the OPERATOR sent, and many chat apps echo the
+    # user's turn back in the response — matching on it would pick the echoed
+    # prompt as the "reply" (review #44). find_reply_path tries the standard
+    # shapes, then the longest non-echo string, excluding the sent prompt.
     resp_text_path = ""
     if cap.response is not None:
-        resp_text_path = (find_text_path(cap.response, prompt_text)
-                          or find_reply_path(cap.response, skip_values=(prompt_text,))
-                          or "")
+        resp_text_path = find_reply_path(cap.response, skip_values=(prompt_text,)) or ""
     usage_path = find_usage_path(cap.response) if cap.response else ""
     model_path = find_model_path(cap.response) if cap.response else ""
     _ctl = (cap.content_type or "").lower()
