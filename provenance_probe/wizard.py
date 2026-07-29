@@ -30,7 +30,7 @@ from urllib.parse import urlsplit
 # append to the operator's real chat, so we blank them and warn (design: replay
 # safety is P1). Matched case-insensitively as whole-ish tokens.
 _STATEFUL_KEY_RE = re.compile(
-    r"(conversation|thread|message|parent|session|request|idempotenc|nonce|trace)"
+    r"(conversation|thread|message|parent|session|request|idempotenc|nonce|trace|chat)"
     r".*(id|key|token)$|^(id|nonce|timestamp|ts)$",
     re.IGNORECASE,
 )
@@ -384,10 +384,12 @@ def synthesize(cap: Captured, prompt_text: str, name: str) -> Synthesis:
                           or "")
     usage_path = find_usage_path(cap.response) if cap.response else ""
     model_path = find_model_path(cap.response) if cap.response else ""
-    if cap.response is None:
-        warnings.append("no response body captured (cURL paste) — set "
-                        "response_text_path / response_prompt_tokens_path by hand, "
-                        "or paste a HAR so they can be synthesized.")
+    _ctl = (cap.content_type or "").lower()
+    _is_stream = "event-stream" in _ctl or "ndjson" in _ctl
+    if cap.response is None and not _is_stream:
+        warnings.append("no JSON response body captured — set response_text_path / "
+                        "response_prompt_tokens_path by hand, or paste a HAR so they "
+                        "can be synthesized.")
     if cap.response is not None and not usage_path:
         warnings.append("no prompt-token usage found in the response — the tokenizer "
                         "fingerprint will be UNAVAILABLE; provenance floors at "
@@ -395,11 +397,21 @@ def synthesize(cap: Captured, prompt_text: str, name: str) -> Synthesis:
     for f in ("response_text_path", "response_prompt_tokens_path", "response_model_path"):
         confirm.append(f)
 
-    stream_mode = "sse" if "text/event-stream" in (cap.content_type or "").lower() else "none"
-    stream_delta_path = cap.stream_delta_path if stream_mode == "sse" else ""
+    ctl = (cap.content_type or "").lower()
+    if "text/event-stream" in ctl:
+        stream_mode = "sse"
+    elif "ndjson" in ctl:                     # newline-delimited JSON stream (e.g. v0.app)
+        stream_mode = "jsonlines"
+    else:
+        stream_mode = "none"
+    stream_delta_path = cap.stream_delta_path if stream_mode in ("sse", "jsonlines") else ""
     if stream_mode == "sse" and not stream_delta_path:
         warnings.append("response is SSE — set stream_delta_path to the per-chunk "
                         "delta; the shipped parser handles `data:` JSON chunks only.")
+    elif stream_mode == "jsonlines" and not stream_delta_path:
+        warnings.append("response is a streamed JSON-lines / custom format — the per-chunk "
+                        "delta path could not be auto-located; set stream_delta_path by hand "
+                        "(or use --paste).")
 
     extra_headers = {}
     for k, v in (cap.headers or {}).items():

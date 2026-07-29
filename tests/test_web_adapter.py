@@ -61,3 +61,54 @@ def test_cookie_auth_header_from_env(monkeypatch):
     monkeypatch.setenv("ZAI_COOKIE", "session=abc123")
     t = Target(name="w", base_url="http://x", api_style="template", cookie_env="ZAI_COOKIE")
     assert t.headers().get("Cookie") == "session=abc123"
+
+
+# --------------------------------------------------------------------------- #
+# JSON-lines streaming runtime (gap #1, #44) — no browser needed
+# --------------------------------------------------------------------------- #
+
+class _FakeStreamResp:
+    def __init__(self, lines, ct="application/x-ndjson"):
+        self._lines = lines
+        self.status_code = 200
+        self.headers = {"content-type": ct}
+        self.text = ""
+    def iter_lines(self):
+        for l in self._lines:
+            yield l.encode()
+    def json(self):
+        raise ValueError("streamed, not a single JSON object")
+
+
+def _jl_target(**over):
+    from provenance_probe.config import Target
+    base = dict(name="jl", base_url="https://app.example", chat_path="/api/chat",
+                api_style="template", request_template={"m": "__PROMPT__"},
+                stream_mode="jsonlines", stream_delta_path="choices.0.delta.content",
+                cookie="s=1")
+    base.update(over)
+    return Target(**base)
+
+
+def test_client_jsonlines_stream_reassembles(monkeypatch):
+    from provenance_probe.client import Client
+    c = Client(_jl_target())
+    lines = ['{"choices":[{"delta":{"content":"Hel"}}]}',
+             '{"choices":[{"delta":{"content":"lo"}}]}']
+    monkeypatch.setattr(c.s, "post", lambda *a, **k: _FakeStreamResp(lines))
+    r = c.chat("hi", max_tokens=1)
+    assert r.ok and r.text() == "Hello"
+
+
+def test_client_template_stream_does_not_inject_stream_flag(monkeypatch):
+    # Template mode replays the captured body verbatim — must NOT add a `stream`
+    # field the app never sent (could break replay on custom apps like v0).
+    from provenance_probe.client import Client
+    seen = {}
+    def fake_post(url, headers=None, json=None, **k):
+        seen["json"] = json
+        return _FakeStreamResp(['{"choices":[{"delta":{"content":"x"}}]}'])
+    c = Client(_jl_target())
+    monkeypatch.setattr(c.s, "post", fake_post)
+    c.chat("hi")
+    assert "stream" not in (seen["json"] or {})

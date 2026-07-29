@@ -22,6 +22,7 @@ so importing this module never requires them.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 
 
@@ -63,9 +64,11 @@ def sse_reassemble(body: str) -> SSEResult:
     chunks = []
     for line in (body or "").splitlines():
         line = line.strip()
-        if not line.startswith("data:"):
+        if not line:
             continue
-        payload = line[5:].strip()
+        # Accept both SSE (`data: {...}`) and bare JSON-lines (`{...}`) frames, so
+        # one reassembler serves event-stream AND newline-delimited-JSON streams.
+        payload = line[5:].strip() if line.startswith("data:") else line
         if not payload or payload == "[DONE]":
             continue
         try:
@@ -100,6 +103,39 @@ def sse_reassemble(body: str) -> SSEResult:
     return SSEResult(text=text, usage_prompt_tokens=usage, delta_path=delta_path)
 
 
+_SSE_FRAME_RE = re.compile(r"(^|\n)\s*data:", re.MULTILINE)
+
+
+def detect_response_mode(body: str, content_type: str = "") -> str:
+    """Classify a response body by SNIFFING it, not by trusting content-type.
+
+    Real apps mislabel streams (v0.app streams newline-delimited JSON as
+    `text/plain`), so header-only detection silently fails. Returns one of:
+    'json' (a single JSON value) | 'sse' (event-stream frames) |
+    'jsonlines' (>=2 newline-delimited JSON objects) | 'none'."""
+    b = (body or "").strip()
+    if not b:
+        return "none"
+    if "text/event-stream" in (content_type or "").lower() or _SSE_FRAME_RE.search(body or ""):
+        return "sse"
+    try:
+        json.loads(b)
+        return "json"
+    except json.JSONDecodeError:
+        pass
+    lines = [ln for ln in b.splitlines() if ln.strip()]
+    parsed = 0
+    for ln in lines:
+        try:
+            json.loads(ln)
+            parsed += 1
+        except json.JSONDecodeError:
+            pass
+    if parsed >= 2 and parsed >= len(lines) * 0.6:      # mostly-JSON lines -> a JSON-lines stream
+        return "jsonlines"
+    return "none"
+
+
 def select_chat_flow(flows: list[Flow], prompt_hint: str = "") -> Flow | None:
     """Pick the flow most likely to be the model call, using the SAME scorer as
     wizard.parse_har (one definition of "which request is the chat call")."""
@@ -128,19 +164,29 @@ def flow_to_captured(flow: Flow, prompt_hint: str = ""):
         elif not k.startswith(":"):     # skip HTTP/2 pseudo-headers
             headers[k] = v
 
-    ct = flow.resp_content_type or ""
+    body = flow.resp_body or ""
+    mode = detect_response_mode(body, flow.resp_content_type or "")
     response, stream_delta_path = None, ""
-    if "text/event-stream" in ct.lower():
-        stream_delta_path = sse_reassemble(flow.resp_body or "").delta_path
-    else:
+    # Normalize content_type to a mode synthesize/runtime understand, so a stream
+    # mislabeled as text/plain (v0.app) is still handled by shape, not header.
+    if mode == "sse":
+        stream_delta_path = sse_reassemble(body).delta_path
+        content_type = "text/event-stream"
+    elif mode == "jsonlines":
+        stream_delta_path = sse_reassemble(body).delta_path   # "" for custom (non-delta) shapes
+        content_type = "application/x-ndjson"
+    elif mode == "json":
         try:
-            response = json.loads(flow.resp_body) if flow.resp_body else None
+            response = json.loads(body)
         except json.JSONDecodeError:
-            response = None             # non-JSON, non-SSE — synthesize warns downstream
+            response = None
+        content_type = flow.resp_content_type or ""
+    else:
+        content_type = flow.resp_content_type or ""           # 'none' — synthesize warns
 
     return wizard.Captured(
         url=flow.url, method="POST", headers=headers, body=flow.req_body or "",
-        cookie=cookie, response=response, content_type=ct,
+        cookie=cookie, response=response, content_type=content_type,
         stream_delta_path=stream_delta_path,
     )
 

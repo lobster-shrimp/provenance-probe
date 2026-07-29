@@ -25,6 +25,19 @@ def dig(obj: Any, path: str):
     return cur
 
 
+def parse_jsonline_delta(line: str, delta_path: str = "choices.0.delta.content") -> str | None:
+    """Extract incremental text from one bare JSON-lines frame (no `data:` prefix).
+    Mirrors parse_sse_delta for newline-delimited-JSON streams (e.g. v0.app)."""
+    line = line.strip()
+    if not line or line == "[DONE]":
+        return None
+    try:
+        piece = dig(json.loads(line), delta_path)
+        return piece if isinstance(piece, str) else None
+    except Exception:
+        return None
+
+
 def parse_sse_delta(line: str, delta_path: str = "choices.0.delta.content") -> str | None:
     """Extract the incremental text from one SSE `data:` line, or None. Shared by
     the streaming client read and the sentinel proxy tee so there is ONE
@@ -184,9 +197,12 @@ class Client:
         paths = self._paths()
         # Web-app template endpoints may stream Server-Sent Events; accumulate
         # the per-chunk text delta so the behavioral layers get the full reply.
-        sse = stream or getattr(t, "stream_mode", "none") == "sse"
+        stream_mode = getattr(t, "stream_mode", "none")
+        sse = stream or stream_mode in ("sse", "jsonlines")
         delta_path = getattr(t, "stream_delta_path", "") or "choices.0.delta.content"
-        if stream or sse:
+        # Template targets replay the captured body verbatim — never inject a
+        # `stream` field the app didn't send (would break replay on custom apps).
+        if (stream or sse) and t.api_style != "template":
             payload.setdefault("stream", True)
         start = time.perf_counter()
         ttft = None
@@ -202,7 +218,8 @@ class Client:
                         continue
                     s = line.decode("utf-8", "replace")
                     chunks.append(s)
-                    piece = parse_sse_delta(s, delta_path)
+                    piece = (parse_jsonline_delta(s, delta_path) if stream_mode == "jsonlines"
+                             else parse_sse_delta(s, delta_path))
                     if piece:
                         delta_text.append(piece)
                 raw = "\n".join(chunks)

@@ -259,3 +259,94 @@ def test_session_stops_proxy_on_abort():
         CX._run_capture_session("https://app.example", launcher=lambda: pw, proxy=proxy,
                                 login_wait=lambda: None, send_wait=boom, confdir="/tmp/x")
     assert proxy.stopped                                 # torn down even on abort
+
+
+# --------------------------------------------------------------------------- #
+# Gap #1: response body-mode sniffing + JSON-lines (found against v0.app)
+# --------------------------------------------------------------------------- #
+
+_JSONL_DELTAS = "\n".join([
+    '{"choices":[{"delta":{"content":"Hel"}}]}',
+    '{"choices":[{"delta":{"content":"lo"}}]}',
+    '{"choices":[{"delta":{}}],"usage":{"prompt_tokens":7}}',
+])
+
+# v0.app's real shape: newline-delimited custom diff objects over text/plain.
+_V0_JSONL = "\n".join([
+    '{"0":[[0,[["AssistantMessageContentPart",{"part":{"taskNameActive":"Getting started..."}}]]]],"_t":"a"}',
+    '{"0":{"1":{"1":[["p",{},["text",{},"ok"]]],"_t":"a"},"_t":"a"},"_t":"a"}',
+    '{"1":{"1":{"finishReason":["stop"],"creditCost":[0.02]},"_t":"a"},"_t":"a"}',
+])
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("body,ct,mode", [
+    ('{"a":1}', "application/json", "json"),
+    ('data: {"choices":[{"delta":{"content":"x"}}]}\n\ndata: [DONE]\n', "text/plain", "sse"),
+    (_JSONL_DELTAS, "text/plain; charset=utf-8", "jsonlines"),
+    (_V0_JSONL, "text/plain; charset=utf-8", "jsonlines"),
+    ("just some prose, not json", "text/plain", "none"),
+    ("", "application/json", "none"),
+])
+def test_detect_response_mode(body, ct, mode):
+    assert CX.detect_response_mode(body, ct) == mode
+
+
+@pytest.mark.unit
+def test_flow_to_captured_sniffs_sse_under_text_plain():
+    # An app that streams SSE but mislabels the content-type as text/plain.
+    body = 'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n'
+    cap = CX.flow_to_captured(_flow(resp_body=body, resp_content_type="text/plain; charset=utf-8"))
+    assert "event-stream" in cap.content_type            # normalized so synthesize -> sse
+    assert cap.stream_delta_path == "choices.0.delta.content"
+
+
+@pytest.mark.unit
+def test_flow_to_captured_jsonlines_deltas():
+    cap = CX.flow_to_captured(_flow(resp_body=_JSONL_DELTAS, resp_content_type="text/plain"))
+    assert "ndjson" in cap.content_type                  # -> synthesize stream_mode jsonlines
+    assert cap.stream_delta_path == "choices.0.delta.content"
+
+
+@pytest.mark.unit
+def test_flow_to_captured_v0_custom_jsonlines_is_honest():
+    # v0's custom diff JSON-lines: detected as a stream, but no standard delta path.
+    cap = CX.flow_to_captured(_flow(resp_body=_V0_JSONL, resp_content_type="text/plain; charset=utf-8"))
+    assert "ndjson" in cap.content_type
+    assert cap.stream_delta_path == ""                   # custom shape -> not auto-detectable
+    assert cap.response is None
+
+
+@pytest.mark.unit
+def test_synthesize_jsonlines_stream_mode():
+    cap = CX.flow_to_captured(_flow(url="https://app.example/api/chat",
+                                    req_body='{"messages":[{"role":"user","content":"hi"}]}',
+                                    resp_body=_JSONL_DELTAS, resp_content_type="text/plain"))
+    syn = wizard.synthesize(cap, "hi", "jl")
+    assert syn.target["stream_mode"] == "jsonlines"
+    assert syn.target["stream_delta_path"] == "choices.0.delta.content"
+
+
+@pytest.mark.unit
+def test_synthesize_v0_custom_stream_warns_no_delta_path():
+    cap = CX.flow_to_captured(_flow(url="https://v0.app/chat/api/chat",
+                                    req_body='{"messageContent":{"parts":[{"content":"hi"}]}}',
+                                    resp_body=_V0_JSONL, resp_content_type="text/plain"))
+    syn = wizard.synthesize(cap, "hi", "v0")
+    assert syn.target["stream_mode"] == "jsonlines"
+    assert syn.target["stream_delta_path"] == ""
+    assert any("delta path" in w.lower() or "by hand" in w.lower() for w in syn.warnings)
+
+
+# --------------------------------------------------------------------------- #
+# Gap #2: widen stateful-key blanking to cover chatId (found against v0.app)
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.unit
+def test_synthesize_blanks_chatid():
+    import json as _json
+    cap = CX.flow_to_captured(_flow(
+        req_body='{"chatId":"koMTifHbYwZ","messages":[{"role":"user","content":"hi"}]}'))
+    syn = wizard.synthesize(cap, "hi", "t")
+    assert syn.target["request_template"]["chatId"] == ""     # blanked for replay-safety
+    assert any("chatId" in w for w in syn.warnings)
