@@ -30,7 +30,7 @@ from urllib.parse import urlsplit
 # append to the operator's real chat, so we blank them and warn (design: replay
 # safety is P1). Matched case-insensitively as whole-ish tokens.
 _STATEFUL_KEY_RE = re.compile(
-    r"(conversation|thread|message|parent|session|request|idempotenc|nonce|trace)"
+    r"(conversation|thread|message|parent|session|request|idempotenc|nonce|trace|chat)"
     r".*(id|key|token)$|^(id|nonce|timestamp|ts)$",
     re.IGNORECASE,
 )
@@ -63,6 +63,8 @@ class Captured:
     cookie: str = ""                    # raw Cookie header value (credential)
     response: object = None             # parsed response JSON, if available
     content_type: str = ""              # response content-type (for SSE detect)
+    stream_delta_path: str = ""         # per-chunk SSE delta path, if pre-detected
+                                        # (proxy capture fills this; HAR/cURL leave "")
 
 
 @dataclass
@@ -127,6 +129,20 @@ def parse_curl(text: str) -> Captured:
     return Captured(url=url, method=method, headers=headers, body=body, cookie=cookie)
 
 
+_CHATISH_URL_RE = re.compile(r"chat|complet|message|conversation|generate|ask", re.IGNORECASE)
+
+
+def score_chat_request(method: str, body: str, url: str, prompt_hint: str = "") -> tuple:
+    """Rank an HTTP request as a likely chat/completion call; higher tuple sorts
+    first. Shared by parse_har (HAR entries) and capture_proxy (proxy flows) so
+    there is ONE definition of "which request is the model call" (design #44)."""
+    body = body or ""
+    has_prompt = bool(prompt_hint) and prompt_hint in body
+    is_post_with_body = (method or "").upper() == "POST" and bool(body)
+    looks_chat = bool(_CHATISH_URL_RE.search(url or ""))
+    return (has_prompt, is_post_with_body, looks_chat, len(body))
+
+
 def parse_har(text: str, prompt_hint: str = "") -> Captured:
     """Parse a HAR export and pick the best chat-request entry.
 
@@ -148,12 +164,9 @@ def parse_har(text: str, prompt_hint: str = "") -> Captured:
 
     def _score(entry) -> tuple:
         req = entry.get("request") if isinstance(entry.get("request"), dict) else {}
-        method = (req.get("method") or "").upper()
-        body = ((req.get("postData") or {}).get("text")) or ""
-        url = req.get("url") or ""
-        has_prompt = bool(prompt_hint) and prompt_hint in body
-        looks_chat = bool(re.search(r"chat|complet|message|conversation|generate|ask", url, re.I))
-        return (has_prompt, method == "POST" and bool(body), looks_chat, len(body))
+        return score_chat_request(req.get("method") or "",
+                                  ((req.get("postData") or {}).get("text")) or "",
+                                  req.get("url") or "", prompt_hint)
 
     entry = max(entries, key=_score)
     req = entry.get("request") or {}
@@ -322,7 +335,11 @@ def _templatize(node, prompt_text, warnings):
     if isinstance(node, dict):
         out = {}
         for k, v in node.items():
-            if _STATEFUL_KEY_RE.search(k):
+            # A key like `chatModelId` matches the stateful pattern but selects
+            # WHICH model the backend calls — blanking it would probe the wrong
+            # model, corrupting the exact signal we measure (review #44). Never
+            # blank a model-selector field.
+            if _STATEFUL_KEY_RE.search(k) and "model" not in k.lower():
                 warnings.append(f"blanked stateful field '{k}' (replay-safety); "
                                 f"confirm the app accepts a fresh/empty value")
                 out[k] = ""
@@ -360,14 +377,22 @@ def synthesize(cap: Captured, prompt_text: str, name: str) -> Synthesis:
     confirm.append("request_template")
 
     # Response field paths (only when a HAR gave us the response body).
-    text_path = find_text_path(cap.response, "") if cap.response else ""
-    resp_text_path = find_text_path(cap.response, prompt_text) or "" if cap.response else ""
+    # Locate the reply path with the echo-safe detector. In the proxy/live flow
+    # `prompt_text` is the message the OPERATOR sent, and many chat apps echo the
+    # user's turn back in the response — matching on it would pick the echoed
+    # prompt as the "reply" (review #44). find_reply_path tries the standard
+    # shapes, then the longest non-echo string, excluding the sent prompt.
+    resp_text_path = ""
+    if cap.response is not None:
+        resp_text_path = find_reply_path(cap.response, skip_values=(prompt_text,)) or ""
     usage_path = find_usage_path(cap.response) if cap.response else ""
     model_path = find_model_path(cap.response) if cap.response else ""
-    if cap.response is None:
-        warnings.append("no response body captured (cURL paste) — set "
-                        "response_text_path / response_prompt_tokens_path by hand, "
-                        "or paste a HAR so they can be synthesized.")
+    _ctl = (cap.content_type or "").lower()
+    _is_stream = "event-stream" in _ctl or "ndjson" in _ctl
+    if cap.response is None and not _is_stream:
+        warnings.append("no JSON response body captured — set response_text_path / "
+                        "response_prompt_tokens_path by hand, or paste a HAR so they "
+                        "can be synthesized.")
     if cap.response is not None and not usage_path:
         warnings.append("no prompt-token usage found in the response — the tokenizer "
                         "fingerprint will be UNAVAILABLE; provenance floors at "
@@ -375,10 +400,21 @@ def synthesize(cap: Captured, prompt_text: str, name: str) -> Synthesis:
     for f in ("response_text_path", "response_prompt_tokens_path", "response_model_path"):
         confirm.append(f)
 
-    stream_mode = "sse" if "text/event-stream" in (cap.content_type or "").lower() else "none"
-    if stream_mode == "sse":
+    ctl = (cap.content_type or "").lower()
+    if "text/event-stream" in ctl:
+        stream_mode = "sse"
+    elif "ndjson" in ctl:                     # newline-delimited JSON stream (e.g. v0.app)
+        stream_mode = "jsonlines"
+    else:
+        stream_mode = "none"
+    stream_delta_path = cap.stream_delta_path if stream_mode in ("sse", "jsonlines") else ""
+    if stream_mode == "sse" and not stream_delta_path:
         warnings.append("response is SSE — set stream_delta_path to the per-chunk "
                         "delta; the shipped parser handles `data:` JSON chunks only.")
+    elif stream_mode == "jsonlines" and not stream_delta_path:
+        warnings.append("response is a streamed JSON-lines / custom format — the per-chunk "
+                        "delta path could not be auto-located; set stream_delta_path by hand "
+                        "(or use --paste).")
 
     extra_headers = {}
     for k, v in (cap.headers or {}).items():
@@ -401,11 +437,11 @@ def synthesize(cap: Captured, prompt_text: str, name: str) -> Synthesis:
         "chat_path": chat_path,
         "api_style": "template",
         "request_template": request_template,
-        "response_text_path": resp_text_path or text_path or "",
+        "response_text_path": resp_text_path or "",
         "response_prompt_tokens_path": usage_path or "",
         "response_model_path": model_path or "",
         "stream_mode": stream_mode,
-        "stream_delta_path": "",
+        "stream_delta_path": stream_delta_path,
         "cookie_env": cookie_env,          # NAME only — never the value
         "extra_headers": extra_headers,
         "authorized": False,               # design: never auto-authorize probing

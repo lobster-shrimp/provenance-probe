@@ -515,14 +515,79 @@ def _ensure_har_gitignored(har_path: str) -> None:
         pass
 
 
+def _name_from_url(url: str) -> str:
+    """A committable target name derived from the host (e.g. chat.lindy.ai -> lindy)."""
+    from urllib.parse import urlsplit
+    host = (urlsplit(url if "://" in (url or "") else "https://" + (url or "")).hostname or "target")
+    parts = [p for p in host.split(".") if p not in ("www", "chat", "app", "api", "com", "ai", "io", "net")]
+    return (parts[0] if parts else host).lower() or "target"
+
+
+def _proxy_capture_and_save(a):
+    """Default `capture <url>`: proxy-capture the chat request end-to-end, dry-run
+    for replay-safety, and save the target + gitignored cookie. No manual paste."""
+    from . import capture_guide, capture_proxy, wizard
+    from .client import Client
+    if not a.url:
+        sys.exit("[capture] provide a URL, e.g. provenance-probe capture https://chat.app.com")
+    if not a.i_am_authorized:
+        sys.exit("[abort] proxy capture drives a browser to the target; pass --i-am-authorized "
+                 "to attest you're authorized to test it (or --paste for manual steps).")
+    print(f"[capture] launching an isolated browser via a local proxy for {a.url}. "
+          f"Log in first, THEN send ONE message — the login is not recorded.", file=sys.stderr)
+    res = capture_proxy.capture(a.url, prompt_hint=a.message, proxy_port=(a.proxy_port or None))
+    if not res.ok:
+        if not res.available:                          # extra missing -> message + manual fallback
+            print(f"[capture] {res.error}\n", file=sys.stderr)
+            print(capture_guide.as_text(capture_guide.guide(a.url, browser=a.browser,
+                                                            playwright_available=False)))
+            return
+        sys.exit(f"[capture] {res.error}")
+
+    name = a.name or _name_from_url(a.url)
+    syn = wizard.synthesize(res.captured, a.message, name)
+    t = syn.target
+    dry_target = Target(
+        name=name, base_url=t["base_url"], chat_path=t["chat_path"], api_style="template",
+        request_template=t["request_template"], response_text_path=t["response_text_path"],
+        response_prompt_tokens_path=t["response_prompt_tokens_path"],
+        response_model_path=t["response_model_path"], stream_mode=t["stream_mode"],
+        stream_delta_path=t["stream_delta_path"],
+        extra_headers=t.get("extra_headers", {}), cookie=syn.cookie_value)
+    dr = wizard.dry_run(Client(dry_target))
+    if not dr["ok"]:
+        sys.exit(f"[capture] dry-run failed: {dr['error']}")
+    if not dr["replay_safe"]:
+        sys.exit("[capture] refusing to save: not replay-safe (missing reply or unstable "
+                 "prompt-token counts). Re-capture a single-turn request.")
+    root = os.getcwd()
+    saved = wizard.write_target(t, syn.cookie_value,
+                                config_path=os.path.join(root, "targets.json"),
+                                env_path=os.path.join(root, ".env.capture"), repo_root=root)
+    print(f"[capture] saved target '{saved['added']}' -> {saved['config_path']}")
+    for w in syn.warnings + saved.get("warnings", []):
+        print(f"  - {w}")
+    if saved.get("env_path"):
+        print(f"[capture] cookie stored in {saved['env_path']} (0600, gitignored) as "
+              f"{saved['cookie_env']}; run `source .env.capture` before probing.")
+    if not dr["usage_exposed"]:
+        print("[capture] note: usage.prompt_tokens not exposed — tokenizer fingerprint "
+              "unavailable (provenance floors at INDETERMINATE; wire/behavioral only).")
+
+
 def cmd_capture(a):
-    """Guided web-app capture (E8). Prints annotated steps; with the optional
-    Playwright extra installed and --auto, drives a browser to capture for you."""
+    """Web-app request capture (#44). Three modes: default = local recording proxy
+    end-to-end; --paste = manual copy-as-cURL/HAR steps; --auto = record a HAR only
+    (legacy)."""
     from . import capture_guide
     from . import capture_playwright as cap
-    avail = cap.playwright_available()
-    if a.auto:
-        if not avail:
+    from . import capture_proxy
+    if a.paste:                                        # manual guided steps (no deps)
+        print(capture_guide.as_text(capture_guide.guide(
+            a.url, browser=a.browser, playwright_available=capture_proxy.proxy_available())))
+        return
+    if a.auto:                                         # legacy HAR-only record
+        if not cap.playwright_available():
             print("[capture] Playwright not installed — showing the manual steps instead.\n",
                   file=sys.stderr)
             print(capture_guide.as_text(capture_guide.guide(a.url, browser=a.browser,
@@ -541,13 +606,10 @@ def cmd_capture(a):
         _ensure_har_gitignored(res.har_path)
         print(f"[capture] wrote {res.har_path} (mode 0600). It contains your SESSION COOKIE — "
               f"treat it as a credential; do NOT share or commit it.")
-        print(f"[capture] next: run `provenance-probe serve`, open /wizard, and paste the HAR "
-              f"contents. The wizard stores the cookie in a gitignored .env.capture and keeps "
-              f"it out of the committed config.")
+        print(f"[capture] `capture {a.url}` now captures AND saves end-to-end; or run "
+              f"`provenance-probe serve`, open /wizard, and paste the HAR.")
         return
-    # Default: print the guided manual steps.
-    g = capture_guide.guide(a.url, browser=a.browser, playwright_available=avail)
-    print(capture_guide.as_text(g))
+    _proxy_capture_and_save(a)                         # default: end-to-end proxy capture
 
 
 def cmd_init(a):
@@ -573,16 +635,25 @@ def main(argv=None):
     s.set_defaults(func=cmd_omniroute)
 
     s = sub.add_parser("capture",
-                       help="guided web-app request capture (E8); --auto uses optional Playwright")
+                       help="web-app request capture (#44): default = local recording proxy "
+                            "(end-to-end, needs [capture] extra); --paste = manual steps")
     s.add_argument("url", nargs="?", default="", help="the web app URL to capture from")
+    s.add_argument("--paste", action="store_true",
+                   help="print manual copy-as-cURL / save-HAR steps instead of proxy capture")
     s.add_argument("--browser", default="chrome", choices=["chrome", "firefox", "safari"],
-                   help="tailor the DevTools steps to your browser")
+                   help="tailor the manual DevTools steps to your browser (--paste)")
     s.add_argument("--auto", action="store_true",
-                   help="drive a real browser to capture (needs the [capture] extra)")
+                   help="legacy: record a HAR only (needs [capture] extra); `capture <url>` now does end-to-end")
+    s.add_argument("--message", default="",
+                   help="the exact message you'll send (improves chat-request detection)")
+    s.add_argument("--name", default="",
+                   help="target name to save (default: derived from the URL host)")
+    s.add_argument("--proxy-port", dest="proxy_port", type=int, default=0,
+                   help="local proxy port for capture (default: a random free port)")
     s.add_argument("--out", default="",
                    help="HAR output path for --auto (default: a private 0600 ~/.provenance-probe/captures/ file)")
     s.add_argument("--i-am-authorized", dest="i_am_authorized", action="store_true",
-                   help="attest authorization to drive a browser to this target (--auto)")
+                   help="attest authorization to drive a browser to this target (proxy / --auto)")
     s.set_defaults(func=cmd_capture)
 
     s = sub.add_parser("init", help="write an example target config")

@@ -20,3 +20,6 @@ reports/
 
 # gstack design/scratch artifacts
 .gstack/
+
+# playwright MCP scratch output (snapshots/screenshots)
+.playwright-mcp/

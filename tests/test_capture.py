@@ -144,11 +144,53 @@ def test_capture_har_is_chmod_600(tmp_path):
 # --------------------------------------------------------------------------- #
 
 @pytest.mark.unit
-def test_cli_capture_prints_manual_steps(capsys):
+def test_cli_capture_paste_prints_manual_steps(capsys):
+    # --paste is the manual guided flow (default is now proxy capture, #44).
     from provenance_probe import cli
-    cli.main(["capture", "https://chat.lindy.ai"])
+    cli.main(["capture", "https://chat.lindy.ai", "--paste"])
     out = capsys.readouterr().out
     assert "Sign in to Lindy" in out and "Copy as cURL" in out
+
+
+@pytest.mark.unit
+def test_cli_capture_default_missing_extra_prints_message_and_guide(capsys, monkeypatch):
+    # AC8: default proxy capture without the [capture] extra prints a clear
+    # install message and falls back to the manual steps — never crashes.
+    from provenance_probe import cli, capture_proxy
+    monkeypatch.setattr(capture_proxy, "proxy_available", lambda: False)
+    cli.main(["capture", "https://chat.lindy.ai", "--i-am-authorized"])
+    cap = capsys.readouterr()
+    assert "extra" in cap.err.lower() or "install" in cap.err.lower()
+    assert "Copy as cURL" in cap.out                    # manual fallback shown
+
+
+@pytest.mark.unit
+def test_cli_capture_proxy_saves_target(tmp_path, monkeypatch):
+    # AC1 through the CLI: proxy capture -> synthesize -> dry-run -> save, with the
+    # cookie held out of the committed config and written 0600 to .env.capture.
+    import json
+    from provenance_probe import cli, capture_proxy, wizard
+    monkeypatch.chdir(tmp_path)
+    resp = {"choices": [{"message": {"content": "a captured reply of some length"}}],
+            "usage": {"prompt_tokens": 6}, "model": "m"}
+    flow = capture_proxy.Flow(url="https://chat.app.com/api/chat",
+                              req_headers={"Cookie": "sid=abc"},
+                              req_body='{"messages":[{"role":"user","content":"hi"}]}',
+                              resp_body=json.dumps(resp))
+    cap_obj = capture_proxy.flow_to_captured(flow)
+    monkeypatch.setattr(capture_proxy, "capture",
+                        lambda url, **k: capture_proxy.ProxyCaptureResult(ok=True, captured=cap_obj))
+    monkeypatch.setattr(wizard, "dry_run",
+                        lambda *a, **k: {"ok": True, "replay_safe": True, "usage_exposed": True,
+                                         "prompt_tokens": [6, 6], "error": None})
+    cli.main(["capture", "https://chat.app.com", "--i-am-authorized", "--name", "myapp"])
+    import os
+    assert os.path.exists("targets.json")
+    cfg = json.load(open("targets.json"))
+    assert any(t["name"] == "myapp" and t["api_style"] == "template" for t in cfg)
+    assert "sid=abc" not in json.dumps(cfg)             # credential never committed
+    assert "sid=abc" in open(".env.capture").read()
+    assert (os.stat(".env.capture").st_mode & 0o777) == 0o600
 
 
 @pytest.mark.unit
