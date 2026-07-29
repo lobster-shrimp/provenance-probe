@@ -63,6 +63,8 @@ class Captured:
     cookie: str = ""                    # raw Cookie header value (credential)
     response: object = None             # parsed response JSON, if available
     content_type: str = ""              # response content-type (for SSE detect)
+    stream_delta_path: str = ""         # per-chunk SSE delta path, if pre-detected
+                                        # (proxy capture fills this; HAR/cURL leave "")
 
 
 @dataclass
@@ -127,6 +129,20 @@ def parse_curl(text: str) -> Captured:
     return Captured(url=url, method=method, headers=headers, body=body, cookie=cookie)
 
 
+_CHATISH_URL_RE = re.compile(r"chat|complet|message|conversation|generate|ask", re.IGNORECASE)
+
+
+def score_chat_request(method: str, body: str, url: str, prompt_hint: str = "") -> tuple:
+    """Rank an HTTP request as a likely chat/completion call; higher tuple sorts
+    first. Shared by parse_har (HAR entries) and capture_proxy (proxy flows) so
+    there is ONE definition of "which request is the model call" (design #44)."""
+    body = body or ""
+    has_prompt = bool(prompt_hint) and prompt_hint in body
+    is_post_with_body = (method or "").upper() == "POST" and bool(body)
+    looks_chat = bool(_CHATISH_URL_RE.search(url or ""))
+    return (has_prompt, is_post_with_body, looks_chat, len(body))
+
+
 def parse_har(text: str, prompt_hint: str = "") -> Captured:
     """Parse a HAR export and pick the best chat-request entry.
 
@@ -148,12 +164,9 @@ def parse_har(text: str, prompt_hint: str = "") -> Captured:
 
     def _score(entry) -> tuple:
         req = entry.get("request") if isinstance(entry.get("request"), dict) else {}
-        method = (req.get("method") or "").upper()
-        body = ((req.get("postData") or {}).get("text")) or ""
-        url = req.get("url") or ""
-        has_prompt = bool(prompt_hint) and prompt_hint in body
-        looks_chat = bool(re.search(r"chat|complet|message|conversation|generate|ask", url, re.I))
-        return (has_prompt, method == "POST" and bool(body), looks_chat, len(body))
+        return score_chat_request(req.get("method") or "",
+                                  ((req.get("postData") or {}).get("text")) or "",
+                                  req.get("url") or "", prompt_hint)
 
     entry = max(entries, key=_score)
     req = entry.get("request") or {}
@@ -360,8 +373,15 @@ def synthesize(cap: Captured, prompt_text: str, name: str) -> Synthesis:
     confirm.append("request_template")
 
     # Response field paths (only when a HAR gave us the response body).
-    text_path = find_text_path(cap.response, "") if cap.response else ""
-    resp_text_path = find_text_path(cap.response, prompt_text) or "" if cap.response else ""
+    # Locate the reply path: first try to match the known reply text (HAR/echo
+    # case), then fall back to the standard-shape / longest-string detector
+    # (find_reply_path), which reliably nails a real captured response (proxy
+    # capture, #44) without the operator hand-typing it.
+    resp_text_path = ""
+    if cap.response is not None:
+        resp_text_path = (find_text_path(cap.response, prompt_text)
+                          or find_reply_path(cap.response, skip_values=(prompt_text,))
+                          or "")
     usage_path = find_usage_path(cap.response) if cap.response else ""
     model_path = find_model_path(cap.response) if cap.response else ""
     if cap.response is None:
@@ -376,7 +396,8 @@ def synthesize(cap: Captured, prompt_text: str, name: str) -> Synthesis:
         confirm.append(f)
 
     stream_mode = "sse" if "text/event-stream" in (cap.content_type or "").lower() else "none"
-    if stream_mode == "sse":
+    stream_delta_path = cap.stream_delta_path if stream_mode == "sse" else ""
+    if stream_mode == "sse" and not stream_delta_path:
         warnings.append("response is SSE — set stream_delta_path to the per-chunk "
                         "delta; the shipped parser handles `data:` JSON chunks only.")
 
@@ -401,11 +422,11 @@ def synthesize(cap: Captured, prompt_text: str, name: str) -> Synthesis:
         "chat_path": chat_path,
         "api_style": "template",
         "request_template": request_template,
-        "response_text_path": resp_text_path or text_path or "",
+        "response_text_path": resp_text_path or "",
         "response_prompt_tokens_path": usage_path or "",
         "response_model_path": model_path or "",
         "stream_mode": stream_mode,
-        "stream_delta_path": "",
+        "stream_delta_path": stream_delta_path,
         "cookie_env": cookie_env,          # NAME only — never the value
         "extra_headers": extra_headers,
         "authorized": False,               # design: never auto-authorize probing
