@@ -387,10 +387,109 @@ def _wiz_page(title, inner):
 
 
 def _wiz_form(err="", name="", prompt="", capture=""):
-    return Response(_WIZARD_FORM.format(
+    body = _WIZARD_FORM.format(
         err=f'<div class="err">{html.escape(err)}</div>' if err else "",
         name=html.escape(name), prompt=html.escape(prompt),
-        capture=html.escape(capture)), mimetype="text/html")
+        capture=html.escape(capture))
+    return Response(body + _capture_ui(), mimetype="text/html")
+
+
+# Server-side capture runs (the "Capture for me" proxy flow). Each holds the
+# two-phase Events and, on success, the synthesized result INCLUDING the session
+# cookie — kept server-side only, never reflected to the browser, one-shot.
+_CAPTURE_RUNS: dict = {}
+
+# Raw HTML+JS for the "Capture for me" section, appended to the wizard form. Kept
+# out of the .format() template so its many JS braces need no escaping.
+_WIZARD_CAPTURE_JS = """
+<hr style="margin:1.6rem 0;border:none;border-top:1px solid #e3e5e9">
+<h2 style="font-size:16px">…or capture it for me</h2>
+<p class=sub>Opens an isolated browser via a local proxy. You log in and send ONE
+message; the login is never recorded. Needs the <code>[capture]</code> extra.</p>
+<label>AI service URL</label><input id=cap-url style="width:100%" placeholder="https://chat.app.com">
+<label>Target name</label><input id=cap-name style="width:100%" placeholder="my-service">
+<label>The exact message you'll send <span class=sub>(optional, improves detection)</span></label>
+<input id=cap-msg style="width:100%" placeholder="fingerprint me">
+<label style="font-weight:400"><input type=checkbox id=cap-auth> I'm authorized to test this service</label>
+<p><button type=button id=cap-go>Capture for me &rarr;</button>
+<button type=button id=cap-continue style="display:none"></button></p>
+<p id=cap-status class=sub></p>
+<script>
+(function(){
+  var btn=document.getElementById('cap-go'), out=document.getElementById('cap-status'),
+      cont=document.getElementById('cap-continue'), rid=null;
+  function show(s){
+    out.textContent = (s.status||'') + (s.error ? (' \\u2014 '+s.error) : '');
+    if(s.status==='awaiting_login'){ cont.style.display='inline-block'; cont.textContent='I have logged in \\u2014 Continue'; }
+    else if(s.status==='awaiting_send'){ cont.style.display='inline-block'; cont.textContent='I sent one message \\u2014 Continue'; }
+    else { cont.style.display='none'; }
+  }
+  function poll(){
+    fetch('/wizard/capture-run/'+rid).then(function(r){return r.json();}).then(function(s){
+      show(s);
+      if(s.state==='done'){ window.location='/wizard/capture-preview/'+rid; return; }
+      if(s.state==='error'){ btn.disabled=false; return; }
+      setTimeout(poll, 800);
+    }).catch(function(){ setTimeout(poll,1200); });
+  }
+  btn.onclick=function(){
+    var body=new URLSearchParams({url:document.getElementById('cap-url').value,
+      name:document.getElementById('cap-name').value, message:document.getElementById('cap-msg').value,
+      authorized:document.getElementById('cap-auth').checked?'1':''});
+    btn.disabled=true; out.textContent='starting\\u2026';
+    fetch('/wizard/capture-run',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})
+      .then(function(r){return r.json();}).then(function(j){
+        if(j.error){ out.textContent=j.error; btn.disabled=false; return; }
+        rid=j.run_id; poll();
+      });
+  };
+  cont.onclick=function(){
+    cont.style.display='none';
+    fetch('/wizard/capture-advance',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body:new URLSearchParams({run_id:rid})});
+  };
+})();
+</script>"""
+
+
+def _capture_ui() -> str:
+    """The 'Capture for me' block, or a one-line note if the extra is missing."""
+    from . import capture_proxy
+    if not capture_proxy.proxy_available():
+        return ('<hr style="margin:1.6rem 0;border:none;border-top:1px solid #e3e5e9">'
+                '<p class=sub>Automated capture (a local proxy that records the request '
+                "for you) is available with the optional extra: "
+                "<code>pip install -e '.[capture]' && playwright install chromium</code>.</p>")
+    return _WIZARD_CAPTURE_JS
+
+
+def _capture_worker(rid: str, url: str, name: str, message: str):
+    """Drive proxy capture through its two phases, signaled by the browser UI.
+    Runs in a daemon thread; capture_proxy.capture is monkeypatchable in tests."""
+    from . import capture_proxy, wizard
+    run = _CAPTURE_RUNS[rid]
+
+    def login_wait():
+        run["status"] = "awaiting_login"
+        run["login_evt"].wait()
+
+    def send_wait():
+        run["status"] = "awaiting_send"
+        run["send_evt"].wait()
+
+    try:
+        res = capture_proxy.capture(url, prompt_hint=message,
+                                    login_wait=login_wait, send_wait=send_wait)
+        if not res.ok:
+            run.update(state="error", status="error", error=res.error)
+            return
+        run["status"] = "synthesizing"
+        syn = wizard.synthesize(res.captured, message, name or "target")
+        run.update(state="done", status="done",
+                   target=syn.target, cookie=syn.cookie_value,
+                   warnings=syn.warnings, prompt=message)
+    except Exception as e:                              # never leave the run hanging
+        run.update(state="error", status="error", error=f"capture failed: {e}")
 
 
 def _effective_host(target: dict) -> str | None:
@@ -456,6 +555,63 @@ def _wiz_preview(target: dict, cookie: str, warnings: list, prompt: str = "") ->
     return Response(_WIZARD_PREVIEW.format(
         warnings=_wiz_warnings(warnings), token=token, autodetect=autodetect,
         target_json=html.escape(json.dumps(target, indent=2))), mimetype="text/html")
+
+
+@app.post("/wizard/capture-run")
+def wizard_capture_run():
+    """Start a proxy capture in the background. Returns {run_id}. The heavy work
+    (browser + proxy) needs the [capture] extra; capture_proxy reports absence."""
+    url = (request.form.get("url") or "").strip()
+    if not url:
+        return jsonify({"error": "Enter the AI service URL to capture from."}), 400
+    if request.form.get("authorized") != "1":
+        return jsonify({"error": "Confirm you are authorized to test this service."}), 403
+    if len(_CAPTURE_RUNS) > 20:
+        _CAPTURE_RUNS.clear()
+    rid = uuid.uuid4().hex
+    _CAPTURE_RUNS[rid] = {"state": "running", "status": "starting", "error": "",
+                          "login_evt": threading.Event(), "send_evt": threading.Event()}
+    threading.Thread(target=_capture_worker, daemon=True,
+                     args=(rid, url, request.form.get("name", "").strip(),
+                           request.form.get("message", ""))).start()
+    return jsonify({"run_id": rid})
+
+
+@app.post("/wizard/capture-advance")
+def wizard_capture_advance():
+    """The browser 'Continue' button: release whichever phase the capture waits on."""
+    run = _CAPTURE_RUNS.get(request.form.get("run_id", ""))
+    if run is None:
+        return jsonify({"error": "unknown run"}), 404
+    if run.get("status") == "awaiting_login":
+        run["login_evt"].set()
+    elif run.get("status") == "awaiting_send":
+        run["send_evt"].set()
+    return jsonify({"ok": True})
+
+
+@app.get("/wizard/capture-run/<rid>")
+def wizard_capture_status(rid):
+    run = _CAPTURE_RUNS.get(rid)
+    if run is None:
+        return jsonify({"error": "unknown run"}), 404
+    # Never expose the stashed cookie/target to the browser — status only.
+    return jsonify({"state": run.get("state"), "status": run.get("status"),
+                    "error": run.get("error", "")})
+
+
+@app.get("/wizard/capture-preview/<rid>")
+def wizard_capture_preview(rid):
+    """Render the editable preview for a finished capture, then drop the run so
+    its server-side cookie doesn't linger."""
+    run = _CAPTURE_RUNS.get(rid)
+    if run is None or run.get("state") != "done":
+        return _wiz_page("Not ready", '<p class="err">That capture is not finished '
+                         '(or expired). Start over from the wizard.</p>'
+                         '<p><a href="/wizard">&larr; wizard</a></p>')
+    _CAPTURE_RUNS.pop(rid, None)                        # one-shot
+    return _wiz_preview(run["target"], run.get("cookie", ""),
+                        run.get("warnings", []), prompt=run.get("prompt", ""))
 
 
 @app.route("/wizard", methods=["GET", "POST"])
