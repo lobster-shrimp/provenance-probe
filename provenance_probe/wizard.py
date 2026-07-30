@@ -506,16 +506,31 @@ def dry_run(client, probes=None) -> dict:
 # Save — committable config + gitignored cookie (never committed)
 # --------------------------------------------------------------------------- #
 
+def _open_nofollow(path: str, flags: int, mode: int = 0o600):
+    """os.open with O_NOFOLLOW so a pre-planted symlink at `path` can't redirect a
+    write (a captured session cookie, most importantly) to an attacker-chosen file
+    on a shared/predictable dir (CWE-59, security sign-off #44). Fails loudly."""
+    import os
+    import errno
+    try:
+        return os.open(path, flags | os.O_NOFOLLOW, mode)
+    except OSError as e:
+        if e.errno in (errno.ELOOP, errno.EMLINK):
+            raise ValueError(f"refusing to open '{path}' — it is a symlink (possible "
+                             f"credential-redirect attack); remove it and retry.") from e
+        raise
+
+
 def ensure_gitignored(repo_root: str, rel_path: str) -> None:
     """Guarantee `rel_path` is in the repo's .gitignore (design: no-footgun)."""
     import os
     gi = os.path.join(repo_root, ".gitignore")
     lines = []
     if os.path.exists(gi):
-        with open(gi) as f:
+        with os.fdopen(_open_nofollow(gi, os.O_RDONLY), "r") as f:
             lines = f.read().splitlines()
     if rel_path not in lines:
-        with open(gi, "a") as f:
+        with os.fdopen(_open_nofollow(gi, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644), "a") as f:
             if lines and lines[-1].strip():
                 f.write("\n")
             f.write(f"# add-target wizard: captured session credentials — never commit\n{rel_path}\n")
@@ -597,7 +612,7 @@ def write_target(target: dict, cookie_value: str, *, config_path: str,
     # config.load_targets accepts a JSON list (or a lone dict = one target).
     existing = []
     if os.path.exists(config_path):
-        with open(config_path) as f:
+        with os.fdopen(_open_nofollow(config_path, os.O_RDONLY), "r") as f:
             loaded = json.load(f)
         existing = loaded if isinstance(loaded, list) else [loaded]
     if any(isinstance(t, dict) and t.get("name") == name for t in existing):
@@ -605,7 +620,7 @@ def write_target(target: dict, cookie_value: str, *, config_path: str,
                          f"choose a distinct name (no clobber).")
     existing.append(clean)
     os.makedirs(os.path.dirname(config_path) or ".", exist_ok=True)
-    with open(config_path, "w") as f:
+    with os.fdopen(_open_nofollow(config_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644), "w") as f:
         json.dump(existing, f, indent=2)
 
     warnings = []
@@ -623,12 +638,12 @@ def write_target(target: dict, cookie_value: str, *, config_path: str,
                             f"WILL be committed.")
         prior = ""
         if os.path.exists(env_path):
-            with open(env_path) as f:
+            with os.fdopen(_open_nofollow(env_path, os.O_RDONLY), "r") as f:
                 prior = "".join(l for l in f if not l.startswith(f"{cookie_env}="))
         # The env file holds the raw session cookie — create it OWNER-ONLY (0600)
-        # from the start, so it is never world-readable on a shared host, not even
-        # in the window between create and a later chmod (Claude adversarial, HIGH).
-        fd = os.open(env_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        # from the start (no world-readable window), AND O_NOFOLLOW so a pre-planted
+        # symlink can't redirect the cookie to an attacker's file (CWE-59, #44).
+        fd = _open_nofollow(env_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write(prior)
             if prior and not prior.endswith("\n"):

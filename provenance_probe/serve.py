@@ -524,7 +524,8 @@ def _capture_worker(rid: str, url: str, name: str, message: str):
                    target=syn.target, cookie=syn.cookie_value,
                    warnings=syn.warnings, prompt=message)
     except Exception as e:                              # never leave the run hanging
-        run.update(state="error", status="error", error=f"capture failed: {e}")
+        run.update(state="error", status="error",
+                   error=f"capture failed: {capture_proxy._redact(str(e))}")
 
 
 def _effective_host(target: dict) -> str | None:
@@ -808,6 +809,8 @@ def wizard_probe_response():
     replaying the captured request ONCE and reading the paths off the real
     response — removes the hand-typed-path error the operator hit on cURL paste."""
     from . import wizard
+    if not _same_origin_ok(request):                   # defense-in-depth (already token-gated)
+        return _wiz_page("Refused", '<p class="err">Cross-site request refused.</p>')
     token = request.form.get("token", "")
     pending = _WIZARD_PENDING.get(token)
     if pending is None:
@@ -865,6 +868,8 @@ def wizard_probe_response():
 @app.route("/wizard/save", methods=["POST"])
 def wizard_save():
     from . import wizard
+    if not _same_origin_ok(request):                   # defense-in-depth (already token-gated)
+        return _wiz_page("Refused", '<p class="err">Cross-site request refused.</p>')
     token = request.form.get("token", "")
     pending = _WIZARD_PENDING.get(token)
     if pending is None:
@@ -1241,6 +1246,14 @@ loadHist();
 
 def serve(host="127.0.0.1", port=8770, debug=False):
     os.makedirs(DATA_DIR, exist_ok=True)
+    # The "Capture for me" flow runs a capture in a daemon thread; make sure a
+    # process signal/exit tears down any in-flight capture's browser/proxy/CA dir
+    # (security sign-off #44) — the daemon thread's own finally won't run.
+    try:
+        from . import capture_proxy
+        capture_proxy.install_process_cleanup()
+    except Exception:
+        pass
     print(f"provenance-probe  ->  http://{host}:{port}")
     print(f"reports stored in {DATA_DIR}/reports")
     if host not in ("127.0.0.1", "localhost", "::1"):

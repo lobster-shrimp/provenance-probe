@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.15.3] - 2026-07-30 — Security sign-off hardening for proxy capture (#44)
+
+### Security (final security-reviewer pass)
+- **CWE-59 symlink/TOCTOU on the credential write boundary.** `write_target` (and
+  `ensure_gitignored`) now open `.env.capture` / `targets.json` / `.gitignore` with
+  `O_NOFOLLOW` and fail loudly, so a pre-planted symlink can't redirect a captured
+  session cookie to an attacker-chosen file on a shared/predictable directory.
+- **`serve` capture leaked the ephemeral CA on process signal/exit.** The
+  "Capture for me" flow runs in a daemon thread whose `finally` blocks don't run
+  when the process is killed. `capture_proxy.install_process_cleanup()` (called by
+  `serve`) now tears down every in-flight capture's browser + proxy + ephemeral-CA
+  dir via `atexit` + a main-thread `SIGTERM` handler. Verified live: `SIGTERM` to
+  `serve` mid-capture removes the CA dir and leaves no orphaned browser.
+- **Domain binding for local/IP endpoints.** `_reg_domain` now exact-matches IP
+  literals (previously `192.168.1.5` and `10.0.1.5` both collapsed to `1.5`) and
+  uses the public-suffix list for multi-part TLDs — so a background request to an
+  unrelated local endpoint can't be selected as the target and have its cookie saved.
+- Defense-in-depth: Origin check added to `/wizard/save` + `/wizard/probe-response`;
+  capture-worker error strings are redacted; recorded request/response bodies are
+  size-capped (symmetry with the client's stream cap).
+
 ## [0.15.2] - 2026-07-30 — Clean teardown when a capture is aborted with SIGTERM (#44)
 
 ### Fixed
