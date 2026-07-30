@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.15.0] - 2026-07-30 — Wizard "Capture for me" button (#44 child B)
+
+### Added
+- **"Capture for me" in the `/wizard` web UI.** The recording-proxy capture
+  shipped in 0.14.0 (CLI) is now available from the browser: enter a URL, name,
+  and the message you'll send, and the wizard runs the proxy capture and lands
+  you on the editable preview → save. New endpoints: `POST /wizard/capture-run`
+  (starts the capture in a background thread), `POST /wizard/capture-advance`
+  (the two-phase "Continue" button — log in, then send one message),
+  `GET /wizard/capture-run/<id>` (status poll), `GET /wizard/capture-preview/<id>`.
+  The session cookie is held server-side only and never reflected to the browser;
+  runs are one-shot. Shown only when the `[capture]` extra is installed.
+
+### Security (adversarial review — Codex + Claude)
+- **CSRF guard** on the capture endpoints: a cross-site POST can't start a
+  browser-driving capture (Origin/Referer must be the local origin). URL scheme
+  restricted to http(s).
+- **No resource leak on abandon:** the worker's wait for each "Continue" is
+  bounded (times out to an error) so a closed tab can't strand a thread/browser.
+- **Safe eviction:** the run map drops only finished runs, never an in-flight one
+  (which would strand its worker and lose its cookie).
+
 ## [0.14.0] - 2026-07-29 — Local recording-proxy web-app capture (#44)
 
 ### Added
