@@ -485,3 +485,72 @@ def test_capture_installs_and_restores_sigterm_handler():
     assert res.ok
     assert seen["during"] is not orig and callable(seen["during"])   # our handler active during capture
     assert signal.getsignal(signal.SIGTERM) is orig                  # restored afterwards
+
+
+# --------------------------------------------------------------------------- #
+# Security sign-off fixes (#44)
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.unit
+def test_write_target_refuses_symlinked_env(tmp_path):
+    # CWE-59: a pre-planted symlink at .env.capture must NOT redirect the cookie.
+    import os
+    victim = tmp_path / "attacker_target.txt"; victim.write_text("")
+    env = tmp_path / ".env.capture"
+    os.symlink(victim, env)
+    with pytest.raises(ValueError, match="symlink"):
+        wizard.write_target({"name": "t", "base_url": "https://x", "chat_path": "/c",
+                             "api_style": "template", "cookie_env": "T_COOKIE"},
+                            "REAL-COOKIE", config_path=str(tmp_path / "targets.json"),
+                            env_path=str(env), repo_root=str(tmp_path))
+    assert "REAL-COOKIE" not in victim.read_text()      # cookie never followed the symlink
+
+
+@pytest.mark.unit
+def test_write_target_refuses_symlinked_config(tmp_path):
+    import os
+    victim = tmp_path / "attacker_cfg.txt"; victim.write_text("[]")
+    cfg = tmp_path / "targets.json"; os.symlink(victim, cfg)
+    with pytest.raises(ValueError, match="symlink"):
+        wizard.write_target({"name": "t", "base_url": "https://x", "chat_path": "/c",
+                             "api_style": "template"}, "",
+                            config_path=str(cfg), env_path=str(tmp_path / ".env.capture"),
+                            repo_root=str(tmp_path))
+
+
+@pytest.mark.unit
+def test_reg_domain_ip_literals_are_exact():
+    # 192.168.1.5 and 10.0.1.5 must NOT collapse to the same "domain".
+    assert CX._reg_domain("192.168.1.5") == "192.168.1.5"
+    assert CX._reg_domain("10.0.1.5") == "10.0.1.5"
+    assert CX._reg_domain("192.168.1.5") != CX._reg_domain("10.0.1.5")
+
+
+@pytest.mark.unit
+def test_select_chat_flow_ip_host_not_confused():
+    # A background POST to a DIFFERENT IP sharing the last two octets must not be
+    # selected as same-site as the target IP.
+    target = _flow(url="http://192.168.1.5/api/chat",
+                   req_body='{"messages":[{"role":"user","content":"hi"}]}')
+    other = _flow(url="http://10.0.1.5/api/chat",
+                  req_body='{"messages":[{"role":"user","content":"hi"}],"x":"' + "y"*300 + '"}')
+    assert CX.select_chat_flow([other, target], allowed_host="192.168.1.5") is target
+
+
+@pytest.mark.unit
+def test_process_cleanup_registry_tears_down_active(tmp_path):
+    # An in-flight capture registered in _ACTIVE_CAPTURES is torn down by the
+    # process-cleanup hook (the serve daemon-thread leak fix).
+    import os
+    d = tmp_path / "confdir"; d.mkdir()
+    stopped = {"v": False}
+    class _P:
+        def stop(self): stopped["v"] = True
+    entry = {"proxy": _P(), "confdir": str(d), "browser": None}
+    CX._register_active(entry)
+    try:
+        CX._cleanup_active_captures()
+        assert stopped["v"] is True            # proxy stopped
+        assert not os.path.exists(str(d))      # confdir removed
+    finally:
+        CX._unregister_active(entry)

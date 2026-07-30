@@ -140,11 +140,32 @@ def detect_response_mode(body: str, content_type: str = "") -> str:
 
 
 def _reg_domain(host: str) -> str:
-    """Naive registrable domain (last two labels). No PSL, so multi-part TLDs
-    (co.uk) collapse to the TLD+1 approximation — sufficient to keep a capture
-    bound to the target site and reject an unrelated third-party origin."""
-    parts = (host or "").lower().strip(".").split(".")
-    return ".".join(parts[-2:]) if len(parts) >= 2 else (host or "").lower()
+    """Registrable domain used to bind a capture to the target site.
+
+    IP-literal hosts return the FULL address (a last-two-labels split is meaningless
+    for IPs — 192.168.1.5 and 10.0.1.5 would both collapse to '1.5', letting an
+    unrelated local endpoint be treated as same-site; self-hosted model UIs are
+    often IP-addressed, so this matters here). Domain names use the public-suffix
+    list when available (correct for multi-part TLDs like co.uk), else fall back to
+    the last-two-labels approximation (security sign-off #44)."""
+    import ipaddress
+    h = (host or "").lower().strip(".")
+    if not h:
+        return h
+    try:
+        ipaddress.ip_address(h)     # IPv4/IPv6 literal -> exact match required
+        return h
+    except ValueError:
+        pass
+    try:
+        from publicsuffix2 import get_sld   # ships with the [capture] extra
+        sld = get_sld(h)
+        if sld:
+            return sld
+    except Exception:
+        pass
+    parts = h.split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else h
 
 
 def _flow_host(url: str) -> str:
@@ -223,10 +244,81 @@ def flow_to_captured(flow: Flow, prompt_hint: str = ""):
 # an injected launcher + proxy; only the real mitmproxy adapter needs the extra.
 # --------------------------------------------------------------------------- #
 
+import atexit
 import contextlib
 import os
 import shutil
+import signal
 import tempfile
+import threading
+
+
+# In-flight captures, so the PROCESS can tear down their browser/proxy/ephemeral-CA
+# if it is signalled or exits mid-capture. The `serve` "Capture for me" flow runs
+# the capture in a DAEMON thread, which CPython abandons (no finally) when the main
+# process ends — so without this the CA dir + headed browser would leak on a plain
+# `kill`/Ctrl-C of `serve` (security sign-off #44).
+_ACTIVE_LOCK = threading.Lock()
+_ACTIVE_CAPTURES: list = []
+_CLEANUP_INSTALLED = False
+
+# Cap each recorded request/response body so a hostile/huge response from the
+# target under test can't exhaust memory during a capture (security sign-off #44).
+_RECORD_MAX_BYTES = 8_000_000
+
+
+def _register_active(entry: dict) -> None:
+    with _ACTIVE_LOCK:
+        _ACTIVE_CAPTURES.append(entry)
+
+
+def _unregister_active(entry: dict) -> None:
+    with _ACTIVE_LOCK:
+        try:
+            _ACTIVE_CAPTURES.remove(entry)
+        except ValueError:
+            pass
+
+
+def _cleanup_active_captures() -> None:
+    with _ACTIVE_LOCK:
+        entries = list(_ACTIVE_CAPTURES)
+    for e in entries:
+        for step in (lambda: e["browser"].close() if e.get("browser") else None,
+                     lambda: e["proxy"].stop() if e.get("proxy") else None,
+                     lambda: shutil.rmtree(e["confdir"], ignore_errors=True) if e.get("confdir") else None):
+            try:
+                step()
+            except Exception:
+                pass
+
+
+def install_process_cleanup() -> None:
+    """Ensure an in-flight capture is torn down if the PROCESS is signalled/exits.
+    Idempotent. atexit covers normal exit + SIGINT (Werkzeug turns it into a clean
+    shutdown); a main-thread SIGTERM handler covers `kill`. Call from a long-lived
+    host (e.g. `serve`) so its daemon-thread capture can't leak the ephemeral CA."""
+    global _CLEANUP_INSTALLED
+    if _CLEANUP_INSTALLED:
+        return
+    _CLEANUP_INSTALLED = True
+    atexit.register(_cleanup_active_captures)
+    try:
+        if threading.current_thread() is threading.main_thread():
+            _prev = signal.getsignal(signal.SIGTERM)
+
+            def _term(signum, frame):
+                _cleanup_active_captures()
+                if callable(_prev) and _prev not in (signal.SIG_DFL, signal.SIG_IGN):
+                    try:
+                        _prev(signum, frame)
+                    except Exception:
+                        pass
+                raise SystemExit(143)
+
+            signal.signal(signal.SIGTERM, _term)
+    except (ValueError, OSError):
+        pass
 
 
 @dataclass
@@ -288,10 +380,15 @@ def _run_capture_session(url, *, launcher, proxy, login_wait, send_wait, confdir
     throwaway context pointed at the proxy with `ignore_https_errors=True`, so the
     ephemeral CA is trusted by NOTHING in any store. The proxy is always stopped
     (finally); the confdir is removed by the `proxy_confdir` wrapper (AC4)."""
+    # Track live handles so install_process_cleanup() can tear this capture down
+    # if the process is signalled/exits mid-run (esp. the serve daemon-thread path).
+    _active = {"proxy": proxy, "confdir": confdir, "browser": None}
+    _register_active(_active)
     port = proxy.start(confdir)
     try:
         with launcher() as pw:
             browser = pw.chromium.launch(headless=False)
+            _active["browser"] = browser
             login_ctx = rec_ctx = None
             try:
                 # Phase 1 — login, NOT proxied, NOT recorded.
@@ -326,6 +423,7 @@ def _run_capture_session(url, *, launcher, proxy, login_wait, send_wait, confdir
                     pass
     finally:
         proxy.stop()
+        _unregister_active(_active)
 
 
 class _MitmRecorder:
@@ -362,12 +460,16 @@ class _MitmRecorder:
                     return
                 try:
                     req, resp = flow.request, flow.response
+                    # Cap recorded bodies so a hostile/huge response from the
+                    # target under test can't balloon memory (symmetry with the
+                    # client's _STREAM_MAX_BYTES; security sign-off #44).
+                    cap = _RECORD_MAX_BYTES
                     rec._flows.append(Flow(
                         url=req.pretty_url, method=req.method,
                         req_headers={k: v for k, v in req.headers.items()},
-                        req_body=req.get_text(strict=False) or "",
+                        req_body=(req.get_text(strict=False) or "")[:cap],
                         resp_headers={k: v for k, v in resp.headers.items()},
-                        resp_body=resp.get_text(strict=False) or "",
+                        resp_body=(resp.get_text(strict=False) or "")[:cap],
                         resp_content_type=resp.headers.get("content-type", "")))
                 except Exception as e:                  # never let a capture crash the proxy
                     print(f"[capture] warning: dropped a recorded flow: {e}", file=sys.stderr)
