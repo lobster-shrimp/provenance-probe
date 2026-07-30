@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.15.1] - 2026-07-30 — Fix proxy capture on mitmproxy 12 (#44)
+
+### Fixed
+- **Proxy capture (`capture_proxy._MitmRecorder`) was broken on mitmproxy ≥12.**
+  `DumpMaster.__init__` resolves the event loop via `asyncio.get_running_loop()`,
+  so constructing it before the loop ran raised `RuntimeError: no running event
+  loop` — i.e. `provenance-probe capture <url>` and the `/wizard` "Capture for
+  me" button crashed on the version `mitmproxy>=11` resolves to today. The master
+  is now built inside the running loop. Found by real-environment validation
+  (the adapter was `# pragma: no cover` and had never run live).
+- **Lingering proxy listener after teardown.** mitmproxy's Rust-backed listener
+  isn't closed when `master.run()` returns, so the 127.0.0.1 proxy port survived
+  `stop()` — a leaked listener per capture on the long-lived `serve` process. The
+  servers are now torn down (`setup_servers()` with an empty mode) and the loop
+  closed before the thread exits.
+
+### Tests
+- Added a `[capture]`-gated integration test that binds and cleanly tears down a
+  real embedded proxy (skipped in CI; runs where the `[capture]` extra is
+  installed). Registered the `integration` pytest marker.
+
 ## [0.15.0] - 2026-07-30 — Wizard "Capture for me" button (#44 child B)
 
 ### Added
