@@ -434,3 +434,32 @@ def test_session_closes_browser_on_abort():
                                 login_wait=lambda: None, send_wait=boom, confdir="/tmp/x")
     assert pw.browser.closed is True                 # browser torn down on abort (no cookie leak)
     assert proxy.stopped
+
+
+# --------------------------------------------------------------------------- #
+# Real mitmproxy embedding — gated on the [capture] extra (would have caught the
+# mitmproxy-12 "no running event loop" crash and the lingering-listener leak).
+# Skips in CI (no extra); runs on dev machines with `pip install -e '.[capture]'`.
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.integration
+def test_mitmrecorder_binds_and_tears_down_cleanly():
+    import socket
+    import os as _os
+    import glob as _glob
+    if not CX.proxy_available():
+        pytest.skip("[capture] extra (mitmproxy) not installed")
+    with CX.proxy_confdir() as confdir:
+        rec = CX._MitmRecorder()
+        port = rec.start(confdir)                       # embeds DumpMaster on the real loop
+        socket.create_connection(("127.0.0.1", port), timeout=3).close()   # actually listening
+        rec.stop()
+        assert not rec._thread.is_alive()               # thread joined
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=1).close()
+            raise AssertionError("proxy port still open after stop() — listener leak")
+        except OSError:
+            pass                                        # refused == released
+    assert not _os.path.exists(confdir)                 # ephemeral CA dir removed
+    assert not _glob.glob(_os.path.join(_os.environ.get("TMPDIR", "/tmp"), "provenance-proxy-*"))
+    assert not _os.path.exists(_os.path.expanduser("~/.mitmproxy"))   # CA never escaped to the default dir

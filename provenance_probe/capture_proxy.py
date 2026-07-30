@@ -376,11 +376,39 @@ class _MitmRecorder:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             self._loop = loop
-            opts = options.Options(listen_host="127.0.0.1",
-                                   listen_port=self._port, confdir=confdir)
-            self._master = DumpMaster(opts, with_termlog=False, with_dumper=False)
-            self._master.addons.add(_Addon())
-            loop.run_until_complete(self._master.run())
+
+            async def _serve():
+                # Construct DumpMaster INSIDE the running loop: mitmproxy>=11's
+                # Master.__init__ falls back to asyncio.get_running_loop() when no
+                # loop is passed, so building it before the loop runs raises
+                # "no running event loop" on 12.x (real-env validation, #44).
+                opts = options.Options(listen_host="127.0.0.1",
+                                       listen_port=self._port, confdir=confdir)
+                self._master = DumpMaster(opts, with_termlog=False, with_dumper=False)
+                self._master.addons.add(_Addon())
+                await self._master.run()
+
+            try:
+                loop.run_until_complete(_serve())
+            finally:
+                # master.run() returning does NOT close mitmproxy's (Rust-backed)
+                # proxy listeners — they're torn down by setup_servers() once the
+                # mode is cleared. Do that explicitly so the 127.0.0.1 port is
+                # released; otherwise a long-lived `serve` leaks an open proxy per
+                # capture (real-env validation, #44).
+                async def _teardown():
+                    ps = self._master.addons.get("proxyserver") if self._master else None
+                    if ps is not None:
+                        self._master.options.update(mode=[])   # inside the loop: configure()'s
+                        await ps.setup_servers()               # create_task has a running loop
+                try:
+                    loop.run_until_complete(_teardown())
+                except Exception:
+                    pass
+                try:
+                    loop.close()
+                except Exception:
+                    pass
 
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
