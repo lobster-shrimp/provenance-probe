@@ -463,3 +463,25 @@ def test_mitmrecorder_binds_and_tears_down_cleanly():
     assert not _os.path.exists(confdir)                 # ephemeral CA dir removed
     assert not _glob.glob(_os.path.join(_os.environ.get("TMPDIR", "/tmp"), "provenance-proxy-*"))
     assert not _os.path.exists(_os.path.expanduser("~/.mitmproxy"))   # CA never escaped to the default dir
+
+
+@pytest.mark.unit
+def test_capture_installs_and_restores_sigterm_handler():
+    # SIGTERM must be translated to the KeyboardInterrupt-style unwind while the
+    # browser/proxy are open, so `kill <pid>` cleans up the ephemeral CA like
+    # Ctrl-C does (#44 §4). Verify the handler is swapped in during the driver
+    # call and restored afterwards. Runs in the pytest main thread.
+    import signal
+    orig = signal.getsignal(signal.SIGTERM)
+    seen = {}
+
+    def drv(url, *, login_wait, send_wait, proxy_port=None):
+        seen["during"] = signal.getsignal(signal.SIGTERM)
+        return [CX.Flow(url="https://app.example/api/chat", req_headers={"Cookie": "s=1"},
+                        req_body='{"messages":[{"role":"user","content":"hi"}]}',
+                        resp_body='{"choices":[{"message":{"content":"a longer reply here"}}]}')]
+
+    res = CX.capture("https://app.example", driver=drv, login_wait=lambda: None, send_wait=lambda: None)
+    assert res.ok
+    assert seen["during"] is not orig and callable(seen["during"])   # our handler active during capture
+    assert signal.getsignal(signal.SIGTERM) is orig                  # restored afterwards
