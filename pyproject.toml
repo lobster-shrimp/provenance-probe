@@ -15,7 +15,7 @@ reference = ["transformers>=4.44", "tiktoken>=0.7", "sentencepiece>=0.2", "proto
 eval = ["gguf>=0.9", "tokenizers>=0.19"]
 # capture: optional Playwright-driven web-app request capture (E8). Manual
 # guided capture needs nothing; this only powers `capture --auto`.
-capture = ["playwright>=1.40", "mitmproxy>=11"]
+capture = ["playwright>=1.40", "mitmproxy>=11", "publicsuffix2>=2.2"]
 test = ["pytest>=8.0"]
 
 [project.scripts]

@@ -645,10 +645,10 @@ def write_target(target: dict, cookie_value: str, *, config_path: str,
         # symlink can't redirect the cookie to an attacker's file (CWE-59, #44).
         fd = _open_nofollow(env_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
+            os.fchmod(f.fileno(), 0o600)         # on the OPEN fd (no path re-follow, tightens a pre-existing file)
             f.write(prior)
             if prior and not prior.endswith("\n"):
                 f.write("\n")
             f.write(f"{cookie_env}={cookie_value}\n")
-        os.chmod(env_path, 0o600)                # tighten a pre-existing 0644 file too
     return {"config_path": config_path, "env_path": env_path if cookie_value else None,
             "cookie_env": cookie_env, "added": name, "warnings": warnings}
