@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.15.2] - 2026-07-30 — Clean teardown when a capture is aborted with SIGTERM (#44)
+
+### Fixed
+- **Aborting a proxy capture with `SIGTERM` (`kill <pid>`) leaked the ephemeral
+  CA directory.** Python's default `SIGTERM` terminates the process without
+  running the `finally` blocks that close the browser, stop the proxy, and remove
+  the per-session CA dir — so the CA private-key files were left on disk. `capture()`
+  now installs a `SIGTERM` handler (main thread only) that unwinds through those
+  same teardown blocks, matching the existing clean `SIGINT` (Ctrl-C) behavior.
+  Found by real-environment §4 abort testing. The proxy listener and browser
+  already died with the process; this closes the on-disk CA leak.
+
 ## [0.15.1] - 2026-07-30 — Fix proxy capture on mitmproxy 12 (#44)
 
 ### Fixed

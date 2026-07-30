@@ -471,10 +471,33 @@ def capture(url, *, prompt_hint: str = "", login_wait=None, send_wait=None,
         "Log in in the browser, then press Enter here (do NOT send a message yet)..."))
     send_wait = send_wait or (lambda: _prompt(
         "Now send ONE short message in the chat, then press Enter here..."))
+    # SIGINT (Ctrl-C) already raises KeyboardInterrupt, which unwinds the driver's
+    # finally blocks (browser close, proxy stop, ephemeral-CA rmtree). SIGTERM's
+    # default just terminates WITHOUT running them, leaving the CA dir on disk — so
+    # translate SIGTERM into the same unwind while we hold the browser/proxy open
+    # (review #44 §4). Only in the main thread; the serve worker runs in a thread
+    # where signal handlers can't be installed and owns its own lifecycle.
+    _restore_term = None
+    try:
+        import signal
+        import threading
+        if threading.current_thread() is threading.main_thread():
+            def _term(_signum, _frame):
+                raise KeyboardInterrupt
+            _restore_term = signal.getsignal(signal.SIGTERM)
+            signal.signal(signal.SIGTERM, _term)
+    except (ValueError, OSError):
+        _restore_term = None
     try:
         flows = driver(url, login_wait=login_wait, send_wait=send_wait, proxy_port=proxy_port)
     except Exception as e:                              # noqa: BLE001 - transport/user-abort
         return ProxyCaptureResult(ok=False, error=f"capture failed: {_redact(str(e))}")
+    finally:
+        if _restore_term is not None:
+            try:
+                signal.signal(signal.SIGTERM, _restore_term)
+            except (ValueError, OSError):
+                pass
     # Bind selection to the target's domain so a third-party POST can't be saved
     # with the wrong cookie (review #44).
     flow = select_chat_flow(flows or [], prompt_hint, allowed_host=_flow_host(url))
