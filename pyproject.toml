@@ -24,6 +24,7 @@ provenance-probe = "provenance_probe.cli:main"
 [tool.pytest.ini_options]
 markers = [
     "unit: fast, isolated unit tests (no network, no filesystem)",
+    "integration: needs the [capture] extra (mitmproxy/playwright); skipped in CI",
 ]
 
 [tool.setuptools.packages.find]
