@@ -398,6 +398,31 @@ def _wiz_form(err="", name="", prompt="", capture=""):
 # two-phase Events and, on success, the synthesized result INCLUDING the session
 # cookie — kept server-side only, never reflected to the browser, one-shot.
 _CAPTURE_RUNS: dict = {}
+# Bound how long a worker blocks waiting for the operator to click Continue, so an
+# abandoned run (closed tab) can't leak a thread + browser forever (review #44).
+_CAPTURE_WAIT_TIMEOUT = 600
+
+
+def _same_origin_ok(req) -> bool:
+    """CSRF guard for the mutating capture endpoints. The wizard's fetch() carries
+    an Origin/Referer for the local page; a cross-site page's differs. This
+    endpoint drives a real browser to a caller-supplied URL, so a cross-site POST
+    must not be able to start one (review #44). A missing Origin+Referer (curl,
+    tests, same-origin no-cors) is allowed — the app binds 127.0.0.1 only."""
+    from urllib.parse import urlsplit
+    ref = req.headers.get("Origin") or req.headers.get("Referer") or ""
+    if not ref:
+        return True
+    return (urlsplit(ref).hostname or "").lower() in ("127.0.0.1", "localhost", "::1")
+
+
+def _evict_terminal_runs():
+    """Drop finished runs when the map grows, NEVER in-flight ones — clearing a
+    running entry would strand its worker on a wait() and lose its cookie."""
+    if len(_CAPTURE_RUNS) <= 20:
+        return
+    for k in [k for k, v in _CAPTURE_RUNS.items() if v.get("state") in ("done", "error")]:
+        _CAPTURE_RUNS.pop(k, None)
 
 # Raw HTML+JS for the "Capture for me" section, appended to the wizard form. Kept
 # out of the .format() template so its many JS braces need no escaping.
@@ -425,7 +450,11 @@ message; the login is never recorded. Needs the <code>[capture]</code> extra.</p
     else { cont.style.display='none'; }
   }
   function poll(){
-    fetch('/wizard/capture-run/'+rid).then(function(r){return r.json();}).then(function(s){
+    fetch('/wizard/capture-run/'+rid).then(function(r){
+      if(r.status===404){ out.textContent='capture expired \\u2014 start over'; btn.disabled=false; return null; }
+      return r.json();
+    }).then(function(s){
+      if(!s) return;
       show(s);
       if(s.state==='done'){ window.location='/wizard/capture-preview/'+rid; return; }
       if(s.state==='error'){ btn.disabled=false; return; }
@@ -441,7 +470,7 @@ message; the login is never recorded. Needs the <code>[capture]</code> extra.</p
       .then(function(r){return r.json();}).then(function(j){
         if(j.error){ out.textContent=j.error; btn.disabled=false; return; }
         rid=j.run_id; poll();
-      });
+      }).catch(function(){ out.textContent='could not start capture'; btn.disabled=false; });
   };
   cont.onclick=function(){
     cont.style.display='none';
@@ -454,8 +483,12 @@ message; the login is never recorded. Needs the <code>[capture]</code> extra.</p
 
 def _capture_ui() -> str:
     """The 'Capture for me' block, or a one-line note if the extra is missing."""
-    from . import capture_proxy
-    if not capture_proxy.proxy_available():
+    try:
+        from . import capture_proxy
+        available = capture_proxy.proxy_available()
+    except Exception:
+        available = False
+    if not available:
         return ('<hr style="margin:1.6rem 0;border:none;border-top:1px solid #e3e5e9">'
                 '<p class=sub>Automated capture (a local proxy that records the request '
                 "for you) is available with the optional extra: "
@@ -471,11 +504,13 @@ def _capture_worker(rid: str, url: str, name: str, message: str):
 
     def login_wait():
         run["status"] = "awaiting_login"
-        run["login_evt"].wait()
+        if not run["login_evt"].wait(timeout=_CAPTURE_WAIT_TIMEOUT):
+            raise TimeoutError("timed out waiting for you to log in and click Continue")
 
     def send_wait():
         run["status"] = "awaiting_send"
-        run["send_evt"].wait()
+        if not run["send_evt"].wait(timeout=_CAPTURE_WAIT_TIMEOUT):
+            raise TimeoutError("timed out waiting for you to send a message and click Continue")
 
     try:
         res = capture_proxy.capture(url, prompt_hint=message,
@@ -561,13 +596,18 @@ def _wiz_preview(target: dict, cookie: str, warnings: list, prompt: str = "") ->
 def wizard_capture_run():
     """Start a proxy capture in the background. Returns {run_id}. The heavy work
     (browser + proxy) needs the [capture] extra; capture_proxy reports absence."""
+    if not _same_origin_ok(request):
+        return jsonify({"error": "cross-site request refused"}), 403
     url = (request.form.get("url") or "").strip()
     if not url:
         return jsonify({"error": "Enter the AI service URL to capture from."}), 400
+    from urllib.parse import urlsplit
+    scheme = urlsplit(url if "://" in url else "https://" + url).scheme.lower()
+    if scheme not in ("http", "https"):
+        return jsonify({"error": "URL must be http(s)."}), 400
     if request.form.get("authorized") != "1":
         return jsonify({"error": "Confirm you are authorized to test this service."}), 403
-    if len(_CAPTURE_RUNS) > 20:
-        _CAPTURE_RUNS.clear()
+    _evict_terminal_runs()                             # never drops an in-flight run
     rid = uuid.uuid4().hex
     _CAPTURE_RUNS[rid] = {"state": "running", "status": "starting", "error": "",
                           "login_evt": threading.Event(), "send_evt": threading.Event()}
@@ -579,7 +619,11 @@ def wizard_capture_run():
 
 @app.post("/wizard/capture-advance")
 def wizard_capture_advance():
-    """The browser 'Continue' button: release whichever phase the capture waits on."""
+    """The browser 'Continue' button: release whichever phase the capture waits on.
+    Keys off the CURRENT status, so a duplicate/late click can't pre-release the
+    next phase (it only sets the event for the phase actually being awaited)."""
+    if not _same_origin_ok(request):
+        return jsonify({"error": "cross-site request refused"}), 403
     run = _CAPTURE_RUNS.get(request.form.get("run_id", ""))
     if run is None:
         return jsonify({"error": "unknown run"}), 404

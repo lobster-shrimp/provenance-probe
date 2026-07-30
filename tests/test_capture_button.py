@@ -119,3 +119,58 @@ def test_capture_status_and_advance_unknown_run_404(client):
     assert client.get("/wizard/capture-run/nope").status_code == 404
     assert client.post("/wizard/capture-advance", data={"run_id": "nope"}).status_code == 404
     assert client.get("/wizard/capture-preview/nope").status_code == 200  # friendly page, not 500
+
+
+# --------------------------------------------------------------------------- #
+# Hardening from the ship adversarial pass (#44)
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.unit
+def test_capture_run_refuses_cross_site_origin(client):
+    r = client.post("/wizard/capture-run",
+                    data={"url": "https://app.example", "authorized": "1"},
+                    headers={"Origin": "https://evil.example"})
+    assert r.status_code == 403
+
+
+@pytest.mark.unit
+def test_capture_run_allows_local_origin(client, monkeypatch):
+    monkeypatch.setattr(capture_proxy, "capture", _fake_ok_capture)
+    r = client.post("/wizard/capture-run",
+                    data={"url": "https://app.example", "name": "a", "message": "hi",
+                          "authorized": "1"},
+                    headers={"Origin": "http://127.0.0.1:8770"})
+    assert r.status_code == 200 and "run_id" in r.get_json()
+
+
+@pytest.mark.unit
+def test_capture_run_rejects_non_http_scheme(client):
+    r = client.post("/wizard/capture-run",
+                    data={"url": "file:///etc/passwd", "authorized": "1"})
+    assert r.status_code == 400
+
+
+@pytest.mark.unit
+def test_evict_terminal_runs_preserves_in_flight():
+    serve._CAPTURE_RUNS.clear()
+    serve._CAPTURE_RUNS["live"] = {"state": "running"}
+    for i in range(25):
+        serve._CAPTURE_RUNS[f"done{i}"] = {"state": "done"}
+    serve._evict_terminal_runs()
+    assert "live" in serve._CAPTURE_RUNS            # in-flight run never dropped
+    assert not any(k.startswith("done") for k in serve._CAPTURE_RUNS)  # terminal runs evicted
+    serve._CAPTURE_RUNS.clear()
+
+
+@pytest.mark.unit
+def test_abandoned_run_times_out_to_error(client, monkeypatch):
+    monkeypatch.setattr(serve, "_CAPTURE_WAIT_TIMEOUT", 0.1)   # don't hang the test
+
+    def fake_blocking(url, *, prompt_hint="", login_wait=None, send_wait=None, **kw):
+        login_wait()          # operator never clicks Continue -> times out -> raises
+        return capture_proxy.ProxyCaptureResult(ok=True, captured=None)
+    monkeypatch.setattr(capture_proxy, "capture", fake_blocking)
+    rid = client.post("/wizard/capture-run",
+                      data={"url": "https://app.example", "authorized": "1"}).get_json()["run_id"]
+    j = _poll(client, rid, "error")
+    assert "timed out" in j["error"]
