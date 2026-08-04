@@ -1,0 +1,63 @@
+name: extension
+
+# Builds and packages the MV3 browser extension (#54) into a Chrome Web Store
+# upload zip on CI. It does NOT publish — the packaged zip is uploaded as a build
+# artifact for the owner to submit manually. Runs the standalone JS unit tests for
+# the payload-assembly / sanitization logic first (no npm dependencies).
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "extension/**"
+      - ".github/workflows/extension.yml"
+  pull_request:
+    paths:
+      - "extension/**"
+      - ".github/workflows/extension.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: extension-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: this workflow only reads the repo and uploads a build artifact.
+permissions:
+  contents: read
+
+jobs:
+  test-and-package:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate manifest.json is valid JSON
+        run: node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8')); console.log('manifest.json OK')"
+
+      - name: Unit tests (payload assembly + sanitization)
+        run: node --test "test/*.test.mjs"
+
+      - name: Read extension version
+        id: ver
+        run: echo "version=$(node -p "require('./manifest.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Package Chrome Web Store zip
+        run: |
+          # Ship only the runtime files — never the tests, package.json, or docs.
+          zip -r -X "../provenance-probe-extension-${{ steps.ver.outputs.version }}.zip" \
+            manifest.json background.js devtools.html devtools.js \
+            panel.html panel.js popup.html popup.js popup.css lib \
+            -x "*/.*"
+          echo "Packaged provenance-probe-extension-${{ steps.ver.outputs.version }}.zip"
+
+      - name: Upload extension zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: provenance-probe-extension-${{ steps.ver.outputs.version }}
+          path: provenance-probe-extension-${{ steps.ver.outputs.version }}.zip
+          if-no-files-found: error

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="popup.css" />
+    <style>
+      body { width: auto; max-width: 620px; }
+      .warn { background: #fdf3d6; border: 1px solid #e6d38a; padding: 8px 10px; border-radius: 6px; margin: 8px 0; }
+      .err-box { background: #fbe4de; border: 1px solid #e3a996; padding: 8px 10px; border-radius: 6px; margin: 8px 0; color: var(--err); }
+      .ok-box { background: #dcf0e6; border: 1px solid #9fd2ba; padding: 8px 10px; border-radius: 6px; margin: 8px 0; }
+      select { width: 100%; padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; background: #fff; }
+      pre { background: #1e1b16; color: #b7e3c7; padding: 10px; border-radius: 6px; overflow: auto; font-family: ui-monospace, monospace; font-size: 12px; }
+      .cookie-consent { display: none; margin: 8px 0; }
+      .cookie-consent label { font-weight: 400; display: flex; gap: 6px; align-items: flex-start; }
+      .cookie-consent input { width: auto; margin-top: 2px; }
+      #pick { display: none; }
+    </style>
+    <title>Provenance Capture</title>
+  </head>
+  <body>
+    <h1>Capture this AI request</h1>
+    <p class="sub">Arm capture, send <b>one</b> message in the app, then pick the
+      request and upload it to your configured instance. Everything happens in
+      this tab, in your own session.</p>
+
+    <p id="needcfg" class="warn" style="display:none">
+      No instance is configured yet. Open the extension popup (toolbar icon) and
+      set the URL + credentials first.
+    </p>
+
+    <label for="name">Target name</label>
+    <input id="name" type="text" placeholder="my-service" />
+    <label for="hint">The exact message you'll send <span class="sub">(optional, improves detection)</span></label>
+    <input id="hint" type="text" placeholder="fingerprint me" />
+
+    <div class="row">
+      <button id="arm" type="button">Arm capture</button>
+      <button id="stop" type="button" class="ghost" disabled>Stop</button>
+    </div>
+    <p id="armnote" class="sub"></p>
+
+    <div id="pick">
+      <label for="flow">Captured request (auto-picked; change if wrong)</label>
+      <select id="flow"></select>
+      <p id="cookieLine" class="sub"></p>
+      <div id="cookieConsent" class="cookie-consent">
+        <label>
+          <input id="consent" type="checkbox" />
+          <span id="consentLabel"></span>
+        </label>
+      </div>
+      <div class="row">
+        <button id="send" type="button">Upload &amp; dry-run &rarr;</button>
+      </div>
+    </div>
+
+    <div id="out"></div>
+
+    <script type="module" src="panel.js"></script>
+  </body>
+</html>
