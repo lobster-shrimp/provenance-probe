@@ -542,12 +542,14 @@ message; the login is never recorded. Needs the <code>[capture]</code> extra.</p
 
 def _capture_ui() -> str:
     """The 'Capture for me' block, or a one-line note if the extra is missing."""
-    # The capture flow drives a real browser to a user-named URL, which cannot be
-    # IP-pinned like the requests transport. It is out of scope for the public
-    # instance (#51), so it is refused entirely in public-hosting mode — don't
-    # advertise it either.
+    # The server-side-browser capture flow drives a real browser to a user-named
+    # URL, which cannot be IP-pinned like the requests transport. It is out of
+    # scope for the public instance (#51), so it is refused entirely in
+    # public-hosting mode — don't advertise it. Instead, offer the no-install
+    # CLIENT-SIDE import (#53): the browser captures the request and uploads only
+    # the chosen flow, so the server never makes an arbitrary fetch.
     if egress.guard_enabled():
-        return ""
+        return _IMPORT_UI
     try:
         from . import capture_proxy
         available = capture_proxy.proxy_available()
@@ -732,6 +734,355 @@ def wizard_capture_preview(rid):
     _CAPTURE_RUNS.pop(rid, None)                        # one-shot
     return _wiz_preview(run["target"], run.get("cookie", ""),
                         run.get("warnings", []), prompt=run.get("prompt", ""))
+
+
+# --------------------------------------------------------------------------- #
+# Client-side capture import (#53). No-install, hosted-safe capture: the user's
+# OWN browser records the request (already logged into the target app), the HAR
+# is parsed IN THE BROWSER, and only the ONE chosen, sanitized flow is uploaded.
+# The server never drives a browser and never fetches a caller-named URL, so this
+# is ALLOWED under the egress guard while /wizard/capture-run stays refused.
+# --------------------------------------------------------------------------- #
+
+# Link shown on the wizard in public-hosting mode (where server-side capture is
+# refused) pointing at the no-install client-side import.
+_IMPORT_UI = (
+    '<hr style="margin:1.6rem 0;border:none;border-top:1px solid #e3e5e9">'
+    '<h2 style="font-size:16px">…or capture it yourself (no install)</h2>'
+    '<p class=sub>Record the request in your OWN browser (you are already logged '
+    'in), export it as a HAR, and upload it here. The HAR is parsed in your '
+    'browser and only the single chosen request is sent — the full HAR, with all '
+    'its cookies, never leaves your machine.</p>'
+    '<p><a href="/wizard/import"><button type=button>Import a captured request '
+    '&rarr;</button></a></p>')
+
+# The /wizard/import page. Kept as a raw string (not a .format template) so its
+# many JS braces need no escaping. It carries NO server-side secrets — all HAR
+# parsing, filtering, and sanitization happen client-side; only the chosen
+# normalized flow is POSTed to /wizard/capture-import.
+_WIZARD_IMPORT_JS = r"""<!doctype html><meta charset=utf-8>
+<title>Import a captured request</title>
+<style>
+body{font:15px system-ui;margin:2rem auto;max-width:720px;color:#16181d;padding:0 1rem}
+.err{background:#fdecec;border:1px solid #f5b5b5;padding:.6rem;border-radius:6px;margin:.5rem 0}
+.ok{background:#eaf7ec;border:1px solid #a3d9a5;padding:.6rem;border-radius:6px;margin:.5rem 0}
+.warn{background:#fff7e6;border:1px solid #ffd591;padding:.5rem;margin:.3rem 0;border-radius:6px}
+.sub{color:#5b6472}
+label{display:block;margin:.6rem 0 .2rem;font-weight:600}
+input[type=text],select{width:100%;padding:.4rem;font:14px system-ui}
+ol.guide li{margin:.35rem 0}
+code{background:#f2f3f5;padding:.05rem .3rem;border-radius:4px}
+pre{background:#f7f8fa;border:1px solid #e3e5e9;padding:.6rem;border-radius:6px;overflow:auto;font:12px ui-monospace}
+button{font:15px system-ui;padding:.5rem 1rem;cursor:pointer}
+</style>
+<h1>Import a captured request</h1>
+<p class=sub><a href="/wizard">&larr; back to Add a target</a></p>
+
+<h2 style="font-size:16px">1. Record the request in your browser</h2>
+<ol class=guide>
+  <li>Open your AI chat app in a tab and <b>log in</b> (you already are).</li>
+  <li>Open <b>DevTools</b> (<code>F12</code> or <code>Cmd/Ctrl+Shift+I</code>) and click the <b>Network</b> tab.</li>
+  <li>Tick <b>Preserve log</b>, then send <b>ONE short message</b> in the chat.</li>
+  <li>Right-click any row in the Network list and choose <b>Save all as HAR with content</b>
+      (Chrome/Edge: the ⬇ export icon; Firefox: <b>Save All As HAR</b>).</li>
+  <li>Come back here and choose that <code>.har</code> file below.</li>
+</ol>
+<div class=warn>&#128274; The HAR holds your session cookies and every request in the tab.
+It is parsed <b>in your browser</b>; only the one request you pick — with a minimal set of
+headers — is uploaded, and only if you consent to sending its session cookie to its own host.</div>
+
+<h2 style="font-size:16px">2. Choose the HAR &amp; the request</h2>
+<label for=har>HAR file</label>
+<input type=file id=har accept=".har,application/json,application/octet-stream">
+<label for=hint>The exact message you sent <span class=sub>(optional — helps auto-pick the right request)</span></label>
+<input type=text id=hint placeholder="fingerprint me">
+<label for=name>Target name</label>
+<input type=text id=name placeholder="my-service">
+<div id=pick style="display:none">
+  <label for=flow>Chat request (auto-picked; change if wrong)</label>
+  <select id=flow></select>
+  <p id=cookie-line class=sub></p>
+  <label style="font-weight:400"><input type=checkbox id=consent> <span id=consent-label>Send this request's session cookie to its host for a one-time dry-run</span></label>
+  <p><button type=button id=go>Import &amp; dry-run &rarr;</button></p>
+</div>
+<div id=out></div>
+
+<script>
+(function(){
+  var harInput=document.getElementById('har'), pick=document.getElementById('pick'),
+      sel=document.getElementById('flow'), out=document.getElementById('out'),
+      go=document.getElementById('go'), consent=document.getElementById('consent'),
+      consentLabel=document.getElementById('consent-label'),
+      cookieLine=document.getElementById('cookie-line'),
+      hintI=document.getElementById('hint'), nameI=document.getElementById('name');
+  var candidates=[];
+
+  // Keep only headers the template adapter can safely replay. Mirrors the
+  // server-side _KEEP_HEADER_RE / _DROP_HEADERS: content-type + a small set of
+  // routing/CSRF headers. Authorization and everything else are dropped here so
+  // they never leave the machine; Cookie is handled separately (consent-gated).
+  var KEEP=/^(content-type|x-csrf|x-xsrf|csrf|x-request|x-tenant|x-org|x-client|anthropic-version|openai-|x-api|x-requested-with)/i;
+
+  function regdom(host){
+    host=(host||'').toLowerCase().replace(/\.$/,'');
+    if(/^[0-9.]+$/.test(host) || host.indexOf(':')>=0) return host; // IP literal
+    var p=host.split('.'); return p.length>=2 ? p.slice(-2).join('.') : host;
+  }
+  function hostOf(u){ try{ return new URL(u).hostname.toLowerCase(); }catch(e){ return ''; } }
+  function looksChat(u){ return /chat|complet|message|conversation|generate|ask/i.test(u||''); }
+
+  function headersList(hs){ // HAR header array -> [{name,value}]
+    return (hs||[]).filter(function(h){return h && h.name;})
+                   .map(function(h){return {name:h.name, value:h.value||''};});
+  }
+  function score(entry, hint){
+    var req=entry.request||{}, body=(req.postData&&req.postData.text)||'';
+    var hasHint = hint && body.indexOf(hint)>=0;
+    var isPost = (req.method||'').toUpperCase()==='POST' && !!body;
+    return (hasHint?1:0)*1e9 + (isPost?1:0)*1e8 + (looksChat(req.url)?1:0)*1e7 + body.length;
+  }
+
+  function rebuild(){
+    var hint=hintI.value.trim();
+    candidates.sort(function(a,b){return score(b,hint)-score(a,hint);});
+    // Bind to the registrable domain of the best candidate — a stray third-party
+    // POST on another domain must not be selectable (its cookie would be wrong).
+    if(!candidates.length){ pick.style.display='none'; return; }
+    var appdom=regdom(hostOf((candidates[0].request||{}).url));
+    var onDomain=candidates.filter(function(e){return regdom(hostOf((e.request||{}).url))===appdom;});
+    sel.innerHTML='';
+    onDomain.forEach(function(e,i){
+      var req=e.request||{};
+      var o=document.createElement('option');
+      o.value=String(i);
+      o.textContent=(req.method||'POST')+' '+ (req.url||'').slice(0,90);
+      sel.appendChild(o);
+    });
+    sel._list=onDomain;
+    pick.style.display='block';
+    onSelect();
+  }
+  function hasCookie(entry){
+    return headersList((entry.request||{}).headers).some(function(h){return h.name.toLowerCase()==='cookie' && h.value;});
+  }
+  function onSelect(){
+    var e=sel._list[parseInt(sel.value||'0',10)]; if(!e) return;
+    var host=hostOf((e.request||{}).url);
+    if(hasCookie(e)){
+      cookieLine.textContent='This request carries a session cookie for '+host+'.';
+      consentLabel.textContent='I consent to sending this session cookie to '+host+' for a one-time dry-run (it is not saved on the hosted demo).';
+      consent.parentNode.style.display='block';
+    } else {
+      cookieLine.textContent='No session cookie on this request.';
+      consent.parentNode.style.display='none';
+    }
+  }
+  sel.onchange=onSelect;
+  hintI.oninput=function(){ if(candidates.length) rebuild(); };
+
+  harInput.onchange=function(){
+    out.innerHTML=''; pick.style.display='none'; candidates=[];
+    var f=harInput.files&&harInput.files[0]; if(!f) return;
+    var fr=new FileReader();
+    fr.onload=function(){
+      var har;
+      try{ har=JSON.parse(fr.result); }
+      catch(e){ out.innerHTML='<div class=err>That file is not valid HAR JSON.</div>'; return; }
+      var entries=((har&&har.log&&har.log.entries)||[]).filter(function(e){return e&&e.request;});
+      candidates=entries.filter(function(e){
+        var req=e.request||{}; var body=(req.postData&&req.postData.text)||'';
+        return (req.method||'').toUpperCase()==='POST' && !!body;
+      });
+      if(!candidates.length){ out.innerHTML='<div class=err>No POST request with a body was found in that HAR. Make sure you sent a message with the Network tab recording.</div>'; return; }
+      rebuild();
+    };
+    fr.readAsText(f);
+  };
+
+  go.onclick=function(){
+    var e=sel._list[parseInt(sel.value||'0',10)]; if(!e){ return; }
+    var req=e.request||{}, resp=e.response||{};
+    var host=hostOf(req.url);
+    var sendCookie = hasCookie(e) && consent.checked;
+    if(hasCookie(e) && !consent.checked){
+      out.innerHTML='<div class=warn>This request needs its session cookie to replay. Tick the consent box, or the dry-run will likely fail with a 401.</div>';
+    }
+    // Sanitize headers CLIENT-SIDE: keep the safe set; include Cookie only on consent.
+    function sanitize(hs){
+      var o={};
+      headersList(hs).forEach(function(h){
+        var n=h.name;
+        if(n.toLowerCase()==='cookie'){ if(sendCookie) o[n]=h.value; return; }
+        if(KEEP.test(n)) o[n]=h.value;
+      });
+      return o;
+    }
+    var payload={
+      name: nameI.value.trim() || host || 'target',
+      prompt_hint: hintI.value.trim(),
+      cookie_consent: sendCookie ? host : '',
+      request: { method:(req.method||'POST'), url:req.url,
+                 headers:sanitize(req.headers), body:(req.postData&&req.postData.text)||'' },
+      response: { status:(resp.status||0),
+                  headers:sanitize(resp.headers),
+                  body:(resp.content&&resp.content.text)||'' }
+    };
+    go.disabled=true; out.innerHTML='<p class=sub>uploading the one chosen request &amp; running a dry-run…</p>';
+    fetch('/wizard/capture-import',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(payload)})
+      .then(function(r){return r.json();})
+      .then(function(j){
+        go.disabled=false;
+        // Escape EVERY server/derived string before it hits innerHTML. Warnings
+        // can echo captured header names and the error can echo the destination
+        // host, so treat all of them as untrusted (prevents DOM-based XSS).
+        function esc(s){ return String(s==null?'':s)
+          .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+          .replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+        function pre(o){ return '<pre>'+esc(JSON.stringify(o,null,2))+'</pre>'; }
+        if(j.ok){
+          var w=(j.warnings||[]).map(function(x){return '<div class=warn>&#9888; '+esc(x)+'</div>';}).join('');
+          out.innerHTML='<div class=ok>'+esc(j.note||'Dry-run succeeded.')+'</div>'+w+
+            '<h3>Synthesized target</h3>'+pre(j.target);
+        } else {
+          var w2=(j.warnings||[]).map(function(x){return '<div class=warn>&#9888; '+esc(x)+'</div>';}).join('');
+          out.innerHTML='<div class=err>'+esc(j.error||'Import failed.')+'</div>'+w2+
+            (j.target?pre(j.target):'');
+        }
+      })
+      .catch(function(){ go.disabled=false; out.innerHTML='<div class=err>Upload failed.</div>'; });
+  };
+})();
+</script>"""
+
+
+@app.get("/wizard/import")
+def wizard_import_page():
+    """The no-install client-side capture page (#53). Static: it carries no
+    server secrets and triggers no egress; all HAR parsing/sanitization happens
+    in the browser (only the chosen flow is uploaded). Allowed under the guard."""
+    return Response(_WIZARD_IMPORT_JS, mimetype="text/html")
+
+
+@app.post("/wizard/capture-import")
+def wizard_capture_import():
+    """Ingest a CLIENT-SIDE capture and feed it to the existing
+    flow_to_captured -> synthesize -> dry-run pipeline.
+
+    ALLOWED in public-hosting mode (unlike /wizard/capture-run): it drives NO
+    browser and makes NO arbitrary fetch at import time. The ONLY outbound
+    request is the optional dry-run replay, which goes through the egress-guarded
+    Client session — a private/metadata target is refused before any socket
+    opens, and a cookie is pinned to the host it was captured from.
+
+    Cookie handling (#53): capturing a cookie-authed web app means the session
+    cookie reaches the server for the dry-run. It is used for an EPHEMERAL single
+    dry-run and is NEVER persisted here — no authed web-app target is saved on the
+    public instance. Explicit consent must NAME the destination host, and
+    _cookie_origin_ok re-checks before the cookie-bearing egress.
+    """
+    from . import capture_import, capture_proxy, wizard
+    from urllib.parse import urlsplit
+    # JSON-CSRF: a cross-origin HTML form cannot set application/json without a
+    # CORS preflight this app never answers (mirrors /api/assess). Auth is
+    # enforced globally by the before_request gate.
+    if not request.is_json:
+        return jsonify({"ok": False, "error": "Content-Type: application/json required"}), 415
+    if not _same_origin_ok(request):
+        return jsonify({"ok": False, "error": "cross-site request refused"}), 403
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "capture payload must be a JSON object"}), 400
+    name = (payload.get("name") or "target").strip() or "target"
+    prompt = payload.get("prompt_hint") or ""
+
+    # Normalize the client-chosen flow, binding selection to the captured host so
+    # a stray third-party POST can't be chosen. No egress happens here.
+    try:
+        flow = capture_import.normalize(payload)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": f"could not read capture: {e}"}), 400
+    u = flow.url if "://" in flow.url else "https://" + flow.url
+    captured_host = (urlsplit(u).hostname or "").lower()
+    try:
+        cap = capture_import.to_captured(payload, allowed_host=captured_host)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": f"could not read capture: {e}"}), 400
+
+    # Cookie consent (load-bearing): if the capture carries a session cookie, the
+    # client MUST send explicit consent NAMING the destination host, and it must
+    # match the captured host. This is the origin binding surfaced at upload time
+    # — a cookie can only ever be replayed to the host it was captured from.
+    if cap.cookie:
+        cookie_consent = (payload.get("cookie_consent") or "").strip().lower()
+        if not cookie_consent:
+            return jsonify({"ok": False, "error":
+                "This capture includes a session cookie. Confirm cookie-consent "
+                f"naming the destination host '{captured_host}' before uploading."}), 403
+        if cookie_consent != captured_host:
+            return jsonify({"ok": False, "error":
+                f"cookie-consent names '{cookie_consent}' but the captured request "
+                f"goes to '{captured_host}'. The session cookie is only ever sent "
+                "to the host it was captured from."}), 403
+
+    try:
+        syn = wizard.synthesize(cap, prompt, name)
+    except (ValueError, KeyError, TypeError) as e:
+        return jsonify({"ok": False, "error": f"could not synthesize a target: {e}"}), 400
+
+    # Defense-in-depth origin binding before ANY cookie-bearing egress — the SAME
+    # check /wizard/save applies. Pin the origin to the CAPTURED request host (not
+    # the synthesized target's own host), so this is a real cross-check: it refuses
+    # if synthesize's base_url/chat_path ever resolved to a host other than the one
+    # the cookie was captured from, or to an ambiguous/userinfo host.
+    pending = {"cookie": cap.cookie, "origin": captured_host}
+    ok, why = _cookie_origin_ok(pending, syn.target)
+    if not ok:
+        return jsonify({"ok": False, "error": why}), 403
+
+    # OPTIONAL dry-run replay through the egress-guarded Client. On a guarded
+    # instance a private/metadata target is refused before any socket opens; the
+    # cookie is used for this SINGLE ephemeral replay and never persisted.
+    try:
+        t = Target(
+            name=syn.target.get("name", "target"),
+            base_url=syn.target.get("base_url", ""),
+            chat_path=syn.target.get("chat_path", "/"), api_style="template",
+            request_template=syn.target.get("request_template", {}),
+            response_text_path=syn.target.get("response_text_path", ""),
+            response_prompt_tokens_path=syn.target.get("response_prompt_tokens_path", ""),
+            response_model_path=syn.target.get("response_model_path", ""),
+            stream_mode=syn.target.get("stream_mode", "none"),
+            stream_delta_path=syn.target.get("stream_delta_path", ""),
+            extra_headers=syn.target.get("extra_headers", {}) if isinstance(
+                syn.target.get("extra_headers"), dict) else {},
+            cookie=cap.cookie)          # ephemeral: dry-run only, never persisted
+        dr = wizard.dry_run(Client(t))
+    except Exception as e:              # never 500 the operator
+        return jsonify({"ok": False, "target": syn.target, "warnings": syn.warnings,
+                        "error": f"dry-run could not run: "
+                                 f"{capture_proxy._redact(str(e))}"}), 200
+
+    hosted = egress.guard_enabled()
+    if not dr["ok"]:
+        # The existing stale/stateful message: a signed/stateful request or an
+        # expired cookie can't replay -> re-capture (and nothing is saved).
+        return jsonify({"ok": False, "target": syn.target, "warnings": syn.warnings,
+                        "error": dr["error"]}), 200
+    if not dr["replay_safe"]:
+        return jsonify({"ok": False, "target": syn.target, "warnings": syn.warnings,
+                        "error": "the capture looks stale/stateful — the two dry-run "
+                                 "probes did not behave independently (missing reply or "
+                                 "unstable prompt-token counts). Re-capture a single-turn "
+                                 "request."}), 200
+    # Usable target. NEVER return the cookie. On a guarded/public instance we do
+    # NOT persist an authed web-app target (#53) — return it for review only.
+    note = ("Dry-run succeeded. On the hosted demo the captured cookie was used "
+            "for this single check only and was not saved." if hosted else
+            "Dry-run succeeded. Review the synthesized target below.")
+    return jsonify({"ok": True, "target": syn.target, "warnings": syn.warnings,
+                    "usage_exposed": dr["usage_exposed"], "persisted": False,
+                    "hosted": hosted, "note": note}), 200
 
 
 @app.route("/wizard", methods=["GET", "POST"])
