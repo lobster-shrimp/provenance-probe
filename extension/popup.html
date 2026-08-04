@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>provenance-probe capture</title>
+  </head>
+  <body>
+    <h1>provenance-probe</h1>
+    <p class="sub">Point this at YOUR hosted instance, then capture one AI chat request from your own browser.</p>
+
+    <form id="cfg" autocomplete="off">
+      <label for="instanceUrl">Hosted instance URL</label>
+      <input id="instanceUrl" type="url" inputmode="url" placeholder="https://your-instance.example.com" />
+
+      <label for="username">Username</label>
+      <input id="username" type="text" autocomplete="off" placeholder="basic-auth user" />
+
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="new-password" placeholder="basic-auth password" />
+
+      <div class="row">
+        <button id="save" type="submit">Save configuration</button>
+        <button id="forget" type="button" class="ghost">Forget</button>
+      </div>
+    </form>
+
+    <p id="status" class="status" role="status"></p>
+
+    <hr />
+    <h2>How to capture</h2>
+    <ol class="guide">
+      <li>Open your AI chat app in a tab and <b>log in</b>.</li>
+      <li>Open <b>DevTools</b> (<kbd>F12</kbd>) and select the
+        <b>Provenance Capture</b> panel.</li>
+      <li>Click <b>Arm capture</b>, send <b>one</b> short message, then pick the
+        request and confirm the cookie prompt.</li>
+    </ol>
+    <p class="sub">Credentials are stored only in this browser (<code>chrome.storage</code>)
+      and are sent only to the instance URL above, over HTTPS. Nothing is captured
+      unless you explicitly arm it in the DevTools panel.</p>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

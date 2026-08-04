@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "provenance-probe capture",
+  "version": "0.1.0",
+  "description": "One-click capture of an AI chat request in your own browser and upload to your hosted provenance-probe instance. No server-side browser.",
+  "minimum_chrome_version": "116",
+  "action": {
+    "default_title": "provenance-probe capture",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "devtools_page": "devtools.html",
+  "permissions": [
+    "storage",
+    "declarativeNetRequestWithHostAccess"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ]
+}

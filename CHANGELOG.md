@@ -1,5 +1,34 @@
 # Changelog
 
+## [Unreleased] — MV3 browser extension for one-click hosted capture (P2 / #54)
+
+### Added
+- **`extension/` — a Manifest V3 Chrome extension**, a one-click alternative to
+  the HAR-upload path (#53). It captures the target app's chat request in the
+  **user's own browser/session** (via the DevTools network API, scoped to the
+  single inspected tab and only while explicitly armed), sanitizes it with the
+  **same** header allow-list / registrable-domain binding / chat scorer / cookie
+  consent as the built-in uploader, and POSTs the **same** normalized
+  `{name, prompt_hint, cookie_consent, request, response}` payload to a
+  user-configured instance's `POST /wizard/capture-import`. Purely a **second
+  front-end** onto the existing #53 ingest — **no server-side browser** (no SSRF)
+  and **no server contract change** (`serve.py` untouched).
+  - Minimal MV3 permissions — `storage` + `declarativeNetRequestWithHostAccess`
+    only; **no** `<all_urls>`, `webRequest`, `cookies`, `tabs`, `activeTab`,
+    `scripting`, or static `host_permissions`. Host access to the single
+    configured instance origin is requested at runtime. Every permission is
+    documented in `extension/README.md`.
+  - Credentials (instance URL + Basic auth) live only in `chrome.storage.local`,
+    are read only by the background worker, attached only to the configured
+    instance over HTTPS (`credentials: "omit"`), and never logged. No vendor keys.
+  - Shared pure logic in `extension/lib/sanitize.js` with standalone
+    `node --test` unit tests (payload assembly, header/cookie sanitization, XSS
+    escaping); packaged into a Chrome Web Store zip by
+    `.github/workflows/extension.yml` (**build only — not published**).
+- **The extension versions independently** (`extension/manifest.json` /
+  `extension/package.json` at `0.1.0`); this change ships **no Python code
+  changes**, so the `provenance_probe` package version is intentionally unchanged.
+
 ## [0.18.0] - 2026-08-04 — "Provenance" design system for the serve web UI
 
 ### Added
