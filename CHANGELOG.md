@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.18.0] - 2026-08-04 — "Provenance" design system for the serve web UI
+
+### Added
+- **`provenance_probe/ui.py` — one shared "Provenance" stylesheet + page shell.**
+  The DESIGN.md tokens (warm cream `--paper`, near-black `--ink`, deep-forest
+  `--green` poster band, terminal-green `--green-ink` on the dark `--green-2`
+  evidence card, and the verdict accents `--coral`/`--amber`/`--green`) as CSS
+  custom properties, plus a Google Fonts `<link>` for **Fraunces** (display),
+  **Geist** (UI), and **Geist Mono** (evidence/vectors). Exposes `header()`,
+  `doc()`, and `verdict_color()` so both the live service and the standalone HTML
+  report render from ONE source and never drift.
+
+### Changed
+- **`serve.py` — every server-rendered page now uses the shared shell.** The main
+  probe/landing page, the agent board (`_AGENT_FORM`), the add-target wizard
+  (`_WIZARD_FORM`), the consent (`_WIZARD_CONSENT`), preview (`_WIZARD_PREVIEW`),
+  the `_wiz_page` helper, and the HAR-import page (`/wizard/import`) dropped their
+  ad-hoc inline CSS in favour of a green poster header + cream body + one hot
+  accent. The landing page leads with a Fraunces hero ("A lie detector for AI
+  APIs") over a single clean form card.
+- **`report.py` — the results HTML is now a verdict-first lab report.** A large
+  Fraunces verdict headline in the verdict colour + a plain-English fact, a
+  `VERDICT` stamp, then evidence as an editorial two-column layout: the
+  tokenizer-match table as terminal-green mono on the dark card, big serif stat
+  numbers, a signals table, a network & jurisdiction row, and a footer strip with
+  artifact id, timestamp, engine version, target model, and a report hash.
+- **The verdict → accent colour is driven by the real result** (`ui.verdict_color`
+  / `report._lead_verdict`): `NO EVIDENCE`/US → green, `LIKELY` → amber,
+  `CONFIRMED`/CN → coral. Never hardcoded per page.
+- Corrected the stale `provenance_probe.__version__` (`0.3.0` → `0.18.0`) so the
+  report's "analysis engine" footer reports the true version.
+
+### Unchanged (restyle only — verified)
+- Every route, form-field `name`/`id`, and client-side JS behaviour is preserved
+  byte-for-byte: the `authorized` checkbox, the `/api/assess → run_id →
+  /api/run/<rid>` polling, the wizard/import HAR JS (including its `esc()`
+  DOM-XSS guard), and the `_same_origin_ok` / basic-auth / egress / cookie-origin
+  gating. All user/measurement-derived strings remain HTML-escaped.
+
 ## [0.17.0] - 2026-08-04 — Hosted no-install capture: client-side HAR import (#53)
 
 ### Added
