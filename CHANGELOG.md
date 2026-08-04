@@ -1,5 +1,65 @@
 # Changelog
 
+## [0.17.0] - 2026-08-04 — Hosted no-install capture: client-side HAR import (#53)
+
+### Added
+- **`provenance_probe/capture_import.py` — client-side capture normalizer.** Turns
+  a client-supplied payload `{request:{method,url,headers,body},
+  response:{status,headers,body}, prompt_hint}` (or a `{flows:[…]}` candidate
+  list) into the internal `capture_proxy.Flow` / `wizard.Captured`. It REUSES the
+  existing capture primitives — `capture_proxy.select_chat_flow` and
+  `flow_to_captured` (which themselves use `detect_response_mode` /
+  `sse_reassemble`) — so there is exactly ONE definition of "which request is the
+  chat call" and how a response is fingerprinted; no new synthesis logic. Pure /
+  no-I/O: it only reshapes an already-captured exchange.
+- **`GET /wizard/import` page + `POST /wizard/capture-import` endpoint in
+  `serve.py` — no-install, hosted-safe capture.** The user's OWN browser records
+  the request (already logged into the target app), the HAR is parsed
+  **client-side**, filtered to candidate JSON POSTs on the app's own registrable
+  domain, auto-picked via `prompt_hint` (or chosen), sanitized (essential headers
+  only; Cookie included only on explicit consent), and **only the single chosen
+  flow is uploaded** — the full HAR with all its cookies never leaves the machine.
+  The endpoint feeds the existing `flow_to_captured → synthesize → dry-run`
+  pipeline and returns the synthesized target for review. A guided DevTools →
+  Export HAR walkthrough is included; the wizard advertises this path in
+  public-hosting mode (where server-side browser capture is refused).
+
+### Security (load-bearing)
+- **`/wizard/capture-import` is ALLOWED under the egress guard**
+  (`PROVENANCE_PROBE_BLOCK_PRIVATE`), unlike `/wizard/capture-run` which stays
+  refused. It is SSRF-safe by construction: it drives **no** browser and makes
+  **no** arbitrary fetch at import time. The only outbound request is the optional
+  dry-run replay, which goes through the ONE egress-guarded `Client` session — a
+  target resolving to a private/metadata IP is refused before a socket opens.
+- **Cookie handling:** a captured session cookie is used for an **ephemeral single
+  dry-run and is NEVER persisted** on a guarded/public instance (no authed
+  web-app target is saved there). Explicit consent must **name the destination
+  host**; a cookie can only ever be replayed to the host it was captured from
+  (`_cookie_origin_ok`, plus a captured-host cross-check before the cookie-bearing
+  egress). The cookie value is never reflected into any response body.
+- **CSRF / auth:** the endpoint requires `Content-Type: application/json` (415
+  otherwise) and a localhost same-origin (`_same_origin_ok`, 403 otherwise),
+  matching the other mutating wizard POSTs, and is covered by the global
+  `before_request` basic-auth gate.
+- The `/wizard/import` result page **HTML-escapes** every server/derived string
+  (note / warnings / error / target JSON) before `innerHTML`, and renders
+  HAR-derived values via `textContent`, so a malicious HAR cannot inject script
+  (DOM-XSS closed in review).
+- **OFF-path unchanged:** with the env flag unset, behavior is byte-identical; the
+  only pre-existing-path change is `_capture_ui()` offering the import link
+  instead of nothing when the guard is enabled.
+
+### Tests
+- **`tests/test_capture_import.py` (+14).** Normalizer (valid→Flow; missing
+  request/response→clear error; non-JSON body→template adapter; SSE→reassembled;
+  picks chat flow via `prompt_hint`), endpoint guards (auth-gated; JSON required;
+  refuses without cookie-consent; cookie origin-bound; egress guard blocks a
+  private dry-run host with no socket opened; ALLOWED while `/wizard/capture-run`
+  is REFUSED under the same guard; page renders + escapes under the guard), and
+  integration (a z.ai-shaped capture → import → synthesize → dry-run yields a
+  usable target; a stateful/HTTP-400 capture → the existing "stale, re-capture"
+  message with no false save).
+
 ## [0.16.0] - 2026-08-04 — Gated public-hosting mode: SSRF egress guard + basic auth (#51)
 
 ### Added

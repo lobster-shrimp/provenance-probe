@@ -101,8 +101,23 @@ Because the server holds **no** vendor keys:
   non-browser client sends no `Origin`/`Referer` and would pass it; the hard
   control is the `BLOCK_PRIVATE` refusal. (Also: do not install the `[capture]`
   extra in a public image.) The core fingerprint flow (enter a target, run the
-  assessment) still works. Users who want capture should run the tool locally
-  (`pip install` + `provenance-probe serve`).
+  assessment) still works. Users who want *server-side* capture should run the
+  tool locally (`pip install` + `provenance-probe serve`).
+- The **no-install client-side capture path** (`/wizard/import` + the
+  `/wizard/capture-import` POST, #53) **IS available in public-hosting mode.** It
+  is SSRF-safe by construction: the user's OWN browser records the request and
+  parses the HAR **client-side**, and only the single chosen, sanitized flow is
+  uploaded — the server drives no browser and makes no arbitrary fetch. The only
+  outbound request is the optional dry-run replay, which goes through the same
+  egress-guarded `requests` session (a private/metadata target is refused before a
+  socket opens). **Cookie handling:** capturing a cookie-authed web app means the
+  session cookie reaches the server for the dry-run. On the hosted instance that
+  cookie is used for an **ephemeral single dry-run and is NOT persisted** — no
+  authed web-app target is saved on the public instance (persisting an authed
+  target stays a local-only capability). The client asks for **explicit
+  cookie-consent naming the destination host**, and a captured cookie can only
+  ever be replayed to the host it was captured from (`_cookie_origin_ok`). The
+  full HAR (with all its cookies) never leaves the user's machine.
 - The **wizard "save target" flow** (`/wizard/save`) is same-origin-restricted to a
   localhost Origin/Referer, so a cross-origin browser POST is refused; it also only
   writes target config to the container's own disk (no egress). Run it locally for
