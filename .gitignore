@@ -23,3 +23,7 @@ reports/
 
 # playwright MCP scratch output (snapshots/screenshots)
 .playwright-mcp/
+
+# Claude Code local state
+.claude/worktrees/
+.claude/settings.local.json
