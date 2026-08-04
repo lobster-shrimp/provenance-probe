@@ -309,10 +309,13 @@ def report_file(name):
 
 @app.get("/")
 def index():
-    obs_url = os.environ.get("PROVENANCE_OBSERVATORY_URL", "http://127.0.0.1:8080")
+    # Defaults to the live public observatory (GitHub Pages). Point at a local
+    # observatory (e.g. http://127.0.0.1:8080) with PROVENANCE_OBSERVATORY_URL.
+    obs_url = os.environ.get("PROVENANCE_OBSERVATORY_URL",
+                             "https://lobster-shrimp.github.io/provenance-observatory/")
     nav = ('<nav><a href="/" class="active" style="opacity:1;font-weight:700">Live probe</a>'
            '<a href="/agent">Agent board</a><a href="/wizard">Add target</a>'
-           '<a href="__OBSERVATORY_URL__">Observatory</a></nav>')
+           '<a href="__OBSERVATORY_URL__" target="_blank" rel="noopener noreferrer">Observatory ↗</a></nav>')
     doc = _doc("provenance-probe", PAGE, right=nav)
     return Response(doc.replace("__OBSERVATORY_URL__", html.escape(obs_url)), mimetype="text/html")
 

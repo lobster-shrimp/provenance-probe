@@ -13,6 +13,8 @@ user/measurement-derived data.
 """
 from __future__ import annotations
 
+from urllib.parse import quote
+
 # Verdict / severity -> accent token. Drives the ONE hot accent per view so the
 # color is a function of the real result, never hardcoded per page.
 VERDICT_COLOR = {
@@ -42,6 +44,17 @@ FONTS = (
     "family=Geist:wght@400;500;600;700&"
     'family=Geist+Mono:wght@400;500&display=swap">'
 )
+
+# Lie-detector favicon: a coral polygraph waveform on the deep-green brand square,
+# inlined as an SVG data-URI so it needs no route (won't hit the hosted auth gate).
+_FAVICON_SVG = (
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>"
+    "<rect width='32' height='32' rx='7' fill='#0E3B2E'/>"
+    "<path d='M2 17h6l2-9 3 16 3-12 2 7h12' fill='none' stroke='#D2483F'"
+    " stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/></svg>"
+)
+FAVICON = ('<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,'
+           + quote(_FAVICON_SVG) + '">')
 
 STYLE = """<style>
 :root{
@@ -178,5 +191,5 @@ def doc(title: str, inner: str, right: str = "") -> str:
     bodies escape their own user/measurement data."""
     return ('<!doctype html><html lang="en"><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
-            f"<title>{title}</title>" + FONTS + STYLE
+            f"<title>{title}</title>" + FAVICON + FONTS + STYLE
             + header(right) + f'<main class="wrap">{inner}</main>')
