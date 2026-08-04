@@ -1,5 +1,80 @@
 # Changelog
 
+## [0.16.0] - 2026-08-04 — Gated public-hosting mode: SSRF egress guard + basic auth (#51)
+
+### Added
+- **`provenance_probe/egress.py` — SSRF egress guard (`GuardedAdapter`).** A
+  `requests` `HTTPAdapter` mounted on the shared probe session ONLY when
+  `PROVENANCE_PROBE_BLOCK_PRIVATE` is truthy. It resolves the host the socket will
+  actually connect to and **fails closed** if any answer is
+  loopback / private (RFC1918 + ULA `fc00::/7`) / link-local / reserved /
+  multicast / unspecified or the cloud-metadata IP `169.254.169.254`, and also on
+  zero answers or a DNS failure. Literal-IP targets are validated directly.
+  **DNS-rebinding defense:** the connection is *pinned* to the validated IP while
+  the original `Host` header and TLS SNI + certificate hostname are preserved
+  (`server_hostname`/`assert_hostname` stay the real name) — TLS verification is
+  never weakened. Covers `chat` + its temperature retry + `raw_post` +
+  `list_models` + redirects (all reuse the one guarded session, so a 3xx to an
+  internal host is re-validated). When a proxy is configured the **proxy** host is
+  validated (a private proxy is refused); `trust_env` is disabled so an ambient
+  `HTTP(S)_PROXY` can't reroute the probe session.
+- **Basic-auth gate in `serve.py`.** When `PROVENANCE_PROBE_BASIC_AUTH="user:pass"`
+  is set, a `before_request` hook requires HTTP Basic auth on **all** routes
+  (constant-time compare via `hmac.compare_digest`,
+  `WWW-Authenticate: Basic realm="provenance-probe"` on 401). Parsed once at
+  startup; a malformed value (no colon) fails loudly rather than silently
+  disabling the gate.
+- **`deploy/hf-space/README.md`** — Hugging Face Space file (YAML frontmatter
+  `sdk: docker`, `app_port: 8770`) plus a PRIVATE→verify→PUBLIC deploy runbook:
+  set both gates as Space secrets, hold ZERO vendor API keys (bring-your-own),
+  and the "401 still reads as Running on HF" liveness note.
+- Tests: `tests/test_egress.py` (classification incl. CGNAT/non-global,
+  fail-closed, guard mount/unmount, the load-bearing rebinding/split-horizon pin
+  for both the target and proxy legs, private-proxy refusal, and cross-surface +
+  redirect + client-source + wizard-detect re-validation integration) and
+  `tests/test_auth_gate.py`.
+
+### Security (security-reviewer pass — all HIGH/CRITICAL driven to zero)
+- **Every user-URL fetch on the public surface now routes through the guard, not
+  just the probe `Client`.** The client-source scan (`clientsrc.scan_url`, reached
+  via `/api/assess` `client_url`) and the wizard endpoint-detection probe
+  (`detect._default_probe`, reached via `/wizard/detect`) previously used bare
+  `requests` sessions — an unguarded SSRF hole in public-hosting mode. Both now
+  mount the egress guard when the flag is set.
+- **Proxy leg is pinned, not just validated once.** The proxy connection is now
+  pinned to its validated IP (rewriting the proxy URL host), closing the
+  DNS-rebinding window on the proxy socket.
+- **RFC 6598 CGNAT (`100.64.0.0/10`) and all non-globally-routable addresses are
+  blocked** (`is_private` misses CGNAT in CPython); added an explicit check plus an
+  `is_global` catch-all.
+- **`/api/assess` requires `Content-Type: application/json`** (415 otherwise),
+  killing cross-origin form-based JSON-CSRF while the same-origin `fetch()` UI is
+  unaffected.
+- **Browser "Capture for me" flow refused in public-hosting mode.**
+  `/wizard/capture-run` (+ `capture-advance`) navigate a real browser to a
+  user-named URL and cannot be IP-pinned like the `requests` transport, so they are
+  refused outright when `PROVENANCE_PROBE_BLOCK_PRIVATE` is set (capture is out of
+  scope for the public instance); the button is hidden too. `_same_origin_ok` is
+  not relied on here (a non-browser client sends no Origin/Referer).
+- Fail-closed on all DNS resolution errors (`gaierror`/`OSError`/`UnicodeError`).
+
+### Notes on proxy support
+- Under `PROVENANCE_PROBE_BLOCK_PRIVATE=1`, `https://`-scheme proxies are
+  unsupported: the proxy leg is pinned to the proxy's raw IP with no SNI override,
+  so an `https://` proxy fails closed on a cert-hostname mismatch. Hosted mode
+  should run without a proxy.
+
+### Changed
+- **`Dockerfile` `CMD` honors `$PORT`** (shell form,
+  `--port ${PORT:-8770}`) for Render/HF/Cloud-Run portability.
+
+### Notes
+- All three pieces are **env-gated and OFF by default** — with the flags unset the
+  transport is byte-identical to before (no adapter mounted, `trust_env`
+  unchanged) and local single-user behavior is untouched. The HF Space deploy
+  itself is the repo owner's step (needs their HF token) and is **not** performed
+  by this change.
+
 ## [0.15.3] - 2026-07-30 — Security sign-off hardening for proxy capture (#44)
 
 ### Security (final security-reviewer pass)

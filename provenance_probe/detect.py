@@ -133,11 +133,22 @@ def _friendly_net_error(exc: Exception) -> str:
 def _default_probe(method: str, url: str, headers: dict, body: dict | None,
                    timeout: float = 8.0) -> ProbeResult:
     import requests
+    # Public-hosting mode: /wizard/detect reaches this with a user-supplied URL,
+    # so route through the SSRF egress guard when the flag is set (a private/
+    # metadata endpoint is refused before any socket opens). When the flag is
+    # unset the transport is byte-identical to before.
+    from . import egress
+    getter = requests
+    session = None
+    if egress.guard_enabled():
+        session = requests.Session()
+        egress.install_guard(session)
+        getter = session
     try:
         if method == "GET":
-            r = requests.get(url, headers=headers, timeout=timeout)
+            r = getter.get(url, headers=headers, timeout=timeout)
         else:
-            r = requests.post(url, headers=headers, json=body, timeout=timeout)
+            r = getter.post(url, headers=headers, json=body, timeout=timeout)
         try:
             j = r.json()
         except Exception:
@@ -147,6 +158,9 @@ def _default_probe(method: str, url: str, headers: dict, body: dict | None,
                            text=r.text[:4096] if j is None else "")
     except Exception as e:   # requests.RequestException + anything transport-y
         return ProbeResult(0, None, {}, error=_friendly_net_error(e))
+    finally:
+        if session is not None:
+            session.close()
 
 
 # --------------------------------------------------------------------------- #

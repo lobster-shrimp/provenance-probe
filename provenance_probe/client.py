@@ -5,6 +5,8 @@ import copy, json, time
 from typing import Any
 import requests
 
+from . import egress
+
 # Cap accumulated bytes from a streamed response so a hostile/endless stream from
 # an untrusted target can't OOM the probe (review #44).
 _STREAM_MAX_BYTES = 8_000_000
@@ -157,6 +159,12 @@ class Client:
         self.s = requests.Session()
         if target.proxy:
             self.s.proxies = {"http": target.proxy, "https": target.proxy}
+        # Public-hosting mode only (env-gated, OFF by default): mount the SSRF
+        # egress guard on the shared session so chat/retry/raw_post/list_models
+        # and redirects all validate + pin the connect target. Byte-identical to
+        # stock requests when the flag is unset.
+        if egress.guard_enabled():
+            egress.install_guard(self.s)
 
     def _paths(self) -> dict:
         t = self.t
