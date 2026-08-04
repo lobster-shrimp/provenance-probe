@@ -21,6 +21,13 @@ DATA_DIR = os.path.expanduser(os.environ.get("PROVENANCE_PROBE_HOME", "~/.proven
 app = Flask(__name__)
 
 
+# ------------------------------------------------------- design system (UI) ---
+# The shared "Provenance" stylesheet + poster header + page shell live in
+# ui.py (imported by report.py too, so the two surfaces never drift). Aliased
+# with the private names the page templates below already use.
+from .ui import FONTS as _FONTS, STYLE as _STYLE, header as _header, doc as _doc  # noqa: E402,F401
+
+
 # --------------------------------------------------------------- auth gate ---
 # Public-hosting mode only (env-gated, OFF by default). When
 # PROVENANCE_PROBE_BASIC_AUTH="user:pass" is set, EVERY route requires HTTP
@@ -303,54 +310,48 @@ def report_file(name):
 @app.get("/")
 def index():
     obs_url = os.environ.get("PROVENANCE_OBSERVATORY_URL", "http://127.0.0.1:8080")
-    return Response(PAGE.replace("__OBSERVATORY_URL__", html.escape(obs_url)), mimetype="text/html")
+    nav = ('<nav><a href="/" class="active" style="opacity:1;font-weight:700">Live probe</a>'
+           '<a href="/agent">Agent board</a><a href="/wizard">Add target</a>'
+           '<a href="__OBSERVATORY_URL__">Observatory</a></nav>')
+    doc = _doc("provenance-probe", PAGE, right=nav)
+    return Response(doc.replace("__OBSERVATORY_URL__", html.escape(obs_url)), mimetype="text/html")
 
 
-_AGENT_FORM = """<!doctype html><meta charset=utf-8><title>Agent board · provenance-probe</title>
-<meta name=viewport content="width=device-width,initial-scale=1">
-<style>body{{font:15px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;color:#16181d;
-background:#f6f7f8;margin:0;padding:26px}}.w{{max-width:940px;margin:0 auto}}
-h1{{font-size:21px;margin:0 0 2px}}.sub{{color:#6b7280;font-size:13px;margin-bottom:18px}}
-.card{{background:#fff;border:1px solid #e3e5e9;border-radius:11px;padding:20px 22px}}
-textarea{{width:100%;min-height:230px;font:13px ui-monospace,monospace;border:1px solid #e3e5e9;
-border-radius:8px;padding:11px}}button{{background:#1f4f8b;color:#fff;border:0;border-radius:8px;
-padding:11px 20px;font-size:14px;font-weight:600;cursor:pointer;margin-top:10px}}
-.chk{{font-size:13px;color:#3d424b;margin:10px 0}}.err{{color:#8b1a1a;font-weight:600;margin:8px 0}}
-.topnav{{font-size:11px;letter-spacing:.07em;text-transform:uppercase;margin-bottom:16px}}
-.topnav a{{color:#1f4f8b;text-decoration:none;margin-right:14px}}
-.eg{{font-size:12px;color:#6b7280}}</style>
-<div class=w>
-<div class=topnav><a href="/">&larr; Live probe tool</a></div>
+# Body fragment (rendered inside _doc, which supplies the poster + shared CSS).
+# Still a .format() template: {trace}{resolve}{err} placeholders, and literal
+# JSON braces are doubled ({{ }}).
+_AGENT_FORM = """<div class="topnav"><a href="/">&larr; Live probe tool</a></div>
 <h1>Agent provenance board</h1>
-<p class=sub>Paste a captured agent run &mdash; OpenTelemetry GenAI spans, or the minimal
+<p class="sub">Paste a captured agent run &mdash; OpenTelemetry GenAI spans, or the minimal
 JSON form &mdash; and see per-step model, switch, and egress with hover explanations.</p>
-<div class=card>
+<div class="card">
 <form method=post action="/agent">
-<label style="font-size:11px;text-transform:uppercase;color:#6b7280;font-weight:650">Agent trace (JSON)</label>
-<textarea name=trace placeholder='{{"steps":[{{"model":"gpt-4o","text":"...","backend_url":"https://api.openai.com/v1"}},{{"kind":"tool","tool_host":"data.example.cn"}}]}}'>{trace}</textarea>
-<div class=chk><label><input type=checkbox name=resolve {resolve}> Resolve hosts via DNS/RDAP
+<label>Agent trace (JSON)</label>
+<textarea name=trace rows=12 placeholder='{{"steps":[{{"model":"gpt-4o","text":"...","backend_url":"https://api.openai.com/v1"}},{{"kind":"tool","tool_host":"data.example.cn"}}]}}'>{trace}</textarea>
+<div class="chk"><label style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--ink)"><input type=checkbox name=resolve {resolve}> Resolve hosts via DNS/RDAP
 (off by default &mdash; a pasted trace is untrusted; static hostname signals still fire)</label></div>
 {err}
-<button type=submit>Analyze agent run</button>
+<p><button type=submit>Analyze agent run</button></p>
 </form></div>
-<p class=eg>Tip: from the CLI, <code>provenance-probe agent-trace run.json --html out.html</code> writes the same report.</p>
-</div>"""
+<p class="eg">Tip: from the CLI, <code>provenance-probe agent-trace run.json --html out.html</code> writes the same report.</p>"""
 
 
 @app.route("/agent", methods=["GET", "POST"])
 def agent_board():
     from . import agent, agent_report
+    title = "Agent board · provenance-probe"
     if request.method == "GET":
-        return Response(_AGENT_FORM.format(trace="", resolve="", err=""), mimetype="text/html")
+        return Response(_doc(title, _AGENT_FORM.format(trace="", resolve="", err="")),
+                        mimetype="text/html")
     raw = request.form.get("trace", "")
     resolve = bool(request.form.get("resolve"))
     try:
         steps = agent.parse_trace(raw)
         result = agent.analyze(steps, resolve_hosts=resolve)
     except agent.TraceError as e:
-        return Response(_AGENT_FORM.format(
+        return Response(_doc(title, _AGENT_FORM.format(
             trace=html.escape(raw), resolve="checked" if resolve else "",
-            err=f'<div class="err">Could not parse trace: {html.escape(str(e))}</div>'),
+            err=f'<div class="err">Could not parse trace: {html.escape(str(e))}</div>')),
             mimetype="text/html")
     return Response(agent_report.render_html(result, "pasted trace")
                     .replace("</h1>", "</h1><p class='sub'><a href=\"/agent\">&larr; analyze another</a> · "
@@ -358,66 +359,52 @@ def agent_board():
                     mimetype="text/html")
 
 
-_WIZARD_FORM = """<!doctype html><meta charset=utf-8><title>Add a target · provenance-probe</title>
-<style>body{{font:15px system-ui;margin:2rem auto;max-width:760px;color:#16181d}}
-textarea{{width:100%;font:12px ui-monospace;min-height:120px}}input{{font:14px system-ui;padding:5px}}
-.err{{background:#fdecec;border:1px solid #f5b5b5;padding:.6rem;border-radius:6px}}
-.warn{{background:#fff7e6;border:1px solid #ffd591;padding:.5rem;border-radius:6px;margin:.3rem 0}}
-label{{display:block;margin:.7rem 0 .2rem;font-weight:600}}.sub{{color:#6b7280}}
-.hint{{color:#6b7280;font-size:13px;margin:.2rem 0 0}}</style>
-<h1>Add a target</h1>
-<p class=sub>One box. Paste whatever you have &mdash; we figure out the rest.
+# Body fragments (rendered inside _doc, which supplies the poster + shared CSS).
+# Still .format() templates: {placeholder} single braces; no literal CSS braces.
+_WIZARD_FORM = """<h1>Add a target</h1>
+<p class="sub">One box. Paste whatever you have &mdash; we figure out the rest.
 No need to know the API type. Local only; nothing is sent until you approve.
 <a href="/">&larr; probe tool</a></p>
 {err}
 <form method=post action="/wizard">
-<label>Target name</label><input name=name value="{name}" placeholder="my-service" required>
-<label>Paste an AI service address, a <code>curl</code> command, or a saved HAR</label>
-<textarea name=capture required placeholder="https://api.vendor.com/v1
+<div class="card">
+<div class="row"><label>Target name</label><input name=name value="{name}" placeholder="my-service" required></div>
+<div class="row"><label>Paste an AI service address, a <code>curl</code> command, or a saved HAR</label>
+<textarea name=capture rows=6 required placeholder="https://api.vendor.com/v1
   &mdash; or &mdash;
 curl 'https://chat.app.com/api/chat' -H 'cookie: ...' --data '...'">{capture}</textarea>
-<p class=hint>A plain address (URL) is identified with a short, consented test.
+<p class="hint">A plain address (URL) is identified with a short, consented test.
 A <code>curl</code>/HAR capture is for logged-in web apps &mdash;
-<a href="/wizard/capture">never captured one? see the step-by-step guide</a>.</p>
-<label>If you pasted a capture: the exact message text you sent <span class=sub>(optional for a plain URL)</span></label>
-<input name=prompt value="{prompt}" style="width:100%" placeholder="fingerprint me">
-<p><button type=submit>Continue &rarr;</button></p></form>"""
+<a href="/wizard/capture">never captured one? see the step-by-step guide</a>.</p></div>
+<div class="row"><label>If you pasted a capture: the exact message text you sent <span class="sub">(optional for a plain URL)</span></label>
+<input name=prompt value="{prompt}" placeholder="fingerprint me"></div>
+<button type=submit>Continue &rarr;</button></div>
+</form>"""
 
-_WIZARD_CONSENT = """<!doctype html><meta charset=utf-8><title>Confirm test · provenance-probe</title>
-<style>body{{font:15px system-ui;margin:2rem auto;max-width:680px;color:#16181d}}
-.box{{background:#f4f7fb;border:1px solid #cdd9ec;padding:1rem 1.2rem;border-radius:8px}}
-.sub{{color:#6b7280}}code{{background:#eef;padding:1px 4px;border-radius:3px}}
-button{{font:15px system-ui;padding:.5rem 1rem;margin-right:.5rem}}
-label{{display:block;margin:.6rem 0}}</style>
-<h1>Send a short identify test?</h1>
-<div class=box>
+_WIZARD_CONSENT = """<h1>Send a short identify test?</h1>
+<div class="box">
 <p>To identify <b>{host}</b> I'll send <b>a few short requests</b> (usually 2&ndash;4)
 that ask for a single token. A full provenance check afterwards is
 <b>~28 requests total</b>.</p>
-<p class=sub>Only test services you are authorized to test. Nothing has been sent yet.
+<p class="sub">Only test services you are authorized to test. Nothing has been sent yet.
 {keynote}</p>
 </div>
-<form method=post action="/wizard/detect">
+<form method=post action="/wizard/detect" style="margin-top:1rem">
 <input type=hidden name=token value="{token}">
-<label><input type=checkbox name=passive_only value=1> Passive only &mdash; just check reachability
+<label style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--ink);margin:.6rem 0"><input type=checkbox name=passive_only value=1> Passive only &mdash; just check reachability
 (<code>GET /models</code>), send no inference.</label>
 <p><button type=submit name=go value=1>Send test &rarr;</button>
-<a href="/wizard"><button type=button>Cancel</button></a></p></form>"""
+<a href="/wizard" style="margin-left:.6rem">Cancel</a></p></form>"""
 
-_WIZARD_PREVIEW = """<!doctype html><meta charset=utf-8><title>Confirm target · provenance-probe</title>
-<style>body{{font:15px system-ui;margin:2rem auto;max-width:760px;color:#16181d}}
-textarea{{width:100%;font:12px ui-monospace;min-height:220px}}
-.warn{{background:#fff7e6;border:1px solid #ffd591;padding:.5rem;border-radius:6px;margin:.3rem 0}}
-.ok{{background:#eaf7ec;border:1px solid #a3d9a5;padding:.6rem;border-radius:6px}}</style>
-<h1>Confirm &amp; save</h1>
-<p class=sub>Review the synthesized target. Every field is a best-effort guess &mdash; edit before saving.
+_WIZARD_PREVIEW = """<h1>Confirm &amp; save</h1>
+<p class="sub">Review the synthesized target. Every field is a best-effort guess &mdash; edit before saving.
 Then Save runs a 2-probe dry-run (replay-safety + usage check) and writes the config; the cookie
 goes to <code>.env.capture</code> (gitignored). <a href="/wizard">&larr; start over</a></p>
 {warnings}
 <form method=post action="/wizard/save">
 <input type=hidden name=token value="{token}">
-<label>Synthesized target (editable JSON)</label>
-<textarea name=target>{target_json}</textarea>
+<div class="row"><label>Synthesized target (editable JSON)</label>
+<textarea name=target rows=14>{target_json}</textarea></div>
 <p>{autodetect}<button type=submit>Dry-run &amp; save</button></p></form>"""
 
 # Server-side stash so the captured request (which holds the session COOKIE) is
@@ -436,13 +423,7 @@ def _wiz_warnings(ws):
 
 
 def _wiz_page(title, inner):
-    return Response(
-        f'<!doctype html><meta charset=utf-8><title>{title}</title>'
-        '<style>body{font:15px system-ui;margin:2rem auto;max-width:680px;color:#16181d}'
-        '.err{background:#fdecec;border:1px solid #f5b5b5;padding:.6rem;border-radius:6px}'
-        '.ok{background:#eaf7ec;border:1px solid #a3d9a5;padding:.6rem;border-radius:6px}'
-        '.warn{background:#fff7e6;border:1px solid #ffd591;padding:.5rem;margin:.3rem 0}</style>'
-        + inner, mimetype="text/html")
+    return Response(_doc(title, inner), mimetype="text/html")
 
 
 def _wiz_form(err="", name="", prompt="", capture=""):
@@ -450,7 +431,8 @@ def _wiz_form(err="", name="", prompt="", capture=""):
         err=f'<div class="err">{html.escape(err)}</div>' if err else "",
         name=html.escape(name), prompt=html.escape(prompt),
         capture=html.escape(capture))
-    return Response(body + _capture_ui(), mimetype="text/html")
+    return Response(_doc("Add a target · provenance-probe", body + _capture_ui()),
+                    mimetype="text/html")
 
 
 # Server-side capture runs (the "Capture for me" proxy flow). Each holds the
@@ -486,7 +468,7 @@ def _evict_terminal_runs():
 # Raw HTML+JS for the "Capture for me" section, appended to the wizard form. Kept
 # out of the .format() template so its many JS braces need no escaping.
 _WIZARD_CAPTURE_JS = """
-<hr style="margin:1.6rem 0;border:none;border-top:1px solid #e3e5e9">
+<hr style="margin:1.6rem 0;border:none;border-top:1px solid var(--line)">
 <h2 style="font-size:16px">…or capture it for me</h2>
 <p class=sub>Opens an isolated browser via a local proxy. You log in and send ONE
 message; the login is never recorded. Needs the <code>[capture]</code> extra.</p>
@@ -556,7 +538,7 @@ def _capture_ui() -> str:
     except Exception:
         available = False
     if not available:
-        return ('<hr style="margin:1.6rem 0;border:none;border-top:1px solid #e3e5e9">'
+        return ('<hr style="margin:1.6rem 0;border:none;border-top:1px solid var(--line)">'
                 '<p class=sub>Automated capture (a local proxy that records the request '
                 "for you) is available with the optional extra: "
                 "<code>pip install -e '.[capture]' && playwright install chromium</code>.</p>")
@@ -655,9 +637,9 @@ def _wiz_preview(target: dict, cookie: str, warnings: list, prompt: str = "") ->
             'title="replays your captured request to the same host and reads the reply / usage / '
             'model paths off the real response, so you don\'t hand-type them">'
             '&#128269; Auto-detect response fields (sends a live request)</button> ')
-    return Response(_WIZARD_PREVIEW.format(
+    return Response(_doc("Confirm target · provenance-probe", _WIZARD_PREVIEW.format(
         warnings=_wiz_warnings(warnings), token=token, autodetect=autodetect,
-        target_json=html.escape(json.dumps(target, indent=2))), mimetype="text/html")
+        target_json=html.escape(json.dumps(target, indent=2)))), mimetype="text/html")
 
 
 @app.post("/wizard/capture-run")
@@ -747,7 +729,7 @@ def wizard_capture_preview(rid):
 # Link shown on the wizard in public-hosting mode (where server-side capture is
 # refused) pointing at the no-install client-side import.
 _IMPORT_UI = (
-    '<hr style="margin:1.6rem 0;border:none;border-top:1px solid #e3e5e9">'
+    '<hr style="margin:1.6rem 0;border:none;border-top:1px solid var(--line)">'
     '<h2 style="font-size:16px">…or capture it yourself (no install)</h2>'
     '<p class=sub>Record the request in your OWN browser (you are already logged '
     'in), export it as a HAR, and upload it here. The HAR is parsed in your '
@@ -760,22 +742,7 @@ _IMPORT_UI = (
 # many JS braces need no escaping. It carries NO server-side secrets — all HAR
 # parsing, filtering, and sanitization happen client-side; only the chosen
 # normalized flow is POSTed to /wizard/capture-import.
-_WIZARD_IMPORT_JS = r"""<!doctype html><meta charset=utf-8>
-<title>Import a captured request</title>
-<style>
-body{font:15px system-ui;margin:2rem auto;max-width:720px;color:#16181d;padding:0 1rem}
-.err{background:#fdecec;border:1px solid #f5b5b5;padding:.6rem;border-radius:6px;margin:.5rem 0}
-.ok{background:#eaf7ec;border:1px solid #a3d9a5;padding:.6rem;border-radius:6px;margin:.5rem 0}
-.warn{background:#fff7e6;border:1px solid #ffd591;padding:.5rem;margin:.3rem 0;border-radius:6px}
-.sub{color:#5b6472}
-label{display:block;margin:.6rem 0 .2rem;font-weight:600}
-input[type=text],select{width:100%;padding:.4rem;font:14px system-ui}
-ol.guide li{margin:.35rem 0}
-code{background:#f2f3f5;padding:.05rem .3rem;border-radius:4px}
-pre{background:#f7f8fa;border:1px solid #e3e5e9;padding:.6rem;border-radius:6px;overflow:auto;font:12px ui-monospace}
-button{font:15px system-ui;padding:.5rem 1rem;cursor:pointer}
-</style>
-<h1>Import a captured request</h1>
+_WIZARD_IMPORT_JS = r"""<h1>Import a captured request</h1>
 <p class=sub><a href="/wizard">&larr; back to Add a target</a></p>
 
 <h2 style="font-size:16px">1. Record the request in your browser</h2>
@@ -961,7 +928,8 @@ def wizard_import_page():
     """The no-install client-side capture page (#53). Static: it carries no
     server secrets and triggers no egress; all HAR parsing/sanitization happens
     in the browser (only the chosen flow is uploaded). Allowed under the guard."""
-    return Response(_WIZARD_IMPORT_JS, mimetype="text/html")
+    return Response(_doc("Import a captured request · provenance-probe", _WIZARD_IMPORT_JS),
+                    mimetype="text/html")
 
 
 @app.post("/wizard/capture-import")
@@ -1124,8 +1092,8 @@ def wizard_add():
         if len(_CONSENT_PENDING) > 20:
             _CONSENT_PENDING.clear()
         _CONSENT_PENDING[token] = {"endpoint": capture.strip(), "name": name}
-        return Response(_WIZARD_CONSENT.format(
-            host=html.escape(host), token=token, keynote=keynote), mimetype="text/html")
+        return Response(_doc("Confirm test · provenance-probe", _WIZARD_CONSENT.format(
+            host=html.escape(host), token=token, keynote=keynote)), mimetype="text/html")
 
     # curl / har — the existing paste path (credential handled apart).
     try:
@@ -1401,60 +1369,17 @@ def wizard_save():
     return _wiz_page("Saved", inner)
 
 
-PAGE = r"""<!doctype html><meta charset=utf-8><title>provenance-probe</title>
-<meta name=viewport content="width=device-width,initial-scale=1">
-<style>
-:root{--ink:#16181d;--mut:#6b7280;--line:#e3e5e9;--bg:#f6f7f8;--acc:#1f4f8b}
-*{box-sizing:border-box}
-body{font:15px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);
-background:var(--bg);margin:0;padding:26px}
-.w{max-width:940px;margin:0 auto}
-h1{font-size:21px;margin:0 0 2px;letter-spacing:-.01em}
-.sub{color:var(--mut);font-size:13px;margin-bottom:22px}
-.card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:20px 22px;margin-bottom:16px}
-label{display:block;font-size:11px;letter-spacing:.07em;text-transform:uppercase;
-color:var(--mut);font-weight:650;margin:0 0 5px}
-input[type=text],input[type=password],select{width:100%;padding:9px 11px;border:1px solid var(--line);
-border-radius:7px;font:14px ui-monospace,monospace;background:#fcfcfd}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.grid3{display:grid;grid-template-columns:2fr 1fr 1fr;gap:14px}
-.row{margin-bottom:14px}
-button{background:var(--acc);color:#fff;border:0;border-radius:8px;padding:11px 20px;
-font-size:14px;font-weight:600;cursor:pointer}
-button:disabled{opacity:.5;cursor:default}
-.chk{display:flex;gap:9px;align-items:flex-start;font-size:13px;color:#3d424b;
-background:#fffdf0;border:1px solid #ece0b0;border-radius:8px;padding:12px 14px}
-.adv{font-size:13px;color:var(--acc);cursor:pointer;user-select:none;margin-bottom:12px;display:inline-block}
-.hide{display:none}
-.bar{height:6px;background:#eceef1;border-radius:99px;overflow:hidden;margin:12px 0 8px}
-.bar>i{display:block;height:100%;background:var(--acc);width:0;transition:width .4s}
-.stat{font-size:13px;color:var(--mut);font-family:ui-monospace,monospace}
-.ban{border-radius:10px;padding:18px 20px;border-left:6px solid;margin-bottom:14px}
-.red{background:#fdf2f2;border-color:#8b1a1a;color:#8b1a1a}
-.orange{background:#fff8f0;border-color:#a8500f;color:#a8500f}
-.yellow{background:#fffdf0;border-color:#7a6a12;color:#7a6a12}
-.green{background:#f3faf4;border-color:#2f6b3a;color:#2f6b3a}
-.ban h2{font-size:19px;margin:4px 0 4px;letter-spacing:-.01em}
-.lvl{font-size:10px;letter-spacing:.11em;text-transform:uppercase;font-weight:700}
-ul{margin:8px 0 0;padding-left:20px;color:var(--ink)}li{margin-bottom:7px;font-size:14px}
-h3{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin:18px 0 8px}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);
-padding:7px 9px;background:#f4f5f7}
-td{padding:7px 9px;border-top:1px solid var(--line);vertical-align:top}
-.mono{font-family:ui-monospace,monospace;font-size:12px}
-a{color:var(--acc)}
-.hist{font-size:13px}.hist td{padding:6px 9px}
-.dot{display:inline-block;width:8px;height:8px;border-radius:99px;margin-right:7px}
-.topnav{display:flex;gap:14px;font-size:11px;letter-spacing:.07em;text-transform:uppercase;
-margin:0 0 14px;border-bottom:1px solid var(--line);padding-bottom:8px}
-.topnav .active{color:var(--ink);font-weight:700}.topnav a{color:var(--acc);text-decoration:none}
-.sev{font-size:10px;letter-spacing:.07em;text-transform:uppercase;font-weight:700;padding:1px 6px;border-radius:4px}
-.sev.critical{background:#fdf2f2;color:#8b1a1a}.sev.high{background:#fff8f0;color:#a8500f}.sev.medium{background:#fffdf0;color:#7a6a12}
-</style><div class=w>
-<div class=topnav><span class=active>Live probe tool</span><a href="/agent">Agent board &rarr;</a><a href="/wizard">Add target &rarr;</a><a href="__OBSERVATORY_URL__">Observatory &rarr;</a></div>
-<h1>provenance-probe</h1>
-<div class=sub>Local model provenance &amp; jurisdiction assurance · binds to 127.0.0.1 · nothing leaves this machine except requests to the endpoint you name</div>
+# Body fragment for the live probe tool (rendered inside _doc, which supplies the
+# poster header + shared "Provenance" stylesheet). The JS below drives the
+# verdict banner via the level classes (.ban.red/.orange/.yellow/.green) and the
+# .sev / .card / .mono / .bar classes — all defined in the shared stylesheet.
+PAGE = r"""<section style="margin-bottom:28px">
+<h1 class="display" style="font-size:clamp(36px,6vw,58px);margin:2px 0 16px">A lie detector for AI APIs</h1>
+<p class="lead">Point the probe at any AI endpoint. It runs controlled network, wire, tokenizer and
+behavioral tests, then tells you which model is really answering &mdash; and whether it is
+Chinese-origin or under PRC jurisdiction.</p>
+<p class="stat" style="margin:0">Binds to 127.0.0.1 &middot; nothing leaves this machine except requests to the endpoint you name.</p>
+</section>
 
 <div class=card>
  <div class="row grid3">
@@ -1535,7 +1460,6 @@ margin:0 0 14px;border-bottom:1px solid var(--line);padding-bottom:8px}
 </div>
 
 <div class=card><h3>Local run history</h3><div id=hist class=stat>none yet</div></div>
-</div>
 <script>
 const $=i=>document.getElementById(i);
 let timer=null;
