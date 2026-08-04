@@ -40,7 +40,9 @@ jobs:
         run: node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8')); console.log('manifest.json OK')"
 
       - name: Unit tests (payload assembly + sanitization)
-        run: node --test "test/*.test.mjs"
+        # Node 20's --test does not expand glob args (glob support landed in Node 21);
+        # let the runner auto-discover test/*.test.mjs instead of passing a literal glob.
+        run: node --test
 
       - name: Read extension version
         id: ver
