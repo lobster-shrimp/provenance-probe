@@ -7,18 +7,68 @@ you explicitly ask it to assess. Run history is stored on local disk only.
     provenance-probe serve            # http://127.0.0.1:8770
 """
 from __future__ import annotations
-import json, os, threading, datetime, uuid, traceback, html
+import hmac, json, os, threading, datetime, uuid, traceback, html
 
 from flask import Flask, request, jsonify, Response
 
 from .config import Target
 from .client import Client
 from .probes import network, tokenizer, behavioral, wire, latency, logprob, artifact, clientsrc, deception
-from . import scoring, report, userwarn, monitor
+from . import scoring, report, userwarn, monitor, egress
 
 RUNS: dict[str, dict] = {}
 DATA_DIR = os.path.expanduser(os.environ.get("PROVENANCE_PROBE_HOME", "~/.provenance-probe"))
 app = Flask(__name__)
+
+
+# --------------------------------------------------------------- auth gate ---
+# Public-hosting mode only (env-gated, OFF by default). When
+# PROVENANCE_PROBE_BASIC_AUTH="user:pass" is set, EVERY route requires HTTP
+# Basic auth. Parsed once at import so a malformed value fails loudly at startup
+# rather than silently leaving the instance open. Unset -> no gate (local
+# single-user behavior is unchanged).
+_BASIC_AUTH_ENV = "PROVENANCE_PROBE_BASIC_AUTH"
+
+
+def _parse_basic_auth(raw: str | None) -> tuple[str, str] | None:
+    if not raw:
+        return None
+    if ":" not in raw:
+        raise RuntimeError(
+            f"{_BASIC_AUTH_ENV} must be 'user:pass' (missing ':'); refusing to "
+            "start with a malformed value that would silently disable auth.")
+    user, _, password = raw.partition(":")   # password may itself contain ':'
+    return user, password
+
+
+_BASIC_AUTH = _parse_basic_auth(os.environ.get(_BASIC_AUTH_ENV))
+
+
+def _auth_challenge() -> Response:
+    resp = Response("Authentication required.\n", status=401, mimetype="text/plain")
+    resp.headers["WWW-Authenticate"] = 'Basic realm="provenance-probe"'
+    return resp
+
+
+@app.before_request
+def _require_basic_auth():
+    """Gate ALL routes (no allowlist) before any route logic runs. A 401 is still
+    a valid HTTP response, so a liveness probe sees the port answering."""
+    if _BASIC_AUTH is None:
+        return None
+    auth = request.authorization
+    if auth is None or (auth.type or "").lower() != "basic":
+        return _auth_challenge()
+    want_user, want_pass = _BASIC_AUTH
+    # Constant-time compares; no boolean short-circuit, so a wrong username and a
+    # wrong password take the same path.
+    ok_user = hmac.compare_digest((auth.username or "").encode("utf-8"),
+                                  want_user.encode("utf-8"))
+    ok_pass = hmac.compare_digest((auth.password or "").encode("utf-8"),
+                                  want_pass.encode("utf-8"))
+    if not (ok_user and ok_pass):
+        return _auth_challenge()
+    return None
 
 
 # ------------------------------------------------------------------ engine ---
@@ -92,7 +142,9 @@ def _run(run_id: str, spec: dict):
 
         if spec.get("client_url"):
             step("Scanning client source…", 30)
-            b["client_source"] = clientsrc.scan_url(spec["client_url"])
+            # Reuse the probe Client's session so this user-supplied URL fetch
+            # goes through the SSRF egress guard in public-hosting mode.
+            b["client_source"] = clientsrc.scan_url(spec["client_url"], session=c.s)
         elif spec.get("client_dir"):
             step("Scanning client source…", 30)
             b["client_source"] = clientsrc.scan_dir(spec["client_dir"])
@@ -158,7 +210,14 @@ def _run(run_id: str, spec: dict):
 # ------------------------------------------------------------------- routes --
 @app.post("/api/assess")
 def api_assess():
-    spec = request.get_json(force=True)
+    # Require a JSON content-type. This endpoint triggers outbound network
+    # activity, so in public-hosting mode it must not be drivable by a
+    # cross-origin HTML form (which cannot set application/json without a CORS
+    # preflight that this app never answers) — closes the JSON-CSRF vector while
+    # the same-origin fetch() UI (which sends application/json) still works.
+    if not request.is_json:
+        return jsonify({"error": "Content-Type: application/json required"}), 415
+    spec = request.get_json(silent=True) or {}
     if not spec.get("base_url"):
         return jsonify({"error": "base_url required"}), 400
     if not spec.get("authorized"):
@@ -483,6 +542,12 @@ message; the login is never recorded. Needs the <code>[capture]</code> extra.</p
 
 def _capture_ui() -> str:
     """The 'Capture for me' block, or a one-line note if the extra is missing."""
+    # The capture flow drives a real browser to a user-named URL, which cannot be
+    # IP-pinned like the requests transport. It is out of scope for the public
+    # instance (#51), so it is refused entirely in public-hosting mode — don't
+    # advertise it either.
+    if egress.guard_enabled():
+        return ""
     try:
         from . import capture_proxy
         available = capture_proxy.proxy_available()
@@ -597,6 +662,14 @@ def _wiz_preview(target: dict, cookie: str, warnings: list, prompt: str = "") ->
 def wizard_capture_run():
     """Start a proxy capture in the background. Returns {run_id}. The heavy work
     (browser + proxy) needs the [capture] extra; capture_proxy reports absence."""
+    # SSRF: the capture flow navigates a real browser to a caller-supplied URL and
+    # cannot be IP-pinned like the requests transport, so it is refused entirely in
+    # public-hosting mode (out of scope for the public instance, #51). _same_origin_ok
+    # is NOT a reliable control here — a non-browser client sends no Origin/Referer.
+    if egress.guard_enabled():
+        return jsonify({"error": "Browser capture is disabled in public-hosting mode "
+                                 "(PROVENANCE_PROBE_BLOCK_PRIVATE). Run provenance-probe "
+                                 "locally to use the capture flow."}), 403
     if not _same_origin_ok(request):
         return jsonify({"error": "cross-site request refused"}), 403
     url = (request.form.get("url") or "").strip()
@@ -623,6 +696,8 @@ def wizard_capture_advance():
     """The browser 'Continue' button: release whichever phase the capture waits on.
     Keys off the CURRENT status, so a duplicate/late click can't pre-release the
     next phase (it only sets the event for the phase actually being awaited)."""
+    if egress.guard_enabled():                          # capture disabled publicly (#51)
+        return jsonify({"error": "Browser capture is disabled in public-hosting mode."}), 403
     if not _same_origin_ok(request):
         return jsonify({"error": "cross-site request refused"}), 403
     run = _CAPTURE_RUNS.get(request.form.get("run_id", ""))

@@ -40,7 +40,15 @@ def scan_dir(root: str) -> dict:
 
 def scan_url(url: str, session=None, max_scripts: int = 40) -> dict:
     import requests
-    s = session or requests.Session()
+    s = session
+    if s is None:
+        s = requests.Session()
+        # Public-hosting mode: a bare session here would be an unguarded SSRF hole
+        # (this fetches a user-supplied URL + its <script src> children). Mount the
+        # same egress guard the probe Client uses when the flag is set.
+        from .. import egress
+        if egress.guard_enabled():
+            egress.install_guard(s)
     findings, personas, files = [], {}, 0
     try:
         r = s.get(url, timeout=20)

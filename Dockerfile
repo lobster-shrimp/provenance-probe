@@ -9,4 +9,7 @@ RUN pip install --no-cache-dir -e .
 EXPOSE 8770
 ENV PROVENANCE_PROBE_HOME=/data
 VOLUME /data
-CMD ["provenance-probe","serve","--host","0.0.0.0","--port","8770"]
+# Shell form so $PORT (set by Render/HF/Cloud Run/etc.) is honored; falls back
+# to 8770 for local `docker run`. Public-hosting gates (SSRF egress guard +
+# basic auth) are opt-in via env vars — see deploy/hf-space/README.md.
+CMD provenance-probe serve --host 0.0.0.0 --port ${PORT:-8770}
