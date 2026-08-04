@@ -2,6 +2,15 @@
 
 ## [Unreleased] — MV3 browser extension for one-click hosted capture (P2 / #54)
 
+### Changed
+- The web UI's **Observatory** nav link now defaults to the live public
+  observatory (`https://lobster-shrimp.github.io/provenance-observatory/`) and
+  opens in a new tab; override with `PROVENANCE_OBSERVATORY_URL` to point at a
+  local observatory instead.
+- Added a **lie-detector favicon** (a coral polygraph waveform on the deep-green
+  brand square) inlined as an SVG data-URI in the shared page shell, so it needs
+  no route and does not hit the hosted auth gate.
+
 ### Added
 - **`extension/` — a Manifest V3 Chrome extension**, a one-click alternative to
   the HAR-upload path (#53). It captures the target app's chat request in the
