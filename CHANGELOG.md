@@ -3,6 +3,9 @@
 ## [Unreleased] — MV3 browser extension for one-click hosted capture (P2 / #54)
 
 ### Changed
+- Added a **`/favicon.ico` + `/favicon.svg` route** serving the lie-detector
+  SVG, so pages not rendered through `ui.doc()` (the agent flight-recorder
+  report) and direct browser favicon requests resolve it instead of 404-ing.
 - The web UI's **Observatory** nav link now defaults to the live public
   observatory (`https://lobster-shrimp.github.io/provenance-observatory/`) and
   opens in a new tab; override with `PROVENANCE_OBSERVATORY_URL` to point at a

@@ -47,14 +47,14 @@ FONTS = (
 
 # Lie-detector favicon: a coral polygraph waveform on the deep-green brand square,
 # inlined as an SVG data-URI so it needs no route (won't hit the hosted auth gate).
-_FAVICON_SVG = (
+FAVICON_SVG = (
     "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>"
     "<rect width='32' height='32' rx='7' fill='#0E3B2E'/>"
     "<path d='M2 17h6l2-9 3 16 3-12 2 7h12' fill='none' stroke='#D2483F'"
     " stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/></svg>"
 )
 FAVICON = ('<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,'
-           + quote(_FAVICON_SVG) + '">')
+           + quote(FAVICON_SVG) + '">')
 
 STYLE = """<style>
 :root{

@@ -25,7 +25,8 @@ app = Flask(__name__)
 # The shared "Provenance" stylesheet + poster header + page shell live in
 # ui.py (imported by report.py too, so the two surfaces never drift). Aliased
 # with the private names the page templates below already use.
-from .ui import FONTS as _FONTS, STYLE as _STYLE, header as _header, doc as _doc  # noqa: E402,F401
+from .ui import (FONTS as _FONTS, STYLE as _STYLE, header as _header, doc as _doc,  # noqa: E402,F401
+                 FAVICON_SVG as _FAVICON_SVG)
 
 
 # --------------------------------------------------------------- auth gate ---
@@ -305,6 +306,19 @@ def report_file(name):
     if p.endswith(".json"):
         return Response(open(p).read(), mimetype="application/json")
     return Response(open(p).read(), mimetype="text/html")
+
+
+@app.get("/favicon.ico")
+@app.get("/favicon.svg")
+def favicon():
+    # Serve the lie-detector favicon as a real endpoint so pages NOT rendered
+    # through ui.doc() (e.g. the agent flight-recorder report) and direct browser
+    # /favicon.ico requests resolve it instead of 404-ing. Still behind the auth
+    # gate like every route: an authenticated browser sends cached creds and gets
+    # 200; a pre-login request 401s, which is fine (no icon on the login prompt).
+    resp = Response(_FAVICON_SVG, mimetype="image/svg+xml")
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
 
 
 @app.get("/")
