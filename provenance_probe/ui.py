@@ -140,6 +140,29 @@ th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.1em;
 td{padding:9px 11px;border-top:1px solid var(--line);vertical-align:top}
 ul{margin:8px 0 0;padding-left:20px}li{margin-bottom:7px;font-size:14px}
 ol.guide li{margin:.4rem 0}
+/* method chooser (wizard front door): three plain-language cards, one recommended */
+.chooser{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:0 0 24px}
+.chooser .card{margin:0;display:flex;flex-direction:column}
+.chooser .card h2{font-size:16px}
+.chooser .tag{display:inline-block;font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+ font-weight:700;color:var(--green);margin:0 0 6px}
+.chooser .needs{font-size:12px;color:var(--muted);margin:8px 0 14px}
+.chooser .pick{margin-top:auto}
+.chooser .rec{border-color:var(--green);box-shadow:0 0 0 3px rgba(14,59,46,.10)}
+@media(max-width:820px){.chooser{grid-template-columns:1fr}}
+/* big numbered visual steps: green counter chips, plain-language body */
+ol.steps{counter-reset:step;list-style:none;padding:0;margin:14px 0}
+ol.steps>li{counter-increment:step;position:relative;padding:2px 0 16px 48px;margin:0;font-size:15px}
+ol.steps>li::before{content:counter(step);position:absolute;left:0;top:0;width:30px;height:30px;
+ border-radius:99px;background:var(--green);color:var(--paper);font:600 15px var(--ui);
+ display:flex;align-items:center;justify-content:center}
+ol.steps>li b{display:block;margin-bottom:2px}
+ol.steps>li .sub{margin:3px 0 0;font-size:13px}
+/* embeddable demo-GIF slot with graceful caption fallback when the file is absent */
+figure.demo{margin:0 0 20px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface)}
+figure.demo img{display:block;width:100%;height:auto}
+figure.demo figcaption{padding:10px 14px;font-size:13px;color:var(--muted)}
+figure.demo.noimg figcaption::before{content:"\1F3AC  "}
 .topnav{display:flex;gap:16px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin:0 0 18px}
 .topnav .active{color:var(--ink);font-weight:700}
 .topnav a{color:var(--green);text-decoration:none}

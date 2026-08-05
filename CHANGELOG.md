@@ -41,6 +41,56 @@
   `extension/package.json` at `0.1.0`); this change ships **no Python code
   changes**, so the `provenance_probe` package version is intentionally unchanged.
 
+## [0.19.0] - 2026-08-04 — Non-technical capture wizard: method chooser, plain-language guides, `/media` demo route
+
+Restyle-and-clarify pass making the "add a target / capture" flow usable by a
+**non-technical visitor**. No route, form field id, JS behavior, egress guard,
+auth gate, same-origin gate, or the #53 `/wizard/capture-import` contract
+changed — this is presentation only, built entirely on the shared `ui.doc()`
+design system (no new dependencies, no framework).
+
+### Added
+- **A "which method is right for you?" chooser** at the top of `/wizard`: three
+  plain-language cards — (A) "I have a plain API address" → the paste/identify
+  path, (B) "It's a website I log into" (the **recommended, visually-emphasized**
+  path) → the no-install browser capture / HAR import, and (C) "I already have a
+  cURL or HAR" → the paste box. Each card says in one sentence when to use it and
+  what it needs, and carries its primary action.
+- **A read-only `GET /media/<path:name>` route** serving static demo media (GIF/
+  PNG) from a new `provenance_probe/media/` package, so the capture guides can
+  embed short walkthrough clips. Hardened against path traversal / LFI: it
+  rejects any `..`/absolute/drive-letter/NUL path segment up front, resolves
+  symlinks with `realpath()` and requires the result stay **inside** the media
+  dir, allowlists a small set of media extensions/mimes, opens the final file
+  with `O_NOFOLLOW` and requires a regular file (closing the realpath→open TOCTOU
+  window), and sends `X-Content-Type-Options: nosniff`. It serves the bytes
+  itself (no `send_file`, no directory listing) and stays **behind the global
+  Basic-auth gate** like every route. `provenance_probe/media/*` is registered as
+  package-data; a 1×1 `placeholder.gif` is committed so the route/tests work, and
+  the real demo GIFs are dropped in later by the maintainer.
+- **Embeddable demo-GIF slots** on `/wizard/capture` and `/wizard/import`: a
+  `<figure>` whose `<img>` points at `/media/capture-guide.gif` /
+  `/media/capture-import.gif` and, if the file is absent, hides itself via
+  `onerror` and leaves a graceful caption fallback.
+- `tests/test_capture_ux.py` — the `/media` route (serves an existing file, 404s
+  a missing one, refuses percent-encoded/absolute traversal and non-allowlisted
+  types, stays behind the auth gate), the chooser + capture/import step content
+  rendering, and that `capture_guide.guide()` still returns coherent numbered
+  steps.
+
+### Changed
+- **Every capture surface rewritten with big numbered visual steps and
+  plain-language explainers.** `/wizard/capture` and `/wizard/import` now each
+  open with a "What this does" line, an **"Is my login safe?"** reassurance
+  (login never recorded / session cookie only sent to its own host / nothing
+  leaves until you approve), a "What happens next" section, and 3–6 numbered
+  steps with the exact click path. Jargon reduced (e.g. "the developer Network
+  panel" instead of "DevTools → Network").
+- Added `.chooser`, `ol.steps` (numbered step chips), and `figure.demo` classes
+  to the shared `ui.py` stylesheet so the new surfaces stay on-system.
+- Aligned the package version (`provenance_probe.__version__` and the
+  `pyproject.toml` version were `0.18.0`/`0.18.2`) to **`0.19.0`**.
+
 ## [0.18.0] - 2026-08-04 — "Provenance" design system for the serve web UI
 
 ### Added

@@ -7,7 +7,7 @@ you explicitly ask it to assess. Run history is stored on local disk only.
     provenance-probe serve            # http://127.0.0.1:8770
 """
 from __future__ import annotations
-import hmac, json, os, threading, datetime, uuid, traceback, html
+import hmac, json, os, stat, threading, datetime, uuid, traceback, html
 
 from flask import Flask, request, jsonify, Response
 
@@ -308,6 +308,70 @@ def report_file(name):
     return Response(open(p).read(), mimetype="text/html")
 
 
+# ------------------------------------------------------------ static media ---
+# Read-only server for the demo GIFs/screens embedded in the capture guides.
+# Files live ONLY in provenance_probe/media/ (committed placeholder + whatever
+# the maintainer drops in later). A static file server is a classic LFI vector,
+# so this is defense-in-depth: reject any '..'/absolute/NUL path component up
+# front, resolve symlinks with realpath() and require the result stay INSIDE the
+# media dir, allowlist a small set of media extensions/mimes, and open the final
+# file with O_NOFOLLOW so a symlink planted in the dir can't redirect the read to
+# an outside file (TOCTOU-safe). Still behind the global auth gate like every
+# route. Serves the bytes itself (no send_file / no directory listing).
+_MEDIA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "media")
+_MEDIA_MIME = {
+    ".gif": "image/gif", ".png": "image/png", ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg", ".webp": "image/webp", ".mp4": "video/mp4",
+}
+# NB: SVG is deliberately NOT allowlisted — it is the only script-capable image
+# type, and X-Content-Type-Options:nosniff does not stop SVG script execution.
+# The demo assets are raster (GIF/PNG); the favicon has its own route.
+
+
+@app.get("/media/<path:name>")
+def media_file(name):
+    root = os.path.realpath(_MEDIA_DIR)
+    # 1. Reject obviously hostile inputs before touching the filesystem: empty,
+    #    absolute (POSIX or Windows), a NUL byte, or ANY '..' path segment.
+    norm = (name or "").replace("\\", "/")
+    if (not norm or norm.startswith("/") or "\x00" in norm
+            or (len(name) >= 2 and name[1] == ":")          # Windows drive (C:)
+            or any(seg in ("..",) for seg in norm.split("/"))):
+        return "not found", 404
+    # 2. Resolve symlinks and require the real path stay INSIDE the media dir.
+    full = os.path.realpath(os.path.join(root, name))
+    if full != root and not full.startswith(root + os.sep):
+        return "not found", 404
+    # 3. Allowlist media extensions only — never serve arbitrary file types.
+    mime = _MEDIA_MIME.get(os.path.splitext(full)[1].lower())
+    if mime is None:
+        return "not found", 404
+    # 4. Open with O_NOFOLLOW (final component may not be a symlink) and require a
+    #    regular file — closes the realpath→open TOCTOU window. On platforms
+    #    without O_NOFOLLOW (Windows) this layer degrades to 0, but step 2's
+    #    realpath() containment check is the platform-independent backstop.
+    try:
+        fd = os.open(full, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return "not found", 404
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            return "not found", 404
+        with os.fdopen(fd, "rb") as f:
+            data = f.read()
+    except OSError:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        return "not found", 404
+    resp = Response(data, mimetype=mime)
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
+
+
 @app.get("/favicon.ico")
 @app.get("/favicon.svg")
 def favicon():
@@ -376,12 +440,47 @@ def agent_board():
                     mimetype="text/html")
 
 
+# "Which method is right for you?" chooser shown at the top of /wizard. Three
+# plain-language cards; the middle one (log-in-based capture) is the recommended,
+# visually-emphasized path for a non-technical visitor. Static HTML (no user data,
+# no .format placeholders), concatenated ahead of the form by _wiz_form().
+_WIZARD_CHOOSER = """<h1>Add a target</h1>
+<p class="sub">Not sure how to add your service? Pick the row that sounds like you.
+Everything is local &mdash; nothing is sent until you approve. <a href="/">&larr; probe tool</a></p>
+<div class="chooser">
+ <div class="card">
+  <span class="tag">Option A</span>
+  <h2>I have a plain API address</h2>
+  <p>You have a direct AI API address (a URL like <code>https://api.vendor.com/v1</code>),
+  and maybe a key. Best when you are calling the model's own API, not a chat website.</p>
+  <p class="needs">You need: the API address (and a key if the API is private).</p>
+  <p class="pick"><a href="#add"><button type="button">Paste the address below &rarr;</button></a></p>
+ </div>
+ <div class="card rec">
+  <span class="tag">Option B &middot; easiest &middot; recommended</span>
+  <h2>It's a website I log into</h2>
+  <p>It's a chat website you sign in to (like a hosted assistant). You stay logged in
+  in your own browser &mdash; we read one message you send, and your login is never recorded.</p>
+  <p class="needs">You need: to be signed in to the site in your browser. No install, no keys.</p>
+  <p class="pick"><a href="/wizard/import"><button type="button">Capture from my browser &rarr;</button></a></p>
+ </div>
+ <div class="card">
+  <span class="tag">Option C &middot; advanced</span>
+  <h2>I already have a cURL or HAR</h2>
+  <p>You already exported a request as a <code>curl</code> command or a saved <code>.har</code>
+  file. Paste it and we turn it into a target.</p>
+  <p class="needs">You need: a copied <code>curl</code> command or a <code>.har</code> file.
+  New to this? <a href="/wizard/capture">see the step-by-step guide</a>.</p>
+  <p class="pick"><a href="#add"><button type="button">Paste it below &rarr;</button></a></p>
+ </div>
+</div>
+"""
+
 # Body fragments (rendered inside _doc, which supplies the poster + shared CSS).
 # Still .format() templates: {placeholder} single braces; no literal CSS braces.
-_WIZARD_FORM = """<h1>Add a target</h1>
+_WIZARD_FORM = """<h2 id="add" style="margin-top:8px">Paste what you have</h2>
 <p class="sub">One box. Paste whatever you have &mdash; we figure out the rest.
-No need to know the API type. Local only; nothing is sent until you approve.
-<a href="/">&larr; probe tool</a></p>
+No need to know the API type. Local only; nothing is sent until you approve.</p>
 {err}
 <form method=post action="/wizard">
 <div class="card">
@@ -448,7 +547,8 @@ def _wiz_form(err="", name="", prompt="", capture=""):
         err=f'<div class="err">{html.escape(err)}</div>' if err else "",
         name=html.escape(name), prompt=html.escape(prompt),
         capture=html.escape(capture))
-    return Response(_doc("Add a target · provenance-probe", body + _capture_ui()),
+    return Response(_doc("Add a target · provenance-probe",
+                         _WIZARD_CHOOSER + body + _capture_ui()),
                     mimetype="text/html")
 
 
@@ -762,20 +862,39 @@ _IMPORT_UI = (
 _WIZARD_IMPORT_JS = r"""<h1>Import a captured request</h1>
 <p class=sub><a href="/wizard">&larr; back to Add a target</a></p>
 
+<p class=lead style="font-size:17px">What this does: while you stay logged in to your AI
+chat website, your own browser records the one message you send. You save that recording as a
+file and drop it here &mdash; then the probe can test the model that actually answered. No coding.</p>
+
+<figure class=demo>
+  <img src="/media/capture-import.gif" alt="Screen recording: turning on the Network panel, sending one message, and saving it as a HAR file"
+       onerror="this.style.display='none';this.closest('figure').classList.add('noimg')">
+  <figcaption>Short walkthrough: record one message, save the file, drop it here (demo clip coming soon).</figcaption>
+</figure>
+
+<div class=ok><b>Is my login safe?</b> Yes. You stay signed in as normal &mdash; your password and
+the login itself are never recorded. The file is read <b>inside your browser</b>; only the single
+chat request you pick is uploaded, its session cookie is only ever sent to that same website, and
+nothing is saved until you review the result.</div>
+
 <h2 style="font-size:16px">1. Record the request in your browser</h2>
-<ol class=guide>
-  <li>Open your AI chat app in a tab and <b>log in</b> (you already are).</li>
-  <li>Open <b>DevTools</b> (<code>F12</code> or <code>Cmd/Ctrl+Shift+I</code>) and click the <b>Network</b> tab.</li>
-  <li>Tick <b>Preserve log</b>, then send <b>ONE short message</b> in the chat.</li>
-  <li>Right-click any row in the Network list and choose <b>Save all as HAR with content</b>
-      (Chrome/Edge: the ⬇ export icon; Firefox: <b>Save All As HAR</b>).</li>
-  <li>Come back here and choose that <code>.har</code> file below.</li>
+<ol class=steps>
+  <li><b>Open your AI chat website and sign in.</b>You are usually already logged in &mdash; keep that tab open.</li>
+  <li><b>Open the developer Network panel.</b>Press <code>F12</code> (or <code>Cmd/Ctrl+Shift+I</code>) and click the <b>Network</b> tab. This just lists the requests the page makes &mdash; you do not type any commands.</li>
+  <li><b>Turn on &ldquo;Preserve log&rdquo;, then send one short message.</b>Tick the <b>Preserve log</b> box so the list is kept, then send <b>one</b> short message in the chat.</li>
+  <li><b>Save the recording as a file.</b>Right-click any row in the list and choose <b>Save all as HAR with content</b> (in Chrome/Edge, the &#11015; export icon; in Firefox, <b>Save All As HAR</b>).</li>
+  <li><b>Come back here and choose that file below.</b>It is the <code>.har</code> file you just saved.</li>
 </ol>
-<div class=warn>&#128274; The HAR holds your session cookies and every request in the tab.
-It is parsed <b>in your browser</b>; only the one request you pick — with a minimal set of
+<div class=warn>&#128274; The saved file holds your session cookies and every request in that tab.
+It is read <b>in your browser</b>; only the one request you pick — with a minimal set of
 headers — is uploaded, and only if you consent to sending its session cookie to its own host.</div>
 
-<h2 style="font-size:16px">2. Choose the HAR &amp; the request</h2>
+<h3>What happens next</h3>
+<p class=sub>You pick the chat request (we auto-pick the most likely one), optionally consent to a
+one-time dry-run, and the probe confirms it works. Nothing is saved on the hosted demo &mdash;
+the captured cookie is used for that single check only.</p>
+
+<h2 style="font-size:16px">2. Choose the file &amp; the request</h2>
 <label for=har>HAR file</label>
 <input type=file id=har accept=".har,application/json,application/octet-stream">
 <label for=hint>The exact message you sent <span class=sub>(optional — helps auto-pick the right request)</span></label>
@@ -1199,16 +1318,37 @@ def wizard_capture():
         f'{" style=font-weight:700" if b == browser else ""}>{b}</a>'
         for b in ("chrome", "firefox", "safari"))
     steps = "".join(
-        f'<li><b>{html.escape(s.title)}</b><br>{html.escape(s.detail)}'
-        + (f'<br><span class=sub>why: {html.escape(s.why)}</span>' if s.why else "")
+        f'<li><b>{html.escape(s.title)}</b>{html.escape(s.detail)}'
+        + (f'<div class=sub>Why: {html.escape(s.why)}</div>' if s.why else "")
         + "</li>" for s in g.steps)
     har = "".join(f"<li>{html.escape(h)}</li>" for h in g.har_alternative)
     inner = (
         f'<h1>Capture a request from {html.escape(g.app)}</h1>'
-        f'<p class=sub>Browser: {picker} &nbsp;·&nbsp; <a href="/wizard">&larr; back to Add a target</a></p>'
-        f'<ol>{steps}</ol>'
-        f'<div class="warn">&#128274; {html.escape(g.security_note)}</div>'
+        '<p class=sub>Browser: ' + picker + ' &nbsp;&middot;&nbsp; '
+        '<a href="/wizard">&larr; back to Add a target</a></p>'
+        '<p class=lead style="font-size:17px">What this does: it grabs the single message'
+        ' your browser sends when you chat, so the probe can test the model that actually'
+        ' answered &mdash; no coding, just copy and paste.</p>'
+        # Embeddable demo-GIF slot. The file is dropped in later by the maintainer;
+        # until then the <img> 404s and its onerror hides it, leaving the caption.
+        '<figure class="demo">'
+        '<img src="/media/capture-guide.gif" alt="Screen recording: opening the Network '
+        'panel, sending one message, and copying it as cURL" '
+        "onerror=\"this.style.display='none';this.closest('figure').classList.add('noimg')\">"
+        '<figcaption>Short walkthrough of these steps (demo clip coming soon).</figcaption>'
+        '</figure>'
+        # "Is my login safe?" reassurance, in plain language.
+        '<div class="ok"><b>Is my login safe?</b> Yes. You stay signed in as normal &mdash;'
+        ' your password and the login itself are never recorded. Only the one chat request'
+        ' you pick is captured, its session cookie is only ever sent back to that same'
+        ' website, and nothing is saved until you review and approve it.</div>'
+        f'<ol class="steps">{steps}</ol>'
+        '<h3>What happens next</h3>'
+        '<p class=sub>Paste the copied request back into the &ldquo;Add a target&rdquo; box.'
+        ' The wizard turns it into a probe target, runs a small safe dry-run to confirm it'
+        ' works, and only then offers to save it &mdash; you approve every step.</p>'
         f'<h3>Prefer a file?</h3><ul>{har}</ul>'
+        f'<div class="warn">&#128274; {html.escape(g.security_note)}</div>'
         f'<p class=sub>{html.escape(g.playwright_hint)}</p>'
         f'<p><a href="/wizard">I have my capture &rarr; paste it</a></p>')
     return _wiz_page("Capture guide", inner)
