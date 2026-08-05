@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "provenance-probe"
-version = "0.18.2"
+version = "0.19.0"
 description = "GenAI model provenance and jurisdiction assurance harness"
 requires-python = ">=3.10"
 dependencies = ["requests>=2.31", "flask>=3.0"]
@@ -32,3 +32,5 @@ include = ["provenance_probe*"]
 
 [tool.setuptools.package-data]
 "provenance_probe.data" = ["*.json"]
+# Static demo media (GIF/PNG) for the capture guides, served by the /media route.
+"provenance_probe.media" = ["*"]
