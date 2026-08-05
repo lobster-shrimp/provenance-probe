@@ -41,6 +41,47 @@
   `extension/package.json` at `0.1.0`); this change ships **no Python code
   changes**, so the `provenance_probe` package version is intentionally unchanged.
 
+## [0.20.0] - 2026-08-05 — In-product documentation: plain-language `/help`, layer tooltips, verdict explainers
+
+### Added
+- **`provenance_probe/explain.py` — a single source of truth for all explainer
+  copy.** `LAYERS` maps each evidence layer (network, wire, tokenizer, logprob,
+  behavioral, deception, latency, artifacts) to a plain-language
+  `{title, what it measures, what a "hit" means}`; `VERDICTS` explains the two
+  independent axes (provenance = whose weights; jurisdiction = who runs it and
+  where), each enumerating the **same five tiers** the scorer emits
+  (`CONFIRMED / LIKELY / INDETERMINATE / UNLIKELY / NO EVIDENCE`) so a reader
+  never meets an undocumented verdict word. `FLOWS`, `FAQ` and a worked
+  `EXAMPLE` (a Chinese model on US servers = CONFIRMED provenance + UNLIKELY
+  jurisdiction) live here too. Every downstream surface reads from this module —
+  no copy is duplicated.
+- **A `/help` page (`GET /help`)** rendered via `ui.doc()` from the module above:
+  a plain-language tour of each flow (Live probe, Add a target / capture, Agent
+  board, Monitor, Observatory), a "What each check does" table from `LAYERS`, a
+  "What the verdict means" section from `VERDICTS` with the two-axis example, and
+  a short privacy FAQ ("Do you store my key?", "Is my data sent anywhere?",
+  "What if it says INDETERMINATE?"). Behind the global auth gate like every route.
+- **A shared `ui.nav()` helper** carrying the standard poster nav incl. a **Help**
+  link; `ui.header()` falls back to it when a page passes no custom nav, so Help
+  is reachable from **every** page. The home nav gains the Help link alongside
+  Observatory.
+- **In-context explainers on the technical report** (`report.py`): each Signals
+  "Layer" cell is now an `<abbr title=…>` sourced from `LAYERS` (hover for a
+  one-line description; escaped for the attribute context), plus a "New here? see
+  the help page" pointer. The probe form's Advanced options gains a short
+  "these are optional — every check is explained on the help page" note.
+- **Two demo-GIF slots** reusing the existing `<figure class="demo">` +
+  `/media/` + caption-fallback pattern: `/media/probe-demo.gif` on the live
+  probe page ("watch a probe run") and `/media/agent-demo.gif` on the agent
+  board. The GIF files are dropped in by the maintainer later; until then the
+  `<img>` 404s and its `onerror` hides it, leaving the caption.
+
+### Notes
+- **Additive/clarifying only.** No route, form field id, JS behavior, scoring or
+  verdict path changed; the auth gate, egress guard, `/media` hardening and
+  same-origin CSRF checks are untouched. Verified by `provenance-reviewer`
+  (APPROVE) and `security-reviewer` (APPROVE — no findings).
+
 ## [0.19.0] - 2026-08-04 — Non-technical capture wizard: method chooser, plain-language guides, `/media` demo route
 
 Restyle-and-clarify pass making the "add a target / capture" flow usable by a
