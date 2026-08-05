@@ -26,7 +26,7 @@ app = Flask(__name__)
 # ui.py (imported by report.py too, so the two surfaces never drift). Aliased
 # with the private names the page templates below already use.
 from .ui import (FONTS as _FONTS, STYLE as _STYLE, header as _header, doc as _doc,  # noqa: E402,F401
-                 FAVICON_SVG as _FAVICON_SVG)
+                 nav as _ui_nav, FAVICON_SVG as _FAVICON_SVG)
 
 
 # --------------------------------------------------------------- auth gate ---
@@ -385,6 +385,18 @@ def favicon():
     return resp
 
 
+@app.get("/help")
+def help_page():
+    """Plain-language explainer: what each flow and each check does, what the two
+    verdict axes mean, and a short privacy FAQ. All copy is sourced from
+    explain.LAYERS / VERDICTS / FLOWS / FAQ (the single source of truth), rendered
+    inside the shared ui.doc() shell. Behind the global auth gate like every route."""
+    from . import explain
+    return Response(_doc("Help · provenance-probe", explain.help_html(),
+                         right=_ui_nav("/help")),
+                    mimetype="text/html")
+
+
 @app.get("/")
 def index():
     # Defaults to the live public observatory (GitHub Pages). Point at a local
@@ -393,6 +405,7 @@ def index():
                              "https://lobster-shrimp.github.io/provenance-observatory/")
     nav = ('<nav><a href="/" class="active" style="opacity:1;font-weight:700">Live probe</a>'
            '<a href="/agent">Agent board</a><a href="/wizard">Add target</a>'
+           '<a href="/help">Help</a>'
            '<a href="__OBSERVATORY_URL__" target="_blank" rel="noopener noreferrer">Observatory ↗</a></nav>')
     doc = _doc("provenance-probe", PAGE, right=nav)
     return Response(doc.replace("__OBSERVATORY_URL__", html.escape(obs_url)), mimetype="text/html")
@@ -404,7 +417,13 @@ def index():
 _AGENT_FORM = """<div class="topnav"><a href="/">&larr; Live probe tool</a></div>
 <h1>Agent provenance board</h1>
 <p class="sub">Paste a captured agent run &mdash; OpenTelemetry GenAI spans, or the minimal
-JSON form &mdash; and see per-step model, switch, and egress with hover explanations.</p>
+JSON form &mdash; and see per-step model, switch, and egress with hover explanations.
+New here? See the <a href="/help">help page</a>.</p>
+<figure class="demo">
+<img src="/media/agent-demo.gif" alt="Screen recording: pasting an agent trace and reading the per-step model and egress board"
+ onerror="this.style.display='none';this.closest('figure').classList.add('noimg')">
+<figcaption>See a pasted agent run analysed step by step (demo clip coming soon).</figcaption>
+</figure>
 <div class="card">
 <form method=post action="/agent">
 <label>Agent trace (JSON)</label>
@@ -1538,6 +1557,12 @@ Chinese-origin or under PRC jurisdiction.</p>
 <p class="stat" style="margin:0">Binds to 127.0.0.1 &middot; nothing leaves this machine except requests to the endpoint you name.</p>
 </section>
 
+<figure class="demo">
+<img src="/media/probe-demo.gif" alt="Screen recording: entering an endpoint, pressing Run, and watching the plain-language verdict appear"
+ onerror="this.style.display='none';this.closest('figure').classList.add('noimg')">
+<figcaption>Watch a probe run end to end (demo clip coming soon). New here? See the <a href="/help">help page</a>.</figcaption>
+</figure>
+
 <div class=card>
  <div class="row grid3">
   <div><label>Endpoint base URL</label>
@@ -1576,6 +1601,8 @@ Chinese-origin or under PRC jurisdiction.</p>
  </div>
  <span class=adv onclick="document.getElementById('adv').classList.toggle('hide')">Advanced options ▾</span>
  <div id=adv class=hide>
+  <p class=hint style="margin:0 0 12px">New here? These are optional extras. Every check the
+   probe runs is explained in plain language on the <a href="/help">help page</a>.</p>
   <div class="row grid">
    <div><label>Client app URL to scan</label><input type=text id=client_url placeholder="https://app.vendor.example"></div>
    <div><label>Client source directory</label><input type=text id=client_dir placeholder="/path/to/unpacked"></div>

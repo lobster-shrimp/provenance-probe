@@ -200,12 +200,30 @@ figure.demo.noimg figcaption::before{content:"\1F3AC  "}
 </style>"""
 
 
+# Standard internal nav. One place so every page links the same set — and so the
+# Help link reaches pages that don't build their own nav (see `header`).
+_NAV_ITEMS = (("/", "Live probe"), ("/agent", "Agent board"),
+              ("/wizard", "Add target"), ("/help", "Help"))
+
+
+def nav(active: str = "") -> str:
+    """The shared poster nav (Live probe · Agent board · Add target · Help). Pass
+    the href of the current page as `active` to emphasise it. All hrefs are static
+    internal routes, so nothing here needs escaping."""
+    links = "".join(
+        f'<a href="{href}"' + (' class="active" style="opacity:1;font-weight:700"'
+                               if href == active else "") + f">{label}</a>"
+        for href, label in _NAV_ITEMS)
+    return f"<nav>{links}</nav>"
+
+
 def header(right: str = "") -> str:
     """Green poster band with the small-caps wordmark. `right` is caller-built
     HTML placed at the band's right edge (a <nav>, or an already-escaped endpoint
-    wrapped in .poster-right) — callers escape any user data."""
+    wrapped in .poster-right) — callers escape any user data. When a caller passes
+    no `right`, fall back to the shared `nav()` so the Help link is on every page."""
     return ('<header class="poster"><div class="wordmark">PROVENANCE-PROBE</div>'
-            + (right or "") + "</header>")
+            + (right or nav()) + "</header>")
 
 
 def doc(title: str, inner: str, right: str = "") -> str:

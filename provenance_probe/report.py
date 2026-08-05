@@ -2,7 +2,7 @@
 from __future__ import annotations
 import json, html, hashlib
 
-from . import ui
+from . import ui, explain
 
 # Retained for any external importers; the HTML report now derives its ONE hot
 # accent from the verdict via ui.verdict_color / ui.LEVEL_COLOR.
@@ -124,9 +124,16 @@ def to_html(bundle: dict, path: str) -> None:
         f'<div class="statlbl">{e(lbl)}</div></div>' for v, lbl in stats)
     conf = e(str(s.get("confidence", "—")))
 
-    # 3. Signals.
+    # 3. Signals. Each layer cell carries a plain-language tooltip sourced from
+    # explain.LAYERS (single source of truth), so a non-technical reader can hover
+    # to learn what that check does. Falls back to the bare layer name if unknown.
+    def _layer_cell(layer: str) -> str:
+        tip = explain.tooltip_for(layer)
+        inner = (f'<abbr title="{e(tip)}" style="text-decoration:underline dotted;'
+                 f'cursor:help">{e(layer)}</abbr>') if tip else e(layer)
+        return f'<td class="mono">{inner}</td>'
     sigrows = "".join(
-        f'<tr><td class="mono">{e(x["layer"])}</td>'
+        f'<tr>{_layer_cell(x["layer"])}'
         f'<td class="mono" style="font-weight:600">{e(x["signal"])}</td>'
         f'<td>{e(x["evidence"])}</td></tr>' for x in s["signals"]) or \
         '<tr><td colspan=3 class="sub" style="text-align:center;padding:18px">No signals fired.</td></tr>'
@@ -198,6 +205,7 @@ def to_html(bundle: dict, path: str) -> None:
 </div>
 
 <h3>3. Signals</h3>
+<p class="stat" style="margin:0 0 10px">New here? Each check is explained in plain language on the <a href="/help">help page</a>. Hover a layer name for a one-line description.</p>
 <div class="card"><table><tr><th>Layer</th><th>Signal</th><th>Evidence</th></tr>{sigrows}</table></div>
 {align_block}
 
