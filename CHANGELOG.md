@@ -41,6 +41,74 @@
   `extension/package.json` at `0.1.0`); this change ships **no Python code
   changes**, so the `provenance_probe` package version is intentionally unchanged.
 
+## [0.22.0] - 2026-08-06 — Client-side "watch a service for a silent swap" (P2 / #64)
+
+The mission's second half — **watching** a service over time — made real and
+**self-service on BOTH hosted and local**. A server-side daemon can't run on the
+scale-to-zero, single-credential, no-stored-keys hosted demo, so the watch loop
+lives in the **user's own browser tab**: the API key never leaves the browser and
+there is no server persistence.
+
+### Added
+- **A `/watch` page** (rendered via `ui.doc()`): configure a target, pin a baseline
+  fingerprint, and re-check it on a timer (5 / 15 / 60 min, with a 5-min floor and a
+  little jitter). Each tick reuses the **existing** endpoints with **no new detection
+  logic** — `POST /api/assess` → poll `GET /api/run/<rid>` → `POST /api/monitor`
+  (the same `monitor.diff` the CLI and observatory use). On drift it raises a **loud,
+  unmissable alert**: a red banner, a browser-tab **title** change
+  (`⚠ MODEL SWITCH — provenance-probe`), an optional permission-gated desktop
+  **Notification**, and a timestamped entry in a live **Switches** log.
+  **"Accept new baseline"** re-pins to the current fingerprint and stops re-alerting.
+- **Entry points**: the landing "Watch a service for a silent swap" CTA now opens
+  `/watch`; a **"Watch this"** button appears on a finished probe result; and each
+  **Local-run-history** row gets a **watch** link. Each pre-fills the target
+  (`base_url`/`model`/paths) — **never** the API key or session cookie (those would
+  leak into browser history / server logs from a URL).
+- **`/api/run` now also returns `fingerprint_id`** (the same value `/api/history`
+  already exposes) so the client can display the pinned baseline id without a second
+  round-trip. Purely additive; no secret is added to the response.
+
+### Security properties (verified by tests + review)
+- **The API key is held in the browser only** — in memory for the life of the tab,
+  posted **solely** to `/api/assess` for each probe, and **never** written to server
+  storage or to `localStorage`/`sessionStorage`, and never placed in a URL. The
+  server continues to store only `base_url` in its run record and never echoes the
+  key.
+- **No DOM-XSS**: every probe-derived value (`monitor.diff` change severity/field/
+  detail/implication, fingerprint ids, timestamps) and user string is HTML-escaped
+  before it touches `innerHTML`; the Switches log uses `textContent`. (Does not
+  reintroduce the #53 echoed-value DOM-XSS.)
+- **Fast, cheap re-checks**: the watch spec defaults **behavioral + deception OFF**
+  (fingerprint drift is a tokenizer+wire signal), so a re-check is quick and low-cost.
+- **Egress guard intact**: each re-probe goes through `/api/assess`, so in
+  public-hosting mode (`PROVENANCE_PROBE_BLOCK_PRIVATE`) a private target is still
+  refused. **No new server endpoint, no new outbound request path** — nothing depends
+  on a server daemon or stored keys, which is exactly why it works on the hosted demo.
+- **The async poll can't wedge**: per-probe polling is bounded (attempt ceiling,
+  always clears its interval) and a `busy` guard prevents overlapping probes.
+
+### Security
+- **Closed a credential-leak path** surfaced while hardening this feature (which
+  runs unattended for hours, re-sending the key every tick): a pasted API key or
+  session cookie carrying a stray newline / leading-trailing whitespace (a common
+  clipboard/`.env` artifact) made `requests` raise `InvalidHeader` with the **raw
+  secret in the exception message**, which the client swallowed into `Response.err`
+  and then **persisted verbatim** into the on-disk report (served by
+  `GET /report/<name>`). Fixed at the root in `Target.headers()` by sanitizing every
+  caller-supplied header value (strip surrounding whitespace, drop control
+  characters) so the secret can never reach header validation; added defense-in-depth
+  redaction of any credential value from `Response.err` in `client.py`; and the watch
+  form trims the key client-side. Protects the pre-existing `/api/assess` and CLI
+  paths too — not just the new watch loop.
+
+### Changed
+- `explain.py` "Watching for model swaps" primer rewritten for the client-side watch
+  (key stays in your browser, keep the tab open, always-on options: run locally — a
+  background watcher is coming — or use the Observatory). Rendered on `/help`.
+
+### Out of scope (P3)
+- The **local always-on background watcher** + registry + webhook. P2 is browser-only.
+
 ## [0.21.0] - 2026-08-06 — Make the mission clear + automated capture discoverable (P1 / #62)
 
 Content/UX only — **no engine, scoring, egress, auth, or route behaviour changed.**
