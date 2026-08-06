@@ -247,6 +247,9 @@ def api_run(rid):
         b = st["bundle"]
         out["user_warning"] = b["user_warning"]
         out["score"] = b["score"]
+        # Backend fingerprint (same value /api/history exposes) so the client-side
+        # watch can display the pinned baseline id without a second round-trip.
+        out["fingerprint_id"] = b.get("fingerprint_id", "")
         out["deception"] = (b.get("deception") or {}).get("correlation")
         out["confrontation"] = (b.get("deception") or {}).get("confrontation")
         out["tokenizer_match"] = (b.get("tokenizer_match") or [])[:5]
@@ -395,6 +398,28 @@ def help_page():
     return Response(_doc("Help · provenance-probe", explain.help_html(),
                          right=_ui_nav("/help")),
                     mimetype="text/html")
+
+
+@app.get("/watch")
+def watch_page():
+    """Client-side 'watch a service for a silent swap' (P2, #64).
+
+    The timer loop, the pinned baseline, AND the API key all live in the browser
+    tab (in memory) — the key is posted only to /api/assess for each re-probe and
+    is NEVER written to server storage or to localStorage. Each re-check reuses the
+    existing endpoints with NO new detection logic:
+
+        POST /api/assess  ->  GET /api/run/<rid>  ->  POST /api/monitor
+
+    with behavioral/deception OFF (fingerprint drift is a tokenizer+wire signal, so
+    the slow/costly behavioral battery is skipped). On hosted deployments the egress
+    guard governs every re-probe transitively via /api/assess (a private target is
+    refused). Behind the global auth gate like every route."""
+    obs_url = os.environ.get("PROVENANCE_OBSERVATORY_URL",
+                             "https://lobster-shrimp.github.io/provenance-observatory/")
+    doc = _doc("Watch · provenance-probe", WATCH_PAGE, right=_ui_nav()) \
+        .replace("__OBSERVATORY_URL__", html.escape(obs_url))
+    return Response(doc, mimetype="text/html")
 
 
 @app.get("/")
@@ -1590,11 +1615,11 @@ PAGE = r"""<section style="margin-bottom:24px">
  <div class="card job rec">
   <span class="tag">Set up a watch</span>
   <h2>Watch a service for a silent swap</h2>
-  <p>Fingerprint a service you rely on so you can re-check it over time and catch a quiet
-  model swap. Start by capturing the service &mdash; from your own browser, no keys.</p>
-  <p class="pick"><a href="/wizard"><button type="button">Watch a service &rarr;</button></a></p>
-  <p class="needs">Unattended, always-on watching is coming. For now this captures the
-  service so you can re-check and compare it on the Monitor panel below.</p>
+  <p>Pin a fingerprint of a service you rely on and let this page re-check it on a timer,
+  alerting the moment the model behind the API changes. Your API key stays in your browser.</p>
+  <p class="pick"><a href="/watch"><button type="button">Watch a service &rarr;</button></a></p>
+  <p class="needs">Runs while this tab stays open. Unattended, always-on watching is coming
+  (run it locally, or use the Observatory).</p>
  </div>
 </div>
 
@@ -1735,9 +1760,29 @@ function poll(rid){
    (d.status||'')+'</pre></div>'}});
 }
 function esc(s){return (s||'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}
+// "Watch this" hand-off: carry the target config (NOT the key or cookie) to the
+// client-side watch page via the query string, so the operator lands one step from
+// pinning a baseline. The API key/cookie are collected fresh in the browser on
+// /watch and never travel through a URL (would leak into history/server logs).
+function watchThis(){
+ const p=new URLSearchParams();
+ const add=(k,id)=>{const v=($(id).value||'').trim();if(v)p.set(k,v)};
+ add('base_url','base_url');add('model','model');add('name','name');
+ p.set('api_style',$('api_style').value);
+ if($('api_style').value==='template'){
+  add('chat_path','chat_path');add('models_path','models_path');
+  add('request_template','request_template');add('response_text_path','response_text_path');
+  add('response_prompt_tokens_path','response_prompt_tokens_path');
+  add('response_model_path','response_model_path');
+  add('stream_mode','stream_mode');add('stream_delta_path','stream_delta_path');
+ }
+ location.href='/watch?'+p.toString();
+}
 function render(d,rid){
  const w=d.user_warning||{},s=d.score||{};
- let h='<div class="ban '+w.level+'"><div class=lvl>'+esc(w.level_label)+'</div>'+
+ let h='<div class="row" style="margin:0 0 12px"><button type="button" onclick="watchThis()">'+
+  'Watch this target for a swap &rarr;</button></div>';
+ h+='<div class="ban '+w.level+'"><div class=lvl>'+esc(w.level_label)+'</div>'+
   '<h2>'+esc(w.headline)+'</h2><ul>'+(w.facts||[]).map(f=>'<li>'+esc(f)+'</li>').join('')+
   '</ul></div>';
  h+='<div class=card><h3>What to do</h3><ul>'+(w.actions||[]).map(a=>'<li>'+esc(a)+'</li>').join('')+'</ul></div>';
@@ -1771,7 +1816,9 @@ function loadHist(){
    esc(r.name)+'</td><td class=mono>'+esc(r.url)+'</td><td class=stat>'+esc(r.ts)+
    '</td><td><a href="/report/'+encodeURIComponent(r.file.replace(".json","_USER-WARNING.html"))+
    '" target=_blank>warning</a> · <a href="/report/'+
-   encodeURIComponent(r.file.replace(".json",".html"))+'" target=_blank>technical</a></td></tr>'
+   encodeURIComponent(r.file.replace(".json",".html"))+'" target=_blank>technical</a>'+
+   ' · <a href="/watch?base_url='+encodeURIComponent(r.url)+'&name='+
+   encodeURIComponent(r.name)+'">watch</a></td></tr>'
   ).join('')+'</table>'});
 }
 function fillMon(rows){
@@ -1824,6 +1871,306 @@ function prefillFromQuery(){
 }
 prefillFromQuery();
 loadHist();
+</script>"""
+
+
+# ---------------------------------------------------------------- /watch page ---
+# Client-side "watch a service for a silent swap" (P2, #64). Everything below the
+# form is driven by the browser: the timer loop, the pinned baseline, and the API
+# key live in-memory in this tab only. Each tick reuses POST /api/assess -> GET
+# /api/run/<rid> -> POST /api/monitor (behavioral/deception OFF). The key is posted
+# ONLY to /api/assess and is never written to localStorage/sessionStorage or the
+# server. Every probe-derived / user string is esc()'d before it touches innerHTML
+# (no DOM-XSS — the #53 review found one via echoed values; do not reintroduce it).
+# Only __OBSERVATORY_URL__ is substituted server-side (escaped); no .format().
+WATCH_PAGE = r"""<div class="topnav"><a href="/">&larr; Live probe</a> <a href="/help">Help</a></div>
+<h1>Watch a service for a silent swap</h1>
+<p class="sub">Pin a baseline fingerprint, then this page re-checks the same target on a timer
+and raises a loud alert the moment the served model changes. It reuses the same probe and the
+same diff the CLI uses (<span class=mono>/api/assess</span> &rarr; <span class=mono>/api/run</span>
+&rarr; <span class=mono>/api/monitor</span>) &mdash; no new detection logic.</p>
+
+<div class="keynote"><b>Your API key never leaves this browser.</b> It is held in this tab only
+(in memory), sent solely to the probe for each re-check (<span class=mono>/api/assess</span>), and
+is never written to the server or to your browser's saved storage (no <span class=mono>localStorage</span>).
+Close the tab and it is gone.</div>
+
+<div class="ban yellow"><div class=lvl>Keep this tab open</div>
+<div class=stat style="color:inherit">A browser-tab watch runs <b>only while this tab stays open</b>.
+For always-on, unattended monitoring, <a href="/help">run provenance-probe locally</a>
+(a background watcher is coming) or track the service on the
+<a href="__OBSERVATORY_URL__" target="_blank" rel="noopener noreferrer">Observatory &#8599;</a>.</div></div>
+
+<div class="card" id=cfg>
+ <div class="row grid3">
+  <div><label>Endpoint base URL</label>
+   <input type=text id=base_url placeholder="https://api.vendor.example/v1"></div>
+  <div><label>Model id</label><input type=text id=model placeholder="vendor-flagship-1"></div>
+  <div><label>API style</label><select id=api_style onchange="toggleTmpl()">
+    <option value=openai>openai</option><option value=anthropic>anthropic</option>
+    <option value=template>template (web app)</option></select></div>
+ </div>
+ <div id=tmpl class=hide>
+  <div class=stat style="margin:2px 0 12px">Web app / platform tool: paste one request captured from
+   the app's browser traffic. Use <span class=mono>__PROMPT__</span> where the message text goes, and
+   tell it where the reply lives with the response paths below.</div>
+  <div class="row grid">
+   <div><label>Chat path</label><input type=text id=chat_path placeholder="/api/paas/v4/chat/completions"></div>
+   <div><label>Models path (optional)</label><input type=text id=models_path placeholder="/api/paas/v4/models"></div>
+  </div>
+  <div class=row><label>Request template (JSON, use __PROMPT__)</label>
+   <textarea id=request_template rows=6 style="width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:7px;font:13px ui-monospace,monospace;background:#fcfcfd"
+    placeholder='{"model":"glm-4.6","messages":[{"role":"user","content":"__PROMPT__"}],"max_tokens":"__MAX_TOKENS__"}'></textarea></div>
+  <div class="row grid3">
+   <div><label>Response text path</label><input type=text id=response_text_path placeholder="choices.0.message.content"></div>
+   <div><label>Prompt-tokens path (opt)</label><input type=text id=response_prompt_tokens_path placeholder="usage.prompt_tokens"></div>
+   <div><label>Model path (opt)</label><input type=text id=response_model_path placeholder="model"></div>
+  </div>
+  <div class="row grid3">
+   <div><label>Session cookie (stays in this browser)</label><input type=password id=cookie placeholder="session=…"></div>
+   <div><label>Stream mode</label><select id=stream_mode><option value=none>none</option><option value=sse>sse</option></select></div>
+   <div><label>SSE delta path</label><input type=text id=stream_delta_path placeholder="choices.0.delta.content"></div>
+  </div>
+ </div>
+ <div class="row grid">
+  <div><label>Label</label><input type=text id=name placeholder="vendor-under-test"></div>
+  <div><label>API key (optional, stays in this browser)</label>
+   <input type=password id=api_key placeholder="sk-…"></div>
+ </div>
+ <div class="row grid">
+  <div><label>Re-check every</label><select id=interval>
+    <option value=5>5 minutes</option><option value=15 selected>15 minutes</option>
+    <option value=60>60 minutes</option></select></div>
+  <div style="display:flex;align-items:center;margin-top:22px"><label
+    style="text-transform:none;letter-spacing:0;color:var(--ink);font-weight:400;margin:0;font-size:14px">
+    <input type=checkbox id=notify style="width:auto;margin-right:8px;vertical-align:middle">
+    Desktop notification on a switch (asks browser permission)</label></div>
+ </div>
+ <div class="row chk"><input type=checkbox id=authorized>
+  <span>I confirm I am authorized to test this endpoint, and to re-check it automatically on a timer.</span></div>
+ <button id=go onclick=startWatch()>Pin baseline &amp; start watching</button>
+ <button id=stop onclick=stopWatch() class=hide style="margin-left:8px;background:var(--muted)">Stop watching</button>
+</div>
+
+<div id=alert></div>
+
+<div class="card">
+ <h3 style="margin-top:0">Watch status</h3>
+ <div><span id=pill class=pill>idle</span></div>
+ <div id=status class=stat style="margin-top:10px">Not watching yet. Fill in the target, confirm authorization, and press start.</div>
+ <div id=baseinfo class=stat style="margin-top:6px"></div>
+ <div id=checkinfo class=stat style="margin-top:6px"></div>
+</div>
+
+<div class="card">
+ <h3 style="margin-top:0">Switches</h3>
+ <div id=noswitch class=stat>No switches detected yet.</div>
+ <ul id=swlog class=swlog></ul>
+</div>
+
+<script>
+const $=i=>document.getElementById(i);
+// Escape EVERY value that reaches innerHTML (probe-derived or user-entered).
+function esc(s){return (s==null?'':String(s)).replace(/[<>&"']/g,c=>(
+ {'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]))}
+const BASE_TITLE=document.title;
+const ALERT_TITLE='⚠ MODEL SWITCH — provenance-probe';
+const FLOOR_MS=5*60*1000;               // never re-probe faster than every 5 min
+// All watch state lives HERE, in memory, for this tab only. Never persisted.
+let session=null;      // {spec, intervalMs, notify}
+let timer=null;        // setInterval handle for the re-check loop
+let busy=false;        // a probe is in flight — never stack/overlap (no wedge)
+let baseFile='', baseFp='';   // the pinned baseline (report filename + fingerprint)
+let lastFile='', lastFp='';   // most recent completed re-check
+function toggleTmpl(){$('tmpl').classList.toggle('hide',$('api_style').value!=='template')}
+
+// Build the probe spec from the form. Behavioral AND deception are OFF: fingerprint
+// drift is a tokenizer+wire signal, so the slow/costly behavioral battery is skipped
+// for a fast, cheap re-check (the watch default). Returns null on a validation miss.
+function buildSpec(){
+ const spec={base_url:$('base_url').value.trim(),model:$('model').value.trim(),
+  name:$('name').value.trim()||'target',api_style:$('api_style').value,
+  api_key:$('api_key').value.trim(),
+  no_behavioral:true,no_deception:true,authorized:true};
+ if($('api_style').value==='template'){
+  spec.chat_path=$('chat_path').value.trim();
+  spec.models_path=$('models_path').value.trim();
+  spec.request_template=$('request_template').value.trim();
+  spec.response_text_path=$('response_text_path').value.trim();
+  spec.response_prompt_tokens_path=$('response_prompt_tokens_path').value.trim();
+  spec.response_model_path=$('response_model_path').value.trim();
+  spec.cookie=$('cookie').value;
+  spec.stream_mode=$('stream_mode').value;
+  spec.stream_delta_path=$('stream_delta_path').value.trim();
+  if(!spec.request_template){alert('Request template required for web-app (template) mode.');return null}
+  if(!spec.response_text_path){alert('Response text path required for template mode.');return null}
+ }
+ if(!spec.base_url){alert('Endpoint base URL required.');return null}
+ return spec;
+}
+
+// One probe: POST /api/assess, then poll /api/run/<rid> to completion. Resolves with
+// {file, fp, level, headline}. Polling is BOUNDED (attempts cap) and always clears its
+// own interval on done/error/timeout, so a hung run can never wedge the watch loop.
+function probeOnce(spec){
+ return new Promise((resolve,reject)=>{
+  fetch('/api/assess',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify(spec)}).then(r=>r.json()).then(d=>{
+    if(d.error||!d.run_id){reject(new Error(d.error||'assess failed'));return}
+    let n=0;const MAX=200;   // ~200 * 1.2s ≈ 4 min ceiling per probe
+    const iv=setInterval(()=>{
+     if(++n>MAX){clearInterval(iv);reject(new Error('probe timed out'));return}
+     fetch('/api/run/'+encodeURIComponent(d.run_id)).then(r=>r.json()).then(s=>{
+      if(s.state==='done'){
+       clearInterval(iv);
+       const jp=(s.files&&s.files.json)||'';
+       const file=jp.split('/').pop().split('\\').pop();   // basename, cross-platform
+       if(!file){reject(new Error('no report file'));return}
+       const w=s.user_warning||{};
+       resolve({file:file,fp:(s.fingerprint_id||''),level:w.level||'',headline:w.headline||''});
+      }else if(s.state==='error'){clearInterval(iv);reject(new Error(s.status||'probe error'))}
+     }).catch(e=>{clearInterval(iv);reject(e)});
+    },1200);
+   }).catch(reject);
+ });
+}
+
+function pill(text,cls){const p=$('pill');p.textContent=text;p.className='pill'+(cls?' '+cls:'')}
+
+function startWatch(){
+ if(!$('authorized').checked){alert('Confirm authorization first.');return}
+ const spec=buildSpec(); if(!spec)return;
+ const mins=parseInt($('interval').value,10)||15;
+ session={spec:spec,intervalMs:Math.max(mins*60*1000,FLOOR_MS),notify:$('notify').checked};
+ // Ask for notification permission now, on this user gesture (permission-gated).
+ if(session.notify&&'Notification'in window&&Notification.permission==='default'){
+  try{Notification.requestPermission()}catch(e){}
+ }
+ $('go').disabled=true;$('stop').classList.remove('hide');
+ pill('pinning baseline…','on');
+ $('status').textContent='Running the first probe to pin a baseline…';
+ busy=true;
+ probeOnce(spec).then(r=>{
+  baseFile=r.file;baseFp=r.fp;lastFile=r.file;lastFp=r.fp;
+  $('baseinfo').innerHTML='Baseline pinned: <span class=mono>'+esc((baseFp||'—').slice(0,16))+
+   '</span> ('+esc(r.file)+')';
+  pill('watching','on');
+  $('status').textContent='Watching. Re-checking every '+Math.round(session.intervalMs/60000)+
+   ' min (behavioral + deception off for a fast, cheap re-check).';
+  scheduleNext();
+ }).catch(e=>{
+  pill('idle');$('status').textContent='Could not pin a baseline: '+e.message;
+  $('go').disabled=false;$('stop').classList.add('hide');session=null;
+ }).finally(()=>{busy=false});
+}
+
+function scheduleNext(){
+ if(!session)return;
+ if(timer)clearInterval(timer);
+ timer=setInterval(runTick,session.intervalMs);
+ const eta=new Date(Date.now()+session.intervalMs);
+ $('checkinfo').textContent='Next check around '+eta.toLocaleTimeString();
+}
+
+// Each interval tick applies a little jitter (0–30s) before probing so re-checks
+// don't fall on a perfectly predictable cadence, then re-probes IF not already busy.
+function runTick(){
+ if(!session)return;
+ const jitter=Math.floor(Math.random()*Math.min(session.intervalMs*0.1,30000));
+ setTimeout(tick,jitter);
+}
+
+function tick(){
+ if(!session||busy)return;   // skip if a probe is still in flight (no overlap/wedge)
+ busy=true;pill('re-checking…','on');
+ $('status').textContent='Re-checking the target…';
+ probeOnce(session.spec).then(r=>{
+  lastFile=r.file;lastFp=r.fp;
+  return fetch('/api/monitor',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({baseline:baseFile,current:r.file})}).then(x=>x.json());
+ }).then(d=>{
+  if(d.error){$('status').textContent='Diff error: '+d.error;pill('watching','on');return}
+  const when=new Date().toLocaleString();
+  if(d.drift_detected){fireAlert(d,when)}
+  else{
+   pill('watching','on');
+   $('status').textContent='No drift as of '+when+'. Backend fingerprint stable.';
+  }
+ }).catch(e=>{
+  pill('watching','on');$('status').textContent='Re-check failed (will retry next tick): '+e.message;
+ }).finally(()=>{busy=false;scheduleNext()});
+}
+
+// LOUD, unmissable alert: red banner + tab-title change + optional desktop
+// notification + a Switches log entry. Everything rendered is esc()'d.
+function fireAlert(d,when){
+ pill('switch detected','alarm');
+ document.title=ALERT_TITLE;
+ const changes=d.changes||[];
+ let h='<div class="ban red alarm"><div class=lvl>Model switch detected</div>'+
+  '<h2>'+esc(changes.length)+' change'+(changes.length===1?'':'s')+' since baseline</h2>'+
+  '<div class=stat style="color:inherit">baseline '+esc((baseFp||'—').slice(0,16))+
+  ' &rarr; now '+esc((lastFp||'—').slice(0,16))+' · '+esc(when)+'</div>'+
+  '<table style="margin-top:10px"><tr><th>Severity</th><th>Field</th><th>Detail</th></tr>'+
+  changes.map(c=>'<tr><td><span class="sev '+esc(c.severity)+'">'+esc(c.severity)+'</span></td>'+
+   '<td class=mono>'+esc(c.field)+'</td><td>'+esc(c.detail)+
+   (c.implication?'<div class=stat>'+esc(c.implication)+'</div>':'')+'</td></tr>').join('')+
+  '</table><p style="margin:12px 0 0"><button type=button onclick=acceptBaseline()>'+
+  'Accept new baseline (re-pin &amp; stop re-alerting)</button></p></div>';
+ $('alert').innerHTML=h;
+ $('status').textContent='SWITCH DETECTED at '+when+'. Review the change below.';
+ appendSwitch(when,changes,false);
+ if(session&&session.notify&&'Notification'in window&&Notification.permission==='granted'){
+  try{new Notification('⚠ Model switch detected',
+   {body:changes.length+' change(s) on '+(session.spec.name||'target')})}catch(e){}
+ }
+}
+
+function appendSwitch(when,changes,rebaseline){
+ $('noswitch').style.display='none';
+ const li=document.createElement('li');
+ if(rebaseline)li.className='rebaseline';
+ const summary=rebaseline?'New baseline accepted — re-pinned to '+((lastFp||'—').slice(0,16))
+  :(changes||[]).map(c=>c.severity+': '+c.field).join(', ');
+ // textContent (not innerHTML) — the values are inert text, never markup.
+ const w=document.createElement('span');w.className='when';w.textContent=when;
+ const b=document.createElement('div');b.textContent=summary;
+ li.appendChild(w);li.appendChild(b);
+ $('swlog').insertBefore(li,$('swlog').firstChild);
+}
+
+function acceptBaseline(){
+ baseFile=lastFile;baseFp=lastFp;
+ $('alert').innerHTML='';
+ document.title=BASE_TITLE;
+ $('baseinfo').innerHTML='Baseline re-pinned: <span class=mono>'+esc((baseFp||'—').slice(0,16))+'</span>';
+ appendSwitch(new Date().toLocaleString(),null,true);
+ if(session){pill('watching','on');$('status').textContent='New baseline accepted. Watching again.'}
+ else{pill('idle')}
+}
+
+function stopWatch(){
+ if(timer)clearInterval(timer);timer=null;session=null;busy=false;
+ document.title=BASE_TITLE;
+ pill('idle');$('status').textContent='Watch stopped. Your key is not stored anywhere.';
+ $('checkinfo').textContent='';
+ $('go').disabled=false;$('stop').classList.add('hide');
+}
+
+// Pre-fill the target from a "Watch this" hand-off (landing result / history row).
+// NB: base_url/model/paths only — the key and cookie are NEVER in the URL.
+function prefillFromQuery(){
+ const q=new URLSearchParams(location.search);
+ if(![...q.keys()].length)return;
+ const set=(id,k)=>{const v=q.get(k);if(v!=null&&$(id))$(id).value=v};
+ set('base_url','base_url');set('model','model');set('name','name');
+ const st=q.get('api_style');
+ if(st&&$('api_style')){$('api_style').value=st;toggleTmpl()}
+ ['chat_path','models_path','request_template','response_text_path',
+  'response_prompt_tokens_path','response_model_path','stream_mode',
+  'stream_delta_path'].forEach(k=>set(k,k));
+}
+prefillFromQuery();
 </script>"""
 
 

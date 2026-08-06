@@ -1,8 +1,26 @@
 """Target configuration and scope control."""
 from __future__ import annotations
-import json, os
+import json, os, re
 from dataclasses import dataclass, field, asdict, fields
 from typing import Any
+
+# Control characters (C0 + DEL) are never valid in an HTTP header value.
+_HEADER_CTRL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _clean_header_value(v: str) -> str:
+    """Strip surrounding whitespace and drop control characters from a header value.
+
+    CR/LF/NUL and other control characters cannot appear in a valid HTTP header
+    value. If a pasted credential or session cookie carries a stray newline or
+    leading/trailing whitespace (a very common clipboard/.env artifact), ``requests``
+    raises ``InvalidHeader`` whose message embeds the RAW value — which the client's
+    ``except`` handlers swallow into ``Response.err`` and then persist verbatim into
+    the on-disk report bundle (and serve back via ``/report/<name>``). Neutralising
+    the value at the single point every caller builds its headers closes that secret
+    leak at the source, and never weakens a legitimate value (a real header value
+    can't contain these bytes anyway)."""
+    return _HEADER_CTRL.sub("", (v or "").strip())
 
 
 @dataclass
@@ -50,14 +68,19 @@ class Target:
 
     def headers(self) -> dict[str, str]:
         h = {"Content-Type": "application/json", "Accept": "application/json"}
-        h.update(self.extra_headers)
+        # Sanitize every caller-supplied header value (auth token, session cookie,
+        # any extra header) so a stray newline/whitespace in a pasted secret can
+        # never trigger requests' InvalidHeader — whose message would echo the raw
+        # secret into Response.err and, from there, into the persisted report.
+        for k, v in self.extra_headers.items():
+            h[k] = _clean_header_value(v) if isinstance(v, str) else v
         if self.auth_value_env:
             tok = os.environ.get(self.auth_value_env, "")
             if tok:
-                h[self.auth_header] = f"{self.auth_prefix}{tok}"
+                h[self.auth_header] = f"{self.auth_prefix}{_clean_header_value(tok)}"
         cookie = self.cookie or (os.environ.get(self.cookie_env, "") if self.cookie_env else "")
         if cookie:
-            h["Cookie"] = cookie
+            h["Cookie"] = _clean_header_value(cookie)
         if self.api_style == "anthropic":
             h.setdefault("anthropic-version", "2023-06-01")
         return h

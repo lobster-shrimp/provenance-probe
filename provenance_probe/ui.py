@@ -195,6 +195,24 @@ figure.demo.noimg figcaption::before{content:"\1F3AC  "}
 .sev.critical{background:#fbe9e7;color:var(--coral)}
 .sev.high{background:#fbeede;color:var(--amber)}
 .sev.medium{background:#fbf3dd;color:#7a5a12}
+/* client-side watch (/watch): live status pill, key-privacy note, switches log */
+.pill{display:inline-block;font:600 11px var(--ui);letter-spacing:.08em;text-transform:uppercase;
+ padding:4px 10px;border-radius:99px;border:1px solid var(--line);color:var(--muted);background:var(--surface)}
+.pill.on{border-color:var(--green);color:var(--green);background:#e7f2ea}
+.pill.on::before{content:"";display:inline-block;width:7px;height:7px;border-radius:99px;
+ background:var(--green);margin-right:7px;vertical-align:middle;animation:pulse 1.6s ease-in-out infinite}
+.pill.alarm{border-color:var(--coral);color:var(--coral);background:#fbe9e7}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.keynote{background:#e7f2ea;border:1px solid #bcd8c4;color:var(--green);padding:12px 14px;
+ border-radius:9px;margin:.4rem 0;font-size:13px}
+.keynote b{font-weight:600}
+.ban.red.alarm{animation:flash 1.1s ease-in-out 3}
+@keyframes flash{0%,100%{box-shadow:0 0 0 0 rgba(210,72,63,0)}50%{box-shadow:0 0 0 5px rgba(210,72,63,.28)}}
+.swlog{list-style:none;padding:0;margin:8px 0 0}
+.swlog li{border:1px solid var(--line);border-left:4px solid var(--coral);border-radius:9px;
+ padding:10px 13px;margin:0 0 8px;background:var(--surface);font-size:14px}
+.swlog li.rebaseline{border-left-color:var(--green)}
+.swlog .when{font:12px var(--mono);color:var(--muted);display:block;margin-bottom:3px}
 /* lab-report specifics (report.py) */
 .stamp{border:2px solid;border-radius:12px;padding:12px 18px;text-align:left;min-width:180px}
 .stamp .lvl{display:block;margin-bottom:4px}

@@ -199,21 +199,26 @@ WHY_THIS_MATTERS: "tuple[str, ...]" = (
     "moved with it.")
 
 # "Watching for model swaps" — a short primer on catching a swap over time. Honest
-# about what ships today (you drive the re-check) versus what is coming (later
-# phases: an always-on watch).
+# about what ships today (a browser-tab watch you keep open) versus what is coming
+# (a later-phase always-on background watcher).
 WATCHING_PRIMER: "tuple[str, ...]" = (
     "Catching a swap is a matter of comparison. Fingerprint the service once to set "
     "a baseline, then fingerprint it again later. If the two fingerprints disagree, "
     "the model behind the API changed between the runs.",
-    "In the tool today you drive that comparison yourself: run the probe before and "
-    "after something that might trigger a swap — a new contract, a price change, an "
-    "outage — and line the two runs up on the Monitor panel. It reports exactly what "
-    "shifted: the fingerprint, the tokenizer shape, the error format, the verdicts "
-    "and the timing.",
-    "Unattended, always-on watching — where the tool re-checks a service on a "
-    "schedule and alerts you the moment a fingerprint moves — is on the roadmap. For "
-    "now, the first step is to capture the service you want to watch so you have a "
-    "baseline to compare against.")
+    "The Watch page does that comparison for you on a timer. You pin a baseline, "
+    "pick how often to re-check (every 5, 15 or 60 minutes), and the page re-probes "
+    "the same target and diffs each result against the baseline. The moment the "
+    "fingerprint moves it raises a loud alert — a red banner, a change to the browser "
+    "tab title, and an optional desktop notification — and lists exactly what shifted. "
+    "'Accept new baseline' re-pins to the current fingerprint and stops re-alerting.",
+    "Your API key never leaves your browser. It is held in this tab only (in memory), "
+    "sent solely to the probe for each re-check, and is never written to server "
+    "storage or to your browser's saved data — which is what lets the watch run the "
+    "same way on the hosted demo as it does locally.",
+    "One honest limit: a browser-tab watch only runs while the tab stays open. For "
+    "always-on, unattended monitoring, run provenance-probe locally (a background "
+    "watcher is coming) or track the service on the public Observatory, which watches "
+    "well-known endpoints continuously.")
 
 # Plain-language tour of each flow in the web UI, in nav order.
 FLOWS: "tuple[tuple[str, str], ...]" = (

@@ -166,6 +166,25 @@ class Client:
         if egress.guard_enabled():
             egress.install_guard(self.s)
 
+    def _safe_err(self, msg: str) -> str:
+        """Redact any credential-bearing header value from a transport error string
+        before it becomes ``Response.err``.
+
+        Defense-in-depth for the leak closed at its root in ``Target.headers()``:
+        ``Response.err`` is persisted into the report bundle and served by
+        ``/report/<name>``, so it must never echo an auth token or session cookie —
+        even if some future ``requests`` exception embeds a header value. The
+        always-safe headers (content negotiation / API version) are left intact."""
+        try:
+            for k, v in self.t.headers().items():
+                if k in ("Content-Type", "Accept", "anthropic-version"):
+                    continue
+                if isinstance(v, str) and len(v) >= 4 and v in msg:
+                    msg = msg.replace(v, "[redacted]")
+        except Exception:
+            pass
+        return msg
+
     def _paths(self) -> dict:
         t = self.t
         return {"text": getattr(t, "response_text_path", ""),
@@ -274,7 +293,7 @@ class Client:
             return Response(r.status_code, dict(r.headers), body, raw,
                             ttft, time.perf_counter() - start, paths=paths)
         except Exception as e:
-            return Response(0, {}, None, "", None, time.perf_counter() - start, str(e))
+            return Response(0, {}, None, "", None, time.perf_counter() - start, self._safe_err(str(e)))
 
     def raw_post(self, path: str, payload: dict) -> Response:
         t = self.t
@@ -289,7 +308,7 @@ class Client:
             return Response(r.status_code, dict(r.headers), body, r.text,
                             None, time.perf_counter() - start)
         except Exception as e:
-            return Response(0, {}, None, "", None, time.perf_counter() - start, str(e))
+            return Response(0, {}, None, "", None, time.perf_counter() - start, self._safe_err(str(e)))
 
     def list_models(self) -> Response:
         t = self.t
@@ -304,4 +323,4 @@ class Client:
             return Response(r.status_code, dict(r.headers), body, r.text,
                             None, time.perf_counter() - start)
         except Exception as e:
-            return Response(0, {}, None, "", None, time.perf_counter() - start, str(e))
+            return Response(0, {}, None, "", None, time.perf_counter() - start, self._safe_err(str(e)))
