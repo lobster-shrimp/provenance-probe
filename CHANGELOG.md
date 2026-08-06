@@ -41,6 +41,42 @@
   `extension/package.json` at `0.1.0`); this change ships **no Python code
   changes**, so the `provenance_probe` package version is intentionally unchanged.
 
+## [0.21.0] - 2026-08-06 — Make the mission clear + automated capture discoverable (P1 / #62)
+
+Content/UX only — **no engine, scoring, egress, auth, or route behaviour changed.**
+The goal: a first-time, non-technical visitor should grasp within seconds that the
+tool catches AI services that silently swap the model behind an API, see the two
+things they can do, and know real services are being watched live.
+
+### Added
+- **Plain-English mission hero on the landing (`/`)** — headline *"Is the AI you're
+  paying for still the AI you're getting?"* plus a jargon-free explanation of the
+  silent-swap threat. The hero copy is the SINGLE source in `explain.py`
+  (`MISSION_HEADLINE` / `MISSION_BODY`), shared with `/help` so the two never drift,
+  and injected into the page escaped.
+- **The two jobs named as the primary choices** — *"See what's answering right now"*
+  (anchors to the existing probe form) and *"Watch a service for a silent swap"* (a
+  prominent CTA to the capture/watch path). The watch card is honest that unattended,
+  always-on watching is a later phase; for now it routes to capture + the Monitor
+  compare panel.
+- **Observatory "see it live" card** — a prominent LINKED card (not a heavy iframe)
+  to the public observatory
+  (`https://lobster-shrimp.github.io/provenance-observatory/`, override with
+  `PROVENANCE_OBSERVATORY_URL`), opened in a new tab with `rel="noopener noreferrer"`.
+- **Two new `/help` sections sourced from `explain.py`** — *"Why this matters"* (the
+  silent-swap threat in non-technical terms, `WHY_THIS_MATTERS`) and *"Watching for
+  model swaps"* (`WATCHING_PRIMER`), rendered through the escaping `_prose_section`
+  helper.
+
+### Changed
+- **Capture-page UX pass** — the `/wizard` chooser and `/wizard/import` page now lead
+  with the **one-click browser extension** (`extension/`, #54) as the recommended
+  path, with the manual HAR recording kept as the no-install fallback. **Every route,
+  form field id, JS behaviour, and the #53 `/wizard/capture-import` contract are
+  preserved** (the extension link is a trusted internal literal, injected escaped).
+- Landing hero styling: added `.jobs` / `.job` two-choice cards and the `.obs`
+  Observatory linked-card styles to the shared design system (`ui.py`).
+
 ## [0.20.0] - 2026-08-05 — In-product documentation: plain-language `/help`, layer tooltips, verdict explainers
 
 ### Added

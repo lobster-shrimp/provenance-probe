@@ -168,6 +168,53 @@ EXAMPLE = (
     "jurisdiction (a US operator on US soil). Neither answer overrides the other — "
     "read them together.")
 
+# The mission, in plain language — the SINGLE source for the landing hero AND the
+# /help "Why this matters" section, so the two never drift. Honest by design: the
+# tool reports with *confidence*, not certainty — the copy says "catch a silent
+# switch", never "guarantee".
+MISSION_HEADLINE = "Is the AI you're paying for still the AI you're getting?"
+MISSION_BODY = (
+    "Services can quietly swap the model behind an API — for a cheaper, weaker, "
+    "or foreign-built one — without telling you. provenance-probe fingerprints "
+    "the model that's actually answering, then re-checks over time so you catch "
+    "a silent switch.")
+
+# "Why this matters" — the silent-swap threat spelled out for a non-technical
+# reader. Rendered on /help; the landing hero shows the short MISSION_BODY above.
+WHY_THIS_MATTERS: "tuple[str, ...]" = (
+    "When you pay for an AI API, you are trusting that one particular model is on "
+    "the other end. But nothing stops the service from changing the model behind "
+    "that same address — swapping in one that is cheaper to run, less capable, or "
+    "built in another country — while your app keeps calling the very same URL, "
+    "none the wiser. That is a silent model swap.",
+    "It matters because the swap is invisible from the outside. A weaker model can "
+    "quietly degrade the answers you depend on. A model run by a different operator, "
+    "or built in another country, can change who is able to see your prompts and "
+    "which country's laws apply to them. You approved one thing and are being served "
+    "another, without ever being told.",
+    "provenance-probe fingerprints the model that is actually answering — from the "
+    "way it chops up text, the shape of its replies, where its servers sit, and how "
+    "it answers a fixed set of questions. Re-run that fingerprint over time and a "
+    "swap can no longer hide: if the fingerprint moves, the model behind the API "
+    "moved with it.")
+
+# "Watching for model swaps" — a short primer on catching a swap over time. Honest
+# about what ships today (you drive the re-check) versus what is coming (later
+# phases: an always-on watch).
+WATCHING_PRIMER: "tuple[str, ...]" = (
+    "Catching a swap is a matter of comparison. Fingerprint the service once to set "
+    "a baseline, then fingerprint it again later. If the two fingerprints disagree, "
+    "the model behind the API changed between the runs.",
+    "In the tool today you drive that comparison yourself: run the probe before and "
+    "after something that might trigger a swap — a new contract, a price change, an "
+    "outage — and line the two runs up on the Monitor panel. It reports exactly what "
+    "shifted: the fingerprint, the tokenizer shape, the error format, the verdicts "
+    "and the timing.",
+    "Unattended, always-on watching — where the tool re-checks a service on a "
+    "schedule and alerts you the moment a fingerprint moves — is on the roadmap. For "
+    "now, the first step is to capture the service you want to watch so you have a "
+    "baseline to compare against.")
+
 # Plain-language tour of each flow in the web UI, in nav order.
 FLOWS: "tuple[tuple[str, str], ...]" = (
     ("Live probe",
@@ -222,6 +269,18 @@ def _layers_table() -> str:
             f'{rows}</table></div>')
 
 
+def _prose_section(heading: str, paras: "tuple[str, ...]", *, top: int = 30) -> str:
+    """A plain-prose /help section (heading + escaped paragraphs), used for the
+    non-technical 'Why this matters' and 'Watching for model swaps' copy. Every
+    paragraph is passed through html.escape — the copy is author-controlled, but
+    escaping keeps it inert (defense-in-depth, like the rest of this module)."""
+    e = html.escape
+    body = "".join(
+        f'<p style="max-width:64ch;margin:0 0 12px;font-size:15px">{e(p)}</p>'
+        for p in paras)
+    return f'<h2 style="margin-top:{top}px">{e(heading)}</h2>{body}'
+
+
 def _verdict_block(axis: Axis) -> str:
     e = html.escape
     rows = "".join(
@@ -254,7 +313,12 @@ def help_html() -> str:
         'endpoint and tells you two things in plain language: whose model is really '
         'answering, and who is running it. Here is what every part does — no jargon.</p>'
 
-        '<h2 style="margin-top:26px">The tools, one by one</h2>'
+        # The plain-language mission first: the silent-swap threat and how to watch
+        # for it. Both sections are sourced from the single-source constants above.
+        + _prose_section("Why this matters", WHY_THIS_MATTERS, top=26)
+        + _prose_section("Watching for model swaps", WATCHING_PRIMER) +
+
+        '<h2 style="margin-top:30px">The tools, one by one</h2>'
         + flows +
 
         '<h2 style="margin-top:30px">What each check does</h2>'

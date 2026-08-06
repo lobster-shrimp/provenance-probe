@@ -150,6 +150,26 @@ ol.guide li{margin:.4rem 0}
 .chooser .pick{margin-top:auto}
 .chooser .rec{border-color:var(--green);box-shadow:0 0 0 3px rgba(14,59,46,.10)}
 @media(max-width:820px){.chooser{grid-template-columns:1fr}}
+/* landing: the two jobs as side-by-side choice cards (one recommended) */
+.jobs{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:0 0 22px}
+.jobs .job{margin:0;display:flex;flex-direction:column}
+.jobs .job h2{font-size:19px;font-family:var(--serif);font-weight:500;margin:0 0 8px}
+.jobs .job p{margin:0 0 12px;font-size:14px}
+.jobs .job .tag{display:inline-block;font-size:10px;letter-spacing:.12em;
+ text-transform:uppercase;font-weight:700;color:var(--green);margin:0 0 8px}
+.jobs .job.rec{border-color:var(--green);box-shadow:0 0 0 3px rgba(14,59,46,.10)}
+.jobs .job .pick{margin-top:auto}
+.jobs .job .needs{font-size:12px;color:var(--muted);margin:10px 0 0}
+@media(max-width:820px){.jobs{grid-template-columns:1fr}}
+/* landing: observatory "see it live" — a prominent LINKED card, not an iframe */
+a.obs{display:block;text-decoration:none;background:var(--green);border-radius:14px;
+ padding:20px 22px;margin:0 0 26px;transition:transform .15s,box-shadow .15s}
+a.obs:hover{transform:translateY(-1px);box-shadow:0 6px 22px rgba(14,59,46,.18);color:inherit}
+a.obs .tag{display:inline-block;font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+ font-weight:700;color:var(--green-ink);margin:0 0 6px}
+a.obs b{display:block;color:var(--paper);font-family:var(--serif);font-weight:500;
+ font-size:19px;line-height:1.25;margin:0 0 6px}
+a.obs p{margin:0;color:var(--green-ink);font-size:14px}
 /* big numbered visual steps: green counter chips, plain-language body */
 ol.steps{counter-reset:step;list-style:none;padding:0;margin:14px 0}
 ol.steps>li{counter-increment:step;position:relative;padding:2px 0 16px 48px;margin:0;font-size:15px}

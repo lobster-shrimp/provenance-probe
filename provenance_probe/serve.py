@@ -401,14 +401,20 @@ def help_page():
 def index():
     # Defaults to the live public observatory (GitHub Pages). Point at a local
     # observatory (e.g. http://127.0.0.1:8080) with PROVENANCE_OBSERVATORY_URL.
+    from . import explain
     obs_url = os.environ.get("PROVENANCE_OBSERVATORY_URL",
                              "https://lobster-shrimp.github.io/provenance-observatory/")
     nav = ('<nav><a href="/" class="active" style="opacity:1;font-weight:700">Live probe</a>'
            '<a href="/agent">Agent board</a><a href="/wizard">Add target</a>'
            '<a href="/help">Help</a>'
            '<a href="__OBSERVATORY_URL__" target="_blank" rel="noopener noreferrer">Observatory ↗</a></nav>')
-    doc = _doc("provenance-probe", PAGE, right=nav)
-    return Response(doc.replace("__OBSERVATORY_URL__", html.escape(obs_url)), mimetype="text/html")
+    # The hero copy is the SINGLE source in explain.py (shared with /help), escaped
+    # here because it lands in HTML text nodes.
+    doc = (_doc("provenance-probe", PAGE, right=nav)
+           .replace("__MISSION_HEADLINE__", html.escape(explain.MISSION_HEADLINE))
+           .replace("__MISSION_BODY__", html.escape(explain.MISSION_BODY))
+           .replace("__OBSERVATORY_URL__", html.escape(obs_url)))
+    return Response(doc, mimetype="text/html")
 
 
 # Body fragment (rendered inside _doc, which supplies the poster + shared CSS).
@@ -478,9 +484,10 @@ Everything is local &mdash; nothing is sent until you approve. <a href="/">&larr
  <div class="card rec">
   <span class="tag">Option B &middot; easiest &middot; recommended</span>
   <h2>It's a website I log into</h2>
-  <p>It's a chat website you sign in to (like a hosted assistant). You stay logged in
-  in your own browser &mdash; we read one message you send, and your login is never recorded.</p>
-  <p class="needs">You need: to be signed in to the site in your browser. No install, no keys.</p>
+  <p>It's a chat website you sign in to (like a hosted assistant). One click with the capture
+  extension &mdash; or record one message yourself. You stay logged in in your own browser, and
+  your login is never recorded.</p>
+  <p class="needs">You need: to be signed in to the site in your browser. No keys.</p>
   <p class="pick"><a href="/wizard/import"><button type="button">Capture from my browser &rarr;</button></a></p>
  </div>
  <div class="card">
@@ -864,6 +871,12 @@ def wizard_capture_preview(rid):
 
 # Link shown on the wizard in public-hosting mode (where server-side capture is
 # refused) pointing at the no-install client-side import.
+# The one-click browser extension (extension/, #54): the RECOMMENDED capture path.
+# Same client-side capture, header allow-list, cookie-consent and #53 ingest as the
+# HAR uploader — but one click, no file to save. A trusted internal literal.
+_EXTENSION_URL = ("https://github.com/lobster-shrimp/provenance-probe/"
+                  "tree/main/extension")
+
 _IMPORT_UI = (
     '<hr style="margin:1.6rem 0;border:none;border-top:1px solid var(--line)">'
     '<h2 style="font-size:16px">…or capture it yourself (no install)</h2>'
@@ -881,9 +894,17 @@ _IMPORT_UI = (
 _WIZARD_IMPORT_JS = r"""<h1>Import a captured request</h1>
 <p class=sub><a href="/wizard">&larr; back to Add a target</a></p>
 
-<p class=lead style="font-size:17px">What this does: while you stay logged in to your AI
-chat website, your own browser records the one message you send. You save that recording as a
-file and drop it here &mdash; then the probe can test the model that actually answered. No coding.</p>
+<div class="ok" style="border-color:var(--green)">
+<b>Easiest: the one-click capture extension.</b> Install the provenance-probe capture
+extension, open your AI chat, and click <b>Arm capture</b> &mdash; it grabs the one message
+you send and sends it straight here, with no file to save. It captures in your own browser
+and never records your login, exactly like the manual steps below.
+<a href="__EXTENSION_URL__" target="_blank" rel="noopener noreferrer">Get the extension &rarr;</a>
+<span class=sub>Prefer no install? Record it yourself with the steps below.</span></div>
+
+<p class=lead style="font-size:17px">What this does (recording it yourself): while you stay logged in
+to your AI chat website, your own browser records the one message you send. You save that recording
+as a file and drop it here &mdash; then the probe can test the model that actually answered. No coding.</p>
 
 <figure class=demo>
   <img src="/media/capture-import.gif" alt="Screen recording: turning on the Network panel, sending one message, and saving it as a HAR file"
@@ -1083,7 +1104,8 @@ def wizard_import_page():
     """The no-install client-side capture page (#53). Static: it carries no
     server secrets and triggers no egress; all HAR parsing/sanitization happens
     in the browser (only the chosen flow is uploaded). Allowed under the guard."""
-    return Response(_doc("Import a captured request · provenance-probe", _WIZARD_IMPORT_JS),
+    body = _WIZARD_IMPORT_JS.replace("__EXTENSION_URL__", html.escape(_EXTENSION_URL))
+    return Response(_doc("Import a captured request · provenance-probe", body),
                     mimetype="text/html")
 
 
@@ -1549,13 +1571,40 @@ def wizard_save():
 # poster header + shared "Provenance" stylesheet). The JS below drives the
 # verdict banner via the level classes (.ban.red/.orange/.yellow/.green) and the
 # .sev / .card / .mono / .bar classes — all defined in the shared stylesheet.
-PAGE = r"""<section style="margin-bottom:28px">
-<h1 class="display" style="font-size:clamp(36px,6vw,58px);margin:2px 0 16px">A lie detector for AI APIs</h1>
-<p class="lead">Point the probe at any AI endpoint. It runs controlled network, wire, tokenizer and
-behavioral tests, then tells you which model is really answering &mdash; and whether it is
-Chinese-origin or under PRC jurisdiction.</p>
-<p class="stat" style="margin:0">Binds to 127.0.0.1 &middot; nothing leaves this machine except requests to the endpoint you name.</p>
+PAGE = r"""<section style="margin-bottom:24px">
+<p class="seclabel" style="margin:0 0 10px">A lie detector for AI APIs</p>
+<h1 class="display" style="font-size:clamp(32px,5.6vw,54px);margin:2px 0 16px">__MISSION_HEADLINE__</h1>
+<p class="lead">__MISSION_BODY__</p>
+<p class="stat" style="margin:0">Runs on your machine &middot; nothing leaves it except the requests to the endpoint you name.</p>
 </section>
+
+<!-- The two jobs, named plainly: probe now vs. watch over time. -->
+<div class="jobs">
+ <div class="card job">
+  <span class="tag">Do this now</span>
+  <h2>See what&rsquo;s answering right now</h2>
+  <p>Point the probe at an AI endpoint and get a plain-language read on which model is
+  really answering &mdash; and whether it is Chinese-origin or under PRC jurisdiction.</p>
+  <p class="pick"><a href="#probe"><button type="button">Probe an endpoint &darr;</button></a></p>
+ </div>
+ <div class="card job rec">
+  <span class="tag">Set up a watch</span>
+  <h2>Watch a service for a silent swap</h2>
+  <p>Fingerprint a service you rely on so you can re-check it over time and catch a quiet
+  model swap. Start by capturing the service &mdash; from your own browser, no keys.</p>
+  <p class="pick"><a href="/wizard"><button type="button">Watch a service &rarr;</button></a></p>
+  <p class="needs">Unattended, always-on watching is coming. For now this captures the
+  service so you can re-check and compare it on the Monitor panel below.</p>
+ </div>
+</div>
+
+<!-- Observatory: live proof of the mission. A linked card, NOT a heavy iframe. -->
+<a class="obs" href="__OBSERVATORY_URL__" target="_blank" rel="noopener noreferrer">
+ <span class="tag">See it live</span>
+ <b>Real AI services fingerprinted and watched right now &rarr;</b>
+ <p>A public observatory tracks well-known AI services and flags when a fingerprint moves
+ &mdash; the mission running continuously, on endpoints you already recognise.</p>
+</a>
 
 <figure class="demo">
 <img src="/media/probe-demo.gif" alt="Screen recording: entering an endpoint, pressing Run, and watching the plain-language verdict appear"
@@ -1563,7 +1612,7 @@ Chinese-origin or under PRC jurisdiction.</p>
 <figcaption>Watch a probe run end to end (demo clip coming soon). New here? See the <a href="/help">help page</a>.</figcaption>
 </figure>
 
-<div class=card>
+<div class=card id=probe>
  <div class="row grid3">
   <div><label>Endpoint base URL</label>
    <input type=text id=base_url placeholder="https://api.vendor.example/v1"></div>
