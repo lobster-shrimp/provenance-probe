@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.23.0] — Local always-on `watch` daemon (P3 / #66)
+
+### Added
+- **`provenance-probe watch` — an unattended, always-on model-swap daemon.** The
+  local counterpart to the tab-bound hosted watch (P2 #64) and the real-time
+  `sentinel` proxy: it re-probes your OWN configured targets on a schedule and
+  raises a loud LOCAL alert the moment a served model silently changes — no
+  browser, no open terminal, survives logout.
+  - **Modes (mutually exclusive):** `--once` (single pass; **exit 2 on ANY
+    drift**, 1 on operational error, 0 clean/seeded — the cron/launchd
+    primitive), `--loop` (run forever on a timer with jitter; clean
+    SIGINT/SIGTERM shutdown that finishes the in-flight target and exits 0;
+    one target's exception never kills the loop), `--pin` / `--reset-baseline`
+    (re-baseline to the current fingerprint), and `--print-launchd` /
+    `--print-systemd` unit-file generators (Windows documented via Task
+    Scheduler).
+  - **Per-target baseline store** at `~/.provenance-probe/watch/<slug>/`
+    (`baseline.json` = the FULL bundle, `state.json`, `switches.jsonl`). First
+    run seeds the baseline (no drift), like the observatory's first-run seed;
+    later runs `monitor.diff(baseline, current)`.
+  - **Loud, secret-free alerts on drift:** a stderr **MODEL SWITCH DETECTED**
+    banner with the changes table, an appended `switches.jsonl` record, a
+    best-effort desktop notification (`osascript` / `notify-send`,
+    feature-detected, never fatal), and an optional `--webhook <url>` POST
+    (10 s timeout, failure logged not fatal). Keys/cookies read from local
+    config **never** appear in any sink — payloads are built from the diff +
+    fingerprints only, and every transport error is routed through
+    `client._safe_err`.
+  - **Path-traversal defense:** the per-target directory name is slugified to
+    `[A-Za-z0-9._-]`, rejects `.`/`..`/empty, and is `realpath`-contained inside
+    the watch root (same discipline as the `/media` route).
+  - Pure-stdlib scheduling (no APScheduler / heavy deps). `--behavioral` /
+    `--deception` are off by default for a fast, cheap re-check (tokenizer, wire
+    and determinism — the strongest swap signals — stay on).
+
+### Changed
+- **New `provenance_probe/assess.py` — one source of truth for a "bundle".**
+  Extracted `assess_target(target, opts) -> bundle` (full multi-layer bundle
+  **incl. `score`, `user_warning` AND `fingerprint_id`**) and refactored BOTH
+  `cli.cmd_assess` and the `serve.py` assess worker to call it. Previously
+  `cmd_assess` omitted `fingerprint_id` and `serve` computed it inline; now the
+  CLI, the web service and the daemon are byte-identical, so a `watch` baseline
+  is directly comparable to `serve` / the Observatory. Behavior-preserving
+  (full existing suite stays green; a fingerprint-parity test pins it).
+
 ## [Unreleased] — MV3 browser extension for one-click hosted capture (P2 / #54)
 
 ### Changed

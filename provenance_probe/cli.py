@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """provenance-probe CLI."""
 from __future__ import annotations
-import argparse, json, os, sys, datetime, hashlib, uuid
+import argparse, json, os, sys, datetime, uuid
 
 from .config import load_targets, write_example, Target
 from .client import Client
-from .probes import (network, tokenizer, behavioral, wire, latency, logprob,
-                     artifact, clientsrc, deception, transcript, session)
-from . import scoring, report, reference, userwarn, monitor, sentinel
+from .probes import (network, tokenizer, artifact, clientsrc, transcript, session)
+from . import scoring, report, reference, userwarn, monitor, sentinel, assess, watch
 
 BANNER = """provenance-probe — GenAI model provenance & jurisdiction assurance
 Use only against systems you are authorized in writing to test."""
@@ -23,84 +22,25 @@ def cmd_assess(a):
     ref = tokenizer.load_reference() if not a.no_tokenizer else {}
     if not ref and not a.no_tokenizer:
         print("[warn] no tokenizer reference vectors. Run `build-reference` for the strongest signal.\n")
+    opts = assess.AssessOpts(
+        no_tokenizer=a.no_tokenizer, no_behavioral=a.no_behavioral,
+        no_deception=a.no_deception, latency=a.latency, latency_n=a.latency_n,
+        leak_samples=a.leak_samples, offline=a.offline,
+        variant_seed=getattr(a, "variant_seed", 0) or 0,
+        confront_as=a.confront_as or "", confront_control=a.confront_control,
+        session_test=a.session_test, client_dir=a.client_dir or "",
+        client_url=a.client_url or "", artifacts_dir=a.artifacts or "")
     bundles = []
     for t in targets:
         _assert_scope(t, a.i_am_authorized)
         print(f"\n>>> {t.name}  {t.base_url}")
-        c = Client(t)
-        b = {"target": {"name": t.name, "base_url": t.base_url, "model": t.model,
-                        "api_style": t.api_style},
-             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")}
-
-        print("  [1/7] network / jurisdiction ...")
-        b["network"] = network.analyze_host(t.base_url, do_rdap=not a.offline)
-
-        print("  [2/7] wire fingerprint ...")
-        b["headers"] = wire.header_fingerprint(c)
-        b["errors"] = wire.error_schema_fingerprint(c)
-        b["streaming"] = wire.streaming_fingerprint(c)
-        b["catalog"] = wire.model_catalog(c)
-
-        if not a.no_tokenizer:
-            print("  [3/7] tokenizer fingerprint ...")
-            _seed = getattr(a, "variant_seed", 0) or 0
-            _ref_seed = ref.get("variant_seed", 0) if ref else 0
-            if _seed != _ref_seed:
-                print(f"        ! variant-seed {_seed} != reference seed {_ref_seed}; "
-                      f"rebuild the reference with --variant-seed {_seed} or the match is invalid")
-            b["tokenizer"] = tokenizer.measure(c, variant_seed=_seed)
-            if b["tokenizer"]["usable"]:
-                b["tokenizer_match"] = tokenizer.compare(b["tokenizer"], ref)
-            else:
-                print("        ! endpoint did not return usage.prompt_tokens — "
-                      "tokenizer layer unavailable (itself a transparency finding)")
-
-        print("  [4/7] logprob / determinism ...")
-        b["logprobs"] = logprob.logprob_signature(c)
-        b["greedy"] = logprob.greedy_signature(c)
-
-        if not a.no_behavioral:
-            print("  [5/7] self-identification ...")
-            b["selfid"] = behavioral.self_identification(c)
-            print("  [6/7] alignment asymmetry (matched pairs) ...")
-            b["alignment"] = behavioral.alignment_asymmetry(c)
-            print("        CJK leakage ...")
-            b["leakage"] = behavioral.language_leakage(c, samples=a.leak_samples)
-
-        if a.latency:
-            print("  [7/7] latency profile ...")
-            b["latency"] = latency.profile(c, n=a.latency_n)
-
-        if not a.no_deception:
-            print("  [8/8] deception: persona + jurisdiction claims ...")
-            d = {}
-            d["persona"] = deception.persona_claim(c)
-            d["jurisdiction"] = deception.jurisdiction_claims(c)
-            d["trace"] = deception.reasoning_trace_capture(c)
-            if a.confront_as:
-                print(f"        confrontation vs '{a.confront_as}' (+ false control) ...")
-                d["confrontation"] = deception.confront(c, a.confront_as, a.confront_control)
-            if a.session_test:
-                d["session"] = deception.session_resilience(c)
-            b["deception"] = d
-
-        if a.client_dir or a.client_url:
-            print("        client-source scan ...")
-            b["client_source"] = (clientsrc.scan_dir(a.client_dir) if a.client_dir
-                                  else clientsrc.scan_url(a.client_url))
-
-        if a.artifacts:
-            print(f"        artifact scan: {a.artifacts}")
-            b["artifacts"] = artifact.scan_dir(a.artifacts)
-
-        if b.get("deception"):
-            origin, detail = _hard_evidence(b)
-            b["deception"]["correlation"] = deception.correlate(
-                b["deception"]["persona"], b["deception"]["jurisdiction"], origin, detail)
-
-        b["score"] = scoring.score(b)
-        b["user_warning"] = userwarn.build(b)
-        b["fingerprint_id"] = monitor.fingerprint(b)
+        # The bundle (incl. score, user_warning AND fingerprint_id) is built by
+        # the shared helper so the CLI, the web service and the watch daemon
+        # agree byte-for-byte on the fingerprint.
+        b = assess.assess_target(
+            t, opts,
+            progress=lambda label, pct: print(f"  {label} ..."),
+            note=print)
         bundles.append(b)
         print("\n" + report.console(b))
         if b.get("deception", {}).get("correlation", {}).get("finding"):
@@ -115,24 +55,6 @@ def cmd_assess(a):
         report.to_html(b, base + ".html")
         userwarn.to_html(b["user_warning"], base + "_USER-WARNING.html")
         print(f"\n[+] {base}.json\n[+] {base}.html\n[+] {base}_USER-WARNING.html")
-
-
-def _hard_evidence(b: dict):
-    """Origin per the layers that are hard to fake: source, network, tokenizer."""
-    src = b.get("client_source") or {}
-    if src.get("prc_operators_in_source"):
-        return "CN", f"Client source references {', '.join(src['prc_operators_in_source'])}."
-    net = b.get("network") or {}
-    if net.get("jurisdiction", "").startswith("PRC"):
-        return "CN", f"Endpoint resolves to {net.get('operator')} ({net.get('jurisdiction')})."
-    tm = b.get("tokenizer_match") or []
-    if tm and tm[0].get("score", 0) >= 0.75:
-        return ("CN" if tm[0].get("origin") == "CN" else "nonCN",
-                f"Tokenizer fingerprint matches {tm[0]['model']} (score {tm[0]['score']}).")
-    cat = b.get("catalog") or {}
-    if cat.get("prc_origin_models"):
-        return "CN", "Endpoint catalog offers PRC-origin models."
-    return None, ""
 
 
 def cmd_monitor(a):
@@ -267,6 +189,56 @@ def cmd_session(a):
 def cmd_sentinel(a):
     """Run the real-time in-line model-switch sentinel (reverse proxy)."""
     sentinel.serve(a.upstream, host=a.host, port=a.port, events_file=a.events_file)
+
+
+def cmd_watch(a):
+    """Unattended, always-on watch daemon (P3). Assess configured targets on a
+    schedule, diff each against a pinned baseline, and raise a loud LOCAL alert
+    the moment a served model silently changes."""
+    # Unit-file generators only need the config PATH, not the targets themselves.
+    if a.mode == "launchd":
+        print(watch.launchd_plist(a.config, interval=watch.parse_interval(a.interval)))
+        return
+    if a.mode == "systemd":
+        print(watch.systemd_units(a.config, interval=watch.parse_interval(a.interval)))
+        return
+
+    targets = load_targets(a.config)
+    for t in targets:
+        _assert_scope(t, a.i_am_authorized)
+    # Fast, cheap re-check by default (tokenizer ON — the strongest signal;
+    # behavioral/deception OFF unless opted back in), matching the P2 default.
+    opts = assess.AssessOpts(no_behavioral=not a.behavioral, no_deception=not a.deception)
+    only = a.target or None
+
+    if a.mode == "pin":
+        sys.exit(watch.pin_targets(targets, opts, only=only))
+    if a.mode == "once":
+        sys.exit(watch.run_once(targets, opts, webhook=a.webhook, only=only))
+
+    # --- a.mode == "loop": run forever with a clean signal-driven shutdown ---
+    import signal
+    stop = __import__("threading").Event()
+
+    def _handler(signum, _frame):
+        print(f"\n[watch] signal {signum} received; finishing the in-flight target, "
+              f"then exiting…", file=sys.stderr)
+        stop.set()
+
+    # Both registrations are guarded: signal.signal() only works on the main
+    # thread, so a future non-main-thread caller degrades gracefully instead of
+    # raising (the loop still stops cleanly via an explicit stop_event).
+    for _sig in (signal.SIGINT, getattr(signal, "SIGTERM", None)):
+        if _sig is None:
+            continue
+        try:
+            signal.signal(_sig, _handler)
+        except (ValueError, AttributeError, OSError):
+            pass
+    interval = watch.parse_interval(a.interval)
+    jitter = 0.0 if a.no_jitter else a.jitter
+    sys.exit(watch.run_loop(targets, opts, interval=interval, jitter_frac=jitter,
+                            webhook=a.webhook, only=only, stop_event=stop))
 
 
 def _print_agent_board(result: dict, title: str):
@@ -750,6 +722,37 @@ def main(argv=None):
     s.add_argument("--port", type=int, default=8900)
     s.add_argument("--events-file", help="append model-change events as JSONL here")
     s.set_defaults(func=cmd_sentinel)
+
+    s = sub.add_parser("watch",
+                       help="unattended always-on daemon: assess configured targets on a "
+                            "schedule, diff each vs a pinned baseline, and alert loudly on a "
+                            "silent model swap (survives logout; launchd/systemd generators)")
+    s.add_argument("--config", default="targets.json", help="same target config as `assess`")
+    _mode = s.add_mutually_exclusive_group(required=True)
+    _mode.add_argument("--loop", action="store_const", dest="mode", const="loop",
+                       help="run forever on a timer (re-check + alert; clean SIGINT/SIGTERM shutdown)")
+    _mode.add_argument("--once", action="store_const", dest="mode", const="once",
+                       help="single pass over all targets; exit 2 on ANY drift (the cron/launchd primitive)")
+    _mode.add_argument("--pin", "--reset-baseline", action="store_const", dest="mode", const="pin",
+                       help="re-pin the baseline to the current fingerprint (accept a new backend)")
+    _mode.add_argument("--print-launchd", action="store_const", dest="mode", const="launchd",
+                       help="emit a macOS launchd .plist that runs `watch --once` (stdout)")
+    _mode.add_argument("--print-systemd", action="store_const", dest="mode", const="systemd",
+                       help="emit a Linux systemd .service + .timer that run `watch --once` (stdout)")
+    s.add_argument("--interval", default="60m",
+                   help="loop / schedule interval as 30s / 15m / 1h; default 60m")
+    s.add_argument("--jitter", type=float, default=0.10,
+                   help="loop jitter as a fraction of the interval (0..1), capped at 30s; default 0.10")
+    s.add_argument("--no-jitter", action="store_true", help="disable loop jitter (equivalent to --jitter 0)")
+    s.add_argument("--target", help="limit to a single target by name")
+    s.add_argument("--webhook", help="on drift, POST the secret-free switch record JSON to this URL")
+    s.add_argument("--behavioral", action="store_true",
+                   help="also run the behavioral battery (off by default: fast, cheap re-check)")
+    s.add_argument("--deception", action="store_true",
+                   help="also run the deception battery (off by default)")
+    s.add_argument("--i-am-authorized", action="store_true",
+                   help="attest written authorization to actively probe these targets")
+    s.set_defaults(func=cmd_watch)
 
     s = sub.add_parser("session",
                        help="fingerprint an endpoint at session start + end; "
