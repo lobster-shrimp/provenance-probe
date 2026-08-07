@@ -406,16 +406,18 @@ def test_launchd_plist_is_valid_and_runs_watch_once(tmp_path):
     assert str((tmp_path / "targets.json").resolve()) in plist or \
         os.path.abspath(str(tmp_path / "targets.json")) in plist
     assert "<key>StartInterval</key>" in plist
+    # Strict XML parse EVERYWHERE (catches e.g. an illegal "--" in a comment,
+    # which lenient `plutil` would wave through), plus `plutil -lint` on macOS.
+    import plistlib
+    data = plistlib.loads(plist.encode())
+    assert data["Label"] and "--once" in data["ProgramArguments"]
+    assert "watch" in data["ProgramArguments"]
+    assert int(data["StartInterval"]) == 900
     p = tmp_path / "pp.plist"
     p.write_text(plist)
     if shutil.which("plutil"):                            # macOS
         r = subprocess.run(["plutil", "-lint", str(p)], capture_output=True, text=True)
         assert r.returncode == 0, r.stdout + r.stderr
-    else:                                                 # portable structural check
-        import plistlib
-        data = plistlib.loads(plist.encode())
-        assert data["Label"] and "--once" in data["ProgramArguments"]
-        assert "watch" in data["ProgramArguments"]
 
 
 @pytest.mark.unit

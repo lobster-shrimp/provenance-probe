@@ -451,12 +451,14 @@ def launchd_plist(config_path: str, *, interval: int = 3600,
     """
     args = "\n".join("    " + _plist_str(a) for a in _watch_argv(config_path))
     logdir = os.path.join(watch_root(), "launchd")
+    # NB: an XML comment may not contain the "--" sequence, so the install hint
+    # is phrased without CLI flags (the flags live safely in ProgramArguments).
+    plist_path = f"~/Library/LaunchAgents/{label}.plist"
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- provenance-probe watch (always-on). Install:
-       provenance-probe watch --print-launchd --config {os.path.abspath(config_path)} > ~/Library/LaunchAgents/{label}.plist
-       launchctl load ~/Library/LaunchAgents/{label}.plist
-     Uninstall: launchctl unload ~/Library/LaunchAgents/{label}.plist -->
+<!-- provenance-probe always-on watch. To install, save this file to
+     {plist_path} then run: launchctl load {plist_path}
+     To uninstall, run: launchctl unload {plist_path} -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
