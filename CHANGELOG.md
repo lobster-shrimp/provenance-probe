@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.23.1] — Copy fixes: extension install honesty + always-on now shipped
+
+### Changed
+- **Capture-extension copy no longer oversells "one-click."** The landing card and
+  the import page now describe the extension as a load-unpacked developer-mode install
+  (a one-time ~2-minute setup, steps in the README) instead of a store one-click, and
+  the link reads "Get the extension & install steps." The link target is unchanged.
+- **"Always-on watching is coming" copy updated — it shipped (P3).** The landing watch
+  card, the `/watch` "keep this tab open" banner, and the shared `explain.py`
+  watching primer now point to the real local `watch` daemon (runs on a timer, installs
+  under launchd/systemd) instead of promising a future "background watcher."
+
 ## [0.23.0] — Local always-on `watch` daemon (P3 / #66)
 
 ### Added

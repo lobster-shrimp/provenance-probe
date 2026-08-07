@@ -455,9 +455,9 @@ Everything is local &mdash; nothing is sent until you approve. <a href="/">&larr
  <div class="card rec">
   <span class="tag">Option B &middot; easiest &middot; recommended</span>
   <h2>It's a website I log into</h2>
-  <p>It's a chat website you sign in to (like a hosted assistant). One click with the capture
-  extension &mdash; or record one message yourself. You stay logged in in your own browser, and
-  your login is never recorded.</p>
+  <p>It's a chat website you sign in to (like a hosted assistant). Load the capture extension
+  once (developer mode) &mdash; or record one message yourself. You stay logged in in your own
+  browser, and your login is never recorded.</p>
   <p class="needs">You need: to be signed in to the site in your browser. No keys.</p>
   <p class="pick"><a href="/wizard/import"><button type="button">Capture from my browser &rarr;</button></a></p>
  </div>
@@ -866,11 +866,12 @@ _WIZARD_IMPORT_JS = r"""<h1>Import a captured request</h1>
 <p class=sub><a href="/wizard">&larr; back to Add a target</a></p>
 
 <div class="ok" style="border-color:var(--green)">
-<b>Easiest: the one-click capture extension.</b> Install the provenance-probe capture
-extension, open your AI chat, and click <b>Arm capture</b> &mdash; it grabs the one message
-you send and sends it straight here, with no file to save. It captures in your own browser
-and never records your login, exactly like the manual steps below.
-<a href="__EXTENSION_URL__" target="_blank" rel="noopener noreferrer">Get the extension &rarr;</a>
+<b>Easiest: the capture extension (load it unpacked).</b> Load the provenance-probe capture
+extension in your browser's developer mode &mdash; a one-time setup, about two minutes, steps
+in the README &mdash; then open your AI chat and click <b>Arm capture</b>: it grabs the one
+message you send and sends it straight here, with no file to save. It captures in your own
+browser and never records your login, exactly like the manual steps below.
+<a href="__EXTENSION_URL__" target="_blank" rel="noopener noreferrer">Get the extension &amp; install steps &rarr;</a>
 <span class=sub>Prefer no install? Record it yourself with the steps below.</span></div>
 
 <p class=lead style="font-size:17px">What this does (recording it yourself): while you stay logged in
@@ -1564,8 +1565,8 @@ PAGE = r"""<section style="margin-bottom:24px">
   <p>Pin a fingerprint of a service you rely on and let this page re-check it on a timer,
   alerting the moment the model behind the API changes. Your API key stays in your browser.</p>
   <p class="pick"><a href="/watch"><button type="button">Watch a service &rarr;</button></a></p>
-  <p class="needs">Runs while this tab stays open. Unattended, always-on watching is coming
-  (run it locally, or use the Observatory).</p>
+  <p class="needs">Runs while this tab stays open. For unattended, always-on watching, run the
+  watch daemon locally, or use the Observatory.</p>
  </div>
 </div>
 
@@ -1843,8 +1844,8 @@ Close the tab and it is gone.</div>
 
 <div class="ban yellow"><div class=lvl>Keep this tab open</div>
 <div class=stat style="color:inherit">A browser-tab watch runs <b>only while this tab stays open</b>.
-For always-on, unattended monitoring, <a href="/help">run provenance-probe locally</a>
-(a background watcher is coming) or track the service on the
+For always-on, unattended monitoring, <a href="/help">run the watch daemon locally</a>
+or track the service on the
 <a href="__OBSERVATORY_URL__" target="_blank" rel="noopener noreferrer">Observatory &#8599;</a>.</div></div>
 
 <div class="card" id=cfg>
