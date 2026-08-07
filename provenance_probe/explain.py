@@ -199,8 +199,8 @@ WHY_THIS_MATTERS: "tuple[str, ...]" = (
     "moved with it.")
 
 # "Watching for model swaps" — a short primer on catching a swap over time. Honest
-# about what ships today (a browser-tab watch you keep open) versus what is coming
-# (a later-phase always-on background watcher).
+# about the two ways to watch that ship today: a browser-tab watch you keep open, and
+# the local always-on `watch` daemon (P3) for unattended monitoring.
 WATCHING_PRIMER: "tuple[str, ...]" = (
     "Catching a swap is a matter of comparison. Fingerprint the service once to set "
     "a baseline, then fingerprint it again later. If the two fingerprints disagree, "
@@ -216,9 +216,9 @@ WATCHING_PRIMER: "tuple[str, ...]" = (
     "storage or to your browser's saved data — which is what lets the watch run the "
     "same way on the hosted demo as it does locally.",
     "One honest limit: a browser-tab watch only runs while the tab stays open. For "
-    "always-on, unattended monitoring, run provenance-probe locally (a background "
-    "watcher is coming) or track the service on the public Observatory, which watches "
-    "well-known endpoints continuously.")
+    "always-on, unattended monitoring, run the provenance-probe watch daemon locally "
+    "(it re-checks on a timer and installs under launchd or systemd) or track the "
+    "service on the public Observatory, which watches well-known endpoints continuously.")
 
 # Plain-language tour of each flow in the web UI, in nav order.
 FLOWS: "tuple[tuple[str, str], ...]" = (

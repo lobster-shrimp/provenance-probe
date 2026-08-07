@@ -50,7 +50,7 @@ def test_watch_page_renders(client):
     assert "Watch a service for a silent swap" in body
     # The three honest-limits messages are prominent.
     assert "only while this tab stays open" in body
-    assert "background watcher is coming" in body
+    assert "watch daemon locally" in body
     assert "Observatory" in body
 
 

@@ -49,8 +49,9 @@ def test_landing_names_both_jobs_as_ctas(client):
     # Job 2: watch a service for a silent swap -> the capture/watch path.
     assert "Watch a service for a silent swap" in body
     assert 'href="/wizard"' in body
-    # Honest about the phasing: unattended watching is called out as coming.
-    assert "always-on watching is coming" in body
+    # Honest about the tab-bound limit + the real always-on path (the local watch daemon).
+    assert "unattended, always-on watching" in body
+    assert "watch daemon locally" in body
 
 
 @pytest.mark.unit
@@ -121,8 +122,9 @@ def test_capture_chooser_still_renders_all_methods(client):
 @pytest.mark.unit
 def test_import_page_leads_with_one_click_extension_and_keeps_contract(client):
     body = client.get("/wizard/import").get_data(as_text=True)
-    # The one-click extension is presented as the recommended path...
-    assert "one-click capture extension" in body
+    # The capture extension is presented as the recommended path (load-unpacked, honest
+    # about the developer-mode install rather than overselling a store one-click)...
+    assert "capture extension (load it unpacked)" in body
     assert "github.com/lobster-shrimp/provenance-probe/tree/main/extension" in body
     # ...without disturbing any form id or the #53 ingest endpoint.
     for token in ("id=har", "id=hint", "id=name", "id=flow",
