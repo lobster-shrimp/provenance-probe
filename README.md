@@ -137,6 +137,7 @@ Reports persist to `/data` in the container (`~/.provenance-probe/reports` local
 | `serve` | Local web UI (probe tool + add-target wizard + agent board) |
 | `assess` | Full multi-layer assessment of a configured target |
 | `agent-trace` / `agent` | Assess an **agent** (trace ingest, or active backend probe) |
+| `watch` | **Unattended always-on daemon** — assess targets on a schedule, diff vs a pinned baseline, alert loudly on a silent swap (`--loop`/`--once`; launchd/systemd generators) |
 | `sentinel` | Live reverse-proxy flight recorder — tees an agent's model calls, live board |
 | `omniroute` | Fingerprint + cross-check a route through a local OmniRoute router (calibration-gated; confidence-capped until calibrated) |
 | `capture` | Guided web-app request capture (annotated DevTools steps; `--auto` uses optional Playwright, login never recorded) |
@@ -144,6 +145,34 @@ Reports persist to `/data` in the container (`~/.provenance-probe/reports` local
 | `monitor` | Diff two runs; **exit 2 on drift** — wire into CI to catch silent swaps |
 | `build-reference` / `build-reference-endpoint` / `verify-reference` | Manage the tokenizer reference corpus |
 | `init` | Write an example `targets.json` |
+
+### 🕰️ Always-on watch daemon (`watch`)
+
+`watch` is the unattended, **local** counterpart to the tab-bound hosted watch: it re-probes your own targets on a schedule and raises a loud local alert the instant a served model silently changes — no browser, no open terminal, survives logout. It reuses the exact assess path + fingerprint + `monitor.diff` (no new detection logic), so its baselines are byte-identical to `serve` / the Observatory.
+
+```bash
+provenance-probe watch --once  --config targets.json    # one pass; exit 2 on ANY drift (cron/CI primitive)
+provenance-probe watch --loop  --config targets.json --interval 30m   # run forever; Ctrl-C to stop cleanly
+provenance-probe watch --pin   --config targets.json    # accept the current backend as the new baseline
+```
+
+First run **seeds** a per-target baseline under `~/.provenance-probe/watch/<target>/` (no drift). On drift you get a stderr **MODEL SWITCH DETECTED** banner, a machine-readable record appended to `switches.jsonl`, a best-effort desktop notification, and — with `--webhook <url>` — a POST of the (secret-free) switch record. Keys/cookies read from your config **never** appear in any alert sink.
+
+**Make it always-on:**
+
+```bash
+# macOS (launchd)
+provenance-probe watch --print-launchd --config "$PWD/targets.json" > ~/Library/LaunchAgents/com.provenance-probe.watch.plist
+launchctl load ~/Library/LaunchAgents/com.provenance-probe.watch.plist
+
+# Linux (systemd --user): the generator prints a .service + .timer with install steps
+provenance-probe watch --print-systemd --config "$PWD/targets.json"
+
+# Windows: register a Task Scheduler task running `provenance-probe watch --once --config <path>`
+#   schtasks /Create /SC HOURLY /TN provenance-probe-watch /TR "provenance-probe watch --once --config C:\path\targets.json"
+```
+
+The daemon runs behavioral/deception probes **off** by default for a fast, cheap re-check (tokenizer, wire and determinism stay on — the strongest swap signals); opt back in with `--behavioral` / `--deception`.
 
 ### 🛰️ Live agent flight recorder (`sentinel`)
 

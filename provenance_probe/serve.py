@@ -7,14 +7,13 @@ you explicitly ask it to assess. Run history is stored on local disk only.
     provenance-probe serve            # http://127.0.0.1:8770
 """
 from __future__ import annotations
-import hmac, json, os, stat, threading, datetime, uuid, traceback, html
+import hmac, json, os, stat, threading, uuid, traceback, html
 
 from flask import Flask, request, jsonify, Response
 
 from .config import Target
 from .client import Client
-from .probes import network, tokenizer, behavioral, wire, latency, logprob, artifact, clientsrc, deception
-from . import scoring, report, userwarn, monitor, egress
+from . import report, userwarn, monitor, egress, assess
 
 RUNS: dict[str, dict] = {}
 DATA_DIR = os.path.expanduser(os.environ.get("PROVENANCE_PROBE_HOME", "~/.provenance-probe"))
@@ -80,22 +79,6 @@ def _require_basic_auth():
 
 
 # ------------------------------------------------------------------ engine ---
-def _hard_evidence(b):
-    src = b.get("client_source") or {}
-    if src.get("prc_operators_in_source"):
-        return "CN", f"Client source references {', '.join(src['prc_operators_in_source'])}."
-    net = b.get("network") or {}
-    if (net.get("jurisdiction") or "").startswith("PRC"):
-        return "CN", f"Endpoint resolves to {net.get('operator')} ({net.get('jurisdiction')})."
-    tm = b.get("tokenizer_match") or []
-    if tm and tm[0].get("score", 0) >= 0.75:
-        return ("CN" if tm[0].get("origin") == "CN" else "nonCN",
-                f"Tokenizer fingerprint matches {tm[0]['model']} (score {tm[0]['score']}).")
-    if (b.get("catalog") or {}).get("prc_origin_models"):
-        return "CN", "Endpoint catalog offers PRC-origin models."
-    return None, ""
-
-
 def _run(run_id: str, spec: dict):
     st = RUNS[run_id]
     def step(msg, pct):
@@ -135,72 +118,35 @@ def _run(run_id: str, spec: dict):
             t.extra_headers[t.auth_header] = f"{t.auth_prefix}{spec['api_key']}"
 
         c = Client(t)
-        b = {"target": {"name": t.name, "base_url": t.base_url, "model": t.model,
-                        "api_style": t.api_style},
-             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")}
-
-        step("Resolving endpoint and jurisdiction…", 8)
-        b["network"] = network.analyze_host(t.base_url, do_rdap=not spec.get("offline"))
-
-        step("Fingerprinting API surface…", 20)
-        b["headers"] = wire.header_fingerprint(c)
-        b["errors"] = wire.error_schema_fingerprint(c)
-        b["streaming"] = wire.streaming_fingerprint(c)
-        b["catalog"] = wire.model_catalog(c)
-
-        if spec.get("client_url"):
-            step("Scanning client source…", 30)
-            # Reuse the probe Client's session so this user-supplied URL fetch
-            # goes through the SSRF egress guard in public-hosting mode.
-            b["client_source"] = clientsrc.scan_url(spec["client_url"], session=c.s)
-        elif spec.get("client_dir"):
-            step("Scanning client source…", 30)
-            b["client_source"] = clientsrc.scan_dir(spec["client_dir"])
-
-        if not spec.get("no_tokenizer"):
-            step("Running tokenizer battery…", 45)
-            b["tokenizer"] = tokenizer.measure(c)
-            if b["tokenizer"]["usable"]:
-                b["tokenizer_match"] = tokenizer.compare(b["tokenizer"])
-
-        step("Checking determinism…", 58)
-        b["logprobs"] = logprob.logprob_signature(c)
-        b["greedy"] = logprob.greedy_signature(c)
-
-        if not spec.get("no_deception"):
-            step("Testing persona and jurisdiction claims…", 70)
-            d = {"persona": deception.persona_claim(c),
-                 "jurisdiction": deception.jurisdiction_claims(c),
-                 "trace": deception.reasoning_trace_capture(c)}
-            if spec.get("confront_as"):
-                step("Paired confrontation with false-premise control…", 80)
-                d["confrontation"] = deception.confront(
-                    c, spec["confront_as"], spec.get("confront_control") or "Mistral AI")
-            if spec.get("session_test"):
-                d["session"] = deception.session_resilience(c)
-            b["deception"] = d
-
-        if not spec.get("no_behavioral"):
-            step("Alignment asymmetry (matched pairs)…", 88)
-            b["selfid"] = behavioral.self_identification(c)
-            b["alignment"] = behavioral.alignment_asymmetry(c)
-            b["leakage"] = behavioral.language_leakage(c, samples=1)
-
-        if spec.get("artifacts_dir"):
-            step("Inspecting local model artifacts…", 93)
-            b["artifacts"] = artifact.scan_dir(spec["artifacts_dir"])
-
-        if b.get("deception"):
-            origin, detail = _hard_evidence(b)
-            b["deception"]["correlation"] = deception.correlate(
-                b["deception"]["persona"], b["deception"]["jurisdiction"], origin, detail)
-
-        step("Scoring…", 97)
-        b["score"] = scoring.score(b)
-        b["user_warning"] = userwarn.build(b)
-        # Stable backend fingerprint so this run can be diffed against a
-        # baseline in the Monitor tab (silent model-swap detection).
-        b["fingerprint_id"] = monitor.fingerprint(b)
+        # Map the shared helper's canonical progress events onto this run's
+        # status/percent display. Server-friendly labels so the UI copy is
+        # unchanged in spirit; the probe set + resulting bundle are identical to
+        # the CLI and the daemon (one definition of a "bundle" — see assess.py).
+        _LABELS = {
+            "network / jurisdiction": "Resolving endpoint and jurisdiction…",
+            "wire fingerprint": "Fingerprinting API surface…",
+            "client-source scan": "Scanning client source…",
+            "tokenizer fingerprint": "Running tokenizer battery…",
+            "logprob / determinism": "Checking determinism…",
+            "deception: persona + jurisdiction claims": "Testing persona and jurisdiction claims…",
+            "self-identification + alignment asymmetry": "Alignment asymmetry (matched pairs)…",
+            "scoring": "Scoring…",
+        }
+        opts = assess.AssessOpts(
+            no_tokenizer=bool(spec.get("no_tokenizer")),
+            no_behavioral=bool(spec.get("no_behavioral")),
+            no_deception=bool(spec.get("no_deception")),
+            offline=bool(spec.get("offline")),
+            leak_samples=1,  # the web service keeps the CJK leak battery light
+            confront_as=spec.get("confront_as") or "",
+            confront_control=spec.get("confront_control") or "Mistral AI",
+            session_test=bool(spec.get("session_test")),
+            client_url=spec.get("client_url") or "",
+            client_dir=spec.get("client_dir") or "",
+            artifacts_dir=spec.get("artifacts_dir") or "")
+        b = assess.assess_target(
+            t, opts, client=c,
+            progress=lambda label, pct: step(_LABELS.get(label, label), pct))
 
         os.makedirs(os.path.join(DATA_DIR, "reports"), exist_ok=True)
         base = os.path.join(DATA_DIR, "reports", f"{t.name}_{run_id[:8]}")
