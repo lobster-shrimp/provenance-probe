@@ -6,8 +6,9 @@ matrix, and **gates CI**: a regression that flags a Western model as
 Chinese-origin turns the build red.
 
 ```
-python -m eval.run_eval            # hermetic: bundle + vocab tiers (default)
+python -m eval.run_eval            # hermetic: bundle + vocab + fleet tiers (default)
 python -m eval.run_eval --bundles-only   # scoring tier only (no gguf/tokenizers)
+python -m eval.run_eval --fleet-only     # fleet host-attribution tier only (offline)
 python -m eval.run_eval --json     # machine-readable summary
 ```
 
@@ -51,6 +52,27 @@ non-adverse US anchor. CN cases are synthetic and name no commercial operator,
 so this repo never publishes an interpreted named-vendor Chinese-origin verdict.
 Real named-vendor accuracy (DeepSeek/Moonshot CONFIRMED-CN) lives in the
 **private** provenance-observatory, where the Gate-1 posture governs it.
+
+### Fleet tier — `eval/corpus.py:FLEET_CASES` (ET6)
+
+`fleet-scan` attributes a discovered host via the bundled `corpus.py` endpoint
+intelligence, using exact-or-subdomain matching. This tier gates that attribution
+with the SAME zero-FP rule as the tokenizer tier: a benign host attributed to a
+PRC operator is a false positive and turns the build red. Fully offline — a static
+dict lookup, no gguf or network. Cases are the guardrail-5 adversarial inputs:
+
+- **Suffix / lookalike attacks** — `api.deepseek.com.evil.test`,
+  `deepseek.com.attacker.example`, `api-deepseek-com.evil.test` (must NOT match).
+- **Punycode / IDNA** — `xn--…` homographs (must NOT match).
+- **Cloud tenant endpoints** — Azure OpenAI / AWS Bedrock / GCP Vertex tenants
+  (US/aggregator, must NOT read as CN).
+- **Aggregators / loopback / unknown** — `openrouter.ai`, `localhost`, `example.com`.
+- **PRC positives** — `api.deepseek.com`, `api.moonshot.cn`, `open.bigmodel.cn`,
+  `hunyuan.tencentcloudapi.com` (subdomain) must be attributed CN.
+
+`fleet_flagged_cn()` (in `eval/corpus.py`) is the single definition of fleet's
+adverse output (origin starts with `PRC`), mirroring `is_flagged_cn()` for the
+fingerprint tiers.
 
 ## The gate
 
