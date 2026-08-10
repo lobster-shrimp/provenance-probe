@@ -159,6 +159,8 @@ def test_strip_userinfo_unit():
     assert strip_userinfo("https://user:pw@host:8080/v1") == "https://host:8080/v1"
     assert strip_userinfo("https://api.openai.com/v1") == "https://api.openai.com/v1"  # unchanged
     assert "sk-tok" not in strip_userinfo("http://x:sk-tok@h/v1")
+    # IPv6 literal keeps its brackets and drops the creds
+    assert strip_userinfo("http://user:pw@[::1]:20128/v1") == "http://[::1]:20128/v1"
 
 
 @pytest.mark.unit

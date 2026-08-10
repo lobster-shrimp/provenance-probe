@@ -41,7 +41,8 @@ def strip_userinfo(url: str) -> str:
     host = parts.hostname or ""
     if not host:
         return s
-    netloc = f"{host}:{parts.port}" if parts.port else host
+    hostpart = f"[{host}]" if ":" in host else host   # re-bracket IPv6 literals
+    netloc = f"{hostpart}:{parts.port}" if parts.port else hostpart
     rebuilt = urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
     # If we synthesized the scheme, drop it back to how it came in (schemeless rare).
     return rebuilt if "://" in s else rebuilt.split("://", 1)[-1]
