@@ -26,7 +26,11 @@ is a Gate-1 legal exposure. That validation runs on a schedule in the PRIVATE
 provenance-observatory.
 """
 from __future__ import annotations
-import argparse, json, os, sys, threading
+
+import argparse
+import json
+import os
+import threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 VOCAB_DIR = os.path.join(HERE, "vocabs")
@@ -150,6 +154,27 @@ def run_vocab_cases():
     return results
 
 
+# --- fleet control tier: host attribution zero-FP gate ----------------------
+
+def run_fleet_cases():
+    """Attribute each labeled host via fleet's corpus lookup and gate FPs. Fully
+    offline (no network, no gguf) — attribution is a static dict lookup."""
+    from provenance_probe.fleet.attribute import attribute
+    from eval.corpus import FLEET_CASES, fleet_flagged_cn
+    results = []
+    for case in FLEET_CASES:
+        try:
+            attr = attribute(case["host"])
+            flagged = fleet_flagged_cn(attr)
+            verdict = attr.origin if attr else "none"
+            results.append(Result(f"{case['host']} ({case['note']})", "fleet",
+                                  case["expect_flagged"], flagged, verdict))
+        except Exception as e:  # noqa: BLE001
+            results.append(Result(case["host"], "fleet", case["expect_flagged"],
+                                  False, None, False, str(e)))
+    return results
+
+
 # --- matrix + gate ----------------------------------------------------------
 
 def confusion(results):
@@ -198,18 +223,23 @@ def gate(results, matrix, max_fn):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="provenance engine accuracy/consistency eval")
     g = ap.add_mutually_exclusive_group()
-    g.add_argument("--hermetic", action="store_true", help="bundle + vocab tiers (default)")
+    g.add_argument("--hermetic", action="store_true", help="bundle + vocab + fleet tiers (default)")
     g.add_argument("--bundles-only", action="store_true", help="scoring tier only (no gguf deps)")
     g.add_argument("--vocab-only", action="store_true", help="consistency tier only")
+    g.add_argument("--fleet-only", action="store_true", help="fleet host-attribution tier only (offline)")
     ap.add_argument("--json", action="store_true", help="emit machine-readable summary")
     a = ap.parse_args(argv)
 
     from eval.corpus import MAX_FALSE_NEGATIVES
+    # Pick tiers: an --X-only flag restricts to that tier; otherwise run all three.
+    only = a.bundles_only or a.vocab_only or a.fleet_only
     results = []
-    if not a.vocab_only:
+    if a.bundles_only or not only:
         results += run_bundle_cases()
-    if not a.bundles_only:
+    if a.vocab_only or not only:
         results += run_vocab_cases()
+    if a.fleet_only or not only:
+        results += run_fleet_cases()
 
     matrix = confusion(results)
     reasons = gate(results, matrix, MAX_FALSE_NEGATIVES)

@@ -61,6 +61,44 @@ BUNDLE_CASES = [
      "expect_provenance": {"INDETERMINATE"}},
 ]
 
+# --- fleet control tier: host attribution zero-FP gate (ET6) -----------------
+# fleet-scan attributes a discovered host via the bundled corpus.py endpoint
+# intelligence. This tier gates that attribution the same way the tokenizer tier
+# gates the fingerprint: a benign host attributed to a PRC operator is a FALSE
+# POSITIVE and turns the build red. Cases are the guardrail-5 adversarial inputs
+# (suffix attacks, punycode, cloud tenant endpoints, aggregators, loopback) plus
+# real PRC positives. Fully offline: attribution is a static dict lookup.
+FLEET_CASES = [
+    # --- PRC positives: must be attributed Chinese-origin -----------------
+    {"host": "api.deepseek.com",                 "expect_flagged": True,  "note": "DeepSeek direct"},
+    {"host": "api.moonshot.cn",                  "expect_flagged": True,  "note": "Moonshot direct"},
+    {"host": "open.bigmodel.cn",                 "expect_flagged": True,  "note": "Zhipu GLM mainland"},
+    {"host": "hunyuan.tencentcloudapi.com",      "expect_flagged": True,  "note": "Tencent Hunyuan (subdomain wins longest-match)"},
+    {"host": "API.DeepSeek.COM.",                "expect_flagged": True,  "note": "PRC positive, uppercase + trailing dot (canonicalization)"},
+    # --- must NOT be attributed CN (the false-positive gate) --------------
+    {"host": "api.deepseek.com.evil.test",       "expect_flagged": False, "note": "suffix attack"},
+    {"host": "deepseek.com.attacker.example",    "expect_flagged": False, "note": "suffix attack"},
+    {"host": "api-deepseek-com.evil.test",       "expect_flagged": False, "note": "dash-not-dot lookalike"},
+    {"host": "xn--80ak6aa92e.com",               "expect_flagged": False, "note": "punycode/IDNA homograph"},
+    {"host": "notmoonshot.cn",                   "expect_flagged": False, "note": "lookalike, not a moonshot corpus host"},
+    {"host": "myorg.openai.azure.com",           "expect_flagged": False, "note": "Azure cloud tenant (unattributed, not CN)"},
+    {"host": "bedrock-runtime.us-east-1.amazonaws.com", "expect_flagged": False, "note": "AWS Bedrock cloud tenant (unattributed, not CN)"},
+    {"host": "proj.us-central1-aiplatform.googleapis.com", "expect_flagged": False, "note": "GCP Vertex cloud tenant (unattributed, not CN)"},
+    {"host": "api.openai.com",                   "expect_flagged": False, "note": "US first-party"},
+    {"host": "api.anthropic.com",                "expect_flagged": False, "note": "US first-party"},
+    {"host": "openrouter.ai",                    "expect_flagged": False, "note": "aggregator (unresolvable, not CN)"},
+    {"host": "localhost",                        "expect_flagged": False, "note": "loopback gateway"},
+    {"host": "example.com",                      "expect_flagged": False, "note": "unknown host"},
+]
+
+
+def fleet_flagged_cn(attribution) -> bool:
+    """Fleet's adverse output: a host attributed to a PRC operator. A static
+    corpus lookup returning a PRC/PRC-operator origin is the 'points at China'
+    flag; anything else (US/EU, aggregator, unknown, None) is not."""
+    return attribution is not None and str(attribution.origin).startswith("PRC")
+
+
 # The eval pins the canonical probe corpus. A reference built with a different
 # --variant-seed cannot be matched (compare() trusts only same-seed vectors),
 # so a mismatch is a hard error, never a silent false negative.
