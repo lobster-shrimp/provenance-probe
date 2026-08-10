@@ -17,9 +17,34 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from urllib.parse import urlsplit, urlunsplit
 
 from .evidence import CONFIGURED, Finding
 from ..presets import _hostname
+
+
+def strip_userinfo(url: str) -> str:
+    """Remove any user:password@ credentials from a URL, keeping host[:port]/path.
+
+    A base_url like `https://user:sk-token@host/v1` must never enter a Finding —
+    the report rolls up to a SIEM and the token would leak (provenance-reviewer
+    HIGH). Classification only needs the hostname, so dropping userinfo is lossless
+    for detection. Best-effort: an unparseable value is returned unchanged (it will
+    still be classified by its parsed host, which is "" → unattributed)."""
+    s = (url or "").strip()
+    if "@" not in s:
+        return s
+    try:
+        parts = urlsplit(s if "://" in s else "http://" + s)
+    except ValueError:
+        return s
+    host = parts.hostname or ""
+    if not host:
+        return s
+    netloc = f"{host}:{parts.port}" if parts.port else host
+    rebuilt = urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+    # If we synthesized the scheme, drop it back to how it came in (schemeless rare).
+    return rebuilt if "://" in s else rebuilt.split("://", 1)[-1]
 
 # Per-tool config files to scan (path is relative to home; "~" expanded by caller).
 # Ships macOS + Linux first (plan defers Windows).
@@ -80,8 +105,9 @@ def collect_config_files(
         if not text:
             continue
         for url in extract_base_urls_from_text(text):
+            safe = strip_userinfo(url)
             findings.append(Finding(
-                source=path, base_url=url, host=_hostname(url),
+                source=path, base_url=safe, host=_hostname(safe),
                 evidence_tier=CONFIGURED, classification="",
             ))
     return findings
@@ -98,7 +124,7 @@ def collect_env(
         val = (environ or {}).get(name)
         if not val:
             continue
-        url = val.strip().rstrip("/")
+        url = strip_userinfo(val.strip().rstrip("/"))
         findings.append(Finding(
             source=f"env:{name}", base_url=url, host=_hostname(url),
             evidence_tier=CONFIGURED, classification="",

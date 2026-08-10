@@ -628,7 +628,12 @@ def cmd_fleet_scan(a):
         print(render_console(result, redact=redact))
 
     if a.out:
-        with open(_os.path.expanduser(a.out), "w", encoding="utf-8") as fh:
+        # 0600 + O_NOFOLLOW: the report can carry internal hostnames/paths; write it
+        # private and refuse to follow a symlink at the path (write-boundary posture).
+        out_path = _os.path.expanduser(a.out)
+        flags = _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC | getattr(_os, "O_NOFOLLOW", 0)
+        fd = _os.open(out_path, flags, 0o600)
+        with _os.fdopen(fd, "w", encoding="utf-8") as fh:
             _json.dump(to_json(result, redact=redact), fh, indent=2)
 
     if a.exit_code and result.drifted > 0:

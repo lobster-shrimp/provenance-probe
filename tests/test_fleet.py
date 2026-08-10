@@ -148,3 +148,43 @@ def test_fleet_modules_do_not_import_requests():
     import provenance_probe.fleet.attribute as attr
     for mod in (scan, resolve, attr):
         assert not hasattr(mod, "requests"), f"{mod.__name__} must not import requests"
+
+
+# --- provenance-reviewer HIGH: credentials must never enter a finding -------- #
+
+@pytest.mark.unit
+def test_strip_userinfo_unit():
+    from provenance_probe.fleet.collectors import strip_userinfo
+    assert strip_userinfo("https://user:sk-tok@api.evil.example/v1") == "https://api.evil.example/v1"
+    assert strip_userinfo("https://user:pw@host:8080/v1") == "https://host:8080/v1"
+    assert strip_userinfo("https://api.openai.com/v1") == "https://api.openai.com/v1"  # unchanged
+    assert "sk-tok" not in strip_userinfo("http://x:sk-tok@h/v1")
+
+
+@pytest.mark.unit
+def test_credential_in_env_base_url_never_reaches_report():
+    r = run_scan("api.openai.com",
+                 environ={"OPENAI_BASE_URL": "https://user:sk-secrettoken123@api.deepseek.com/v1"},
+                 read_text=_reader({}))
+    blob = repr([(f.base_url, f.source, f.notes) for f in r.findings])
+    assert "sk-secrettoken123" not in blob
+    # classification still works off the stripped host
+    f = next(f for f in r.findings if f.host == "api.deepseek.com")
+    assert f.classification == E.OFF_ALLOWLIST_ATTRIBUTED
+
+@pytest.mark.unit
+def test_credential_in_config_base_url_never_reaches_report():
+    files = {"~/.codex/config.toml": 'base_url = "https://u:sk-leak999@api.moonshot.cn/v1"'}
+    r = run_scan("api.openai.com", environ={}, read_text=_reader(files))
+    from provenance_probe.fleet.render import to_json
+    assert "sk-leak999" not in repr(to_json(r, redact=True))
+    assert "sk-leak999" not in repr(to_json(r, redact=False))  # not gated on redact
+
+
+# --- provenance-reviewer LOW: bare host:port allowlist entry sanctions ------- #
+
+@pytest.mark.unit
+def test_bare_host_port_allowlist_entry_sanctions():
+    al = load_allowlist("localhost:20128\napi.openai.com\n")
+    assert is_sanctioned("localhost", al)   # port stripped, still matches
+    assert is_sanctioned("api.openai.com", al)

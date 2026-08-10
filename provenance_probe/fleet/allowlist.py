@@ -22,7 +22,9 @@ def load_allowlist(text: str) -> list[str]:
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue
-        host = _hostname(line) if ("://" in line or "/" in line) else line.strip().lower().rstrip(".")
+        # Always parse through _hostname so a bare `host:port` (e.g. a sanctioned
+        # localhost gateway) drops its port and still matches (provenance-reviewer LOW).
+        host = _hostname(line)
         if host:
             hosts.append(host)
     return hosts

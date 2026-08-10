@@ -105,7 +105,16 @@ LEAKAGE_PROBES = [
 ]
 
 # --- Jurisdictional endpoint intelligence ------------------------------------
-# host substring -> (operator, jurisdiction, confidence)
+# Keys are hostnames / hostname suffixes -> (operator, jurisdiction, confidence).
+# Two consumers match these keys DIFFERENTLY:
+#   * probes/network.py + probes/clientsrc.py: SUBSTRING (`pat in host_or_text`) —
+#     fine for scanning free text / client source.
+#   * fleet/attribute.py: EXACT-OR-SUBDOMAIN on the parsed hostname (a security
+#     boundary; substring would let api.deepseek.com.evil.test match).
+# CONSEQUENCE: a BARE-TOKEN key that is not a real hostname (e.g. "openai-proxy",
+# "bedrock-runtime") only works for the substring consumers; the fleet consumer
+# will silently skip it. Add new PRC pointers as real hostnames/suffixes so they
+# fire in BOTH consumers.
 PRC_ENDPOINTS = {
     "api.deepseek.com": ("DeepSeek", "PRC", 0.99),
     "dashscope.aliyuncs.com": ("Alibaba DashScope (Qwen)", "PRC", 0.99),
