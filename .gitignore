@@ -27,3 +27,6 @@ reports/
 # Claude Code local state
 .claude/worktrees/
 .claude/settings.local.json
+
+# macOS
+.DS_Store
