@@ -33,53 +33,22 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-DEFAULT_BASE = "http://localhost:20128/v1"
+# Pure gateway knowledge (label->family map, local-gateway constants) lives in
+# gateways.py so the no-egress fleet scanner can import it WITHOUT importing this
+# network-bearing module (plan-eng-review Arch 1). Re-exported here for back-compat.
+from .gateways import (  # noqa: F401  (re-exported)
+    LABEL_FAMILY,
+    OMNIROUTE_DEFAULT_BASE,
+    _normalize_label,
+    label_to_family,
+)
+
+DEFAULT_BASE = OMNIROUTE_DEFAULT_BASE
 
 # Cross-check states.
 CORROBORATED = "CORROBORATED"
 INCONCLUSIVE = "INCONCLUSIVE"
 CONTRADICTED = "CONTRADICTED"
-
-# Maintained LABEL -> tokenizer-family map. Maps an OmniRoute route/model label
-# (optionally provider-prefixed, e.g. "oc/deepseek-v4-flash-free") to the family
-# we expect to fingerprint. An UNMAPPED label yields INCONCLUSIVE, never a guess.
-# Keys are matched as case-insensitive substrings of the normalized label.
-# Ordered MOST-SPECIFIC-FIRST: the first substring hit wins, so multi-word keys
-# (gpt-neox) must precede their prefixes (gpt). Values are chosen so that _root()
-# of the value equals _root() of the matching first-party reference family name
-# (e.g. label "gpt-4o" -> "OpenAI" matches ref family "OpenAI"/"OpenAI-o200k").
-LABEL_FAMILY: dict[str, str] = {
-    "gpt-neox": "GPT-NeoX",
-    "neox": "GPT-NeoX",
-    "deepseek": "DeepSeek",
-    "qwen": "Qwen",
-    "qwq": "Qwen",
-    "chatglm": "GLM",
-    "glm": "GLM",
-    "zhipu": "GLM",
-    "minimax": "MiniMax",
-    "ling": "Ling",
-    "yi": "Yi",
-    "kimi": "Moonshot",
-    "moonshot": "Moonshot",
-    "internlm": "InternLM",
-    "baichuan": "Baichuan",
-    "chatgpt": "OpenAI",
-    "gpt": "OpenAI",
-    "o1": "OpenAI",
-    "o3": "OpenAI",
-    "o4": "OpenAI",
-    "claude": "Claude",
-    "anthropic": "Claude",
-    "gemini": "Gemini",
-    "gemma": "Gemma",
-    "llama": "Llama-3",
-    "mistral": "Mistral",
-    "mixtral": "Mistral",
-    "command": "Cohere",
-    "cohere": "Cohere",
-    "phi": "Phi",
-}
 
 # Known family ROOTS are derived from the families that ACTUALLY have reference
 # vectors — never a static list. A label whose family has no reference (e.g.
@@ -142,35 +111,9 @@ class CrossCheck:
 
 
 # --------------------------------------------------------------------------- #
-# Label -> family mapping
+# Label -> family mapping (label_to_family / _normalize_label / LABEL_FAMILY are
+# imported from gateways.py above and re-exported for back-compat)
 # --------------------------------------------------------------------------- #
-
-def _normalize_label(label: str) -> str:
-    """Lowercase; drop a leading provider prefix like 'oc/' or 'openrouter/'."""
-    s = (label or "").strip().lower()
-    if "/" in s:
-        s = s.split("/", 1)[1]
-    return s
-
-
-def label_to_family(label: str) -> str | None:
-    """Map an OmniRoute label to a tokenizer family, or None if unmapped.
-
-    Keys match only at LETTER boundaries (a digit or separator adjacent is fine),
-    so a short key can't match mid-word: `o1` matches `o1-preview` and `gpt-4o`
-    but NOT `proto1-vision`; `yi` matches a `yi` segment but not `yixin`. Bare
-    substring matching produced false CONTRADICTED accusations from incidental
-    substrings in router-supplied headers (Claude adversarial review, HIGH).
-    Unmapped is deliberate: it yields INCONCLUSIVE downstream, never a guess.
-    """
-    s = _normalize_label(label)
-    if not s:
-        return None
-    for key, fam in LABEL_FAMILY.items():
-        if re.search(r"(?<![a-z])" + re.escape(key) + r"(?![a-z])", s):
-            return fam
-    return None
-
 
 def _root(family: str | None) -> str:
     """Reduce a family name to its version-agnostic root.
