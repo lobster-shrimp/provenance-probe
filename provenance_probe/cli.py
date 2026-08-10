@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """provenance-probe CLI."""
 from __future__ import annotations
-import argparse, json, os, sys, datetime, uuid
+import argparse
+import datetime
+import json
+import os
+import sys
+import uuid
 
 from .config import load_targets, write_example, Target
 from .client import Client
@@ -101,7 +106,8 @@ def cmd_clientsrc(a):
 def cmd_network(a):
     hosts = a.host or []
     if a.hosts_file:
-        hosts += [l.strip() for l in open(a.hosts_file) if l.strip() and not l.startswith("#")]
+        hosts += [line.strip() for line in open(a.hosts_file)
+                  if line.strip() and not line.startswith("#")]
     print(json.dumps([network.analyze_host(h, do_rdap=not a.offline) for h in hosts], indent=2))
 
 
@@ -589,6 +595,47 @@ def cmd_init(a):
     print(f"Wrote example config -> {a.path}")
 
 
+def cmd_fleet_scan(a):
+    """Read-only, no-egress fleet scan: find where local agent CLIs are pointed,
+    resolve localhost gateways to their real upstream, classify against an
+    operator allowlist + bundled corpus attribution."""
+    import json as _json
+    import os as _os
+    import sys as _sys
+
+    from .fleet import run_scan
+    from .fleet.render import render_console, to_json
+
+    allowlist_text = ""
+    if a.allowlist:
+        try:
+            with open(_os.path.expanduser(a.allowlist), encoding="utf-8") as fh:
+                allowlist_text = fh.read()
+        except OSError as e:
+            print(f"could not read allowlist {a.allowlist}: {e}", file=_sys.stderr)
+            return 1
+    else:
+        print("note: no --allowlist given; nothing can be sanctioned, so every "
+              "endpoint reads as drift.", file=_sys.stderr)
+
+    # home-relative sources so a username never leaks (redaction guardrail).
+    result = run_scan(allowlist_text, home="~")
+    redact = not a.no_redact
+
+    if a.json:
+        print(_json.dumps(to_json(result, redact=redact), indent=2))
+    else:
+        print(render_console(result, redact=redact))
+
+    if a.out:
+        with open(_os.path.expanduser(a.out), "w", encoding="utf-8") as fh:
+            _json.dump(to_json(result, redact=redact), fh, indent=2)
+
+    if a.exit_code and result.drifted > 0:
+        return 2
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="provenance-probe", description=BANNER,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -813,6 +860,21 @@ def main(argv=None):
     s.add_argument("--i-am-authorized", action="store_true",
                    help="attest written authorization to send adversarial prompts")
     s.set_defaults(func=cmd_redteam)
+
+    s = sub.add_parser("fleet-scan",
+                       help="read-only, no-egress host scan: find AI router/gateway tools "
+                            "(OmniRoute-class) configured on this machine, resolve localhost "
+                            "gateways to their real upstream, and report allowlist drift")
+    s.add_argument("--allowlist", help="path to the operator allowlist (one host per line; "
+                                       "# comments ok). Without it, everything reads as drift.")
+    s.add_argument("--json", action="store_true", help="emit the report as JSON")
+    s.add_argument("--out", help="also write the JSON report to this path")
+    s.add_argument("--no-redact", action="store_true",
+                   help="keep full local detail (default redacts home paths / usernames for "
+                        "SIEM rollup)")
+    s.add_argument("--exit-code", action="store_true",
+                   help="exit 2 if any drift is found (the scheduled/CI primitive)")
+    s.set_defaults(func=cmd_fleet_scan)
 
     a = p.parse_args(argv)
     return a.func(a)
