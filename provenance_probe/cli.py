@@ -606,6 +606,25 @@ def cmd_fleet_scan(a):
     from .fleet import run_scan
     from .fleet.render import render_console, to_json
 
+    # Delivery generators (emit a config and exit; no scan).
+    if getattr(a, "print", None):
+        from .fleet import schedule
+        allow_abs = _os.path.abspath(_os.path.expanduser(a.allowlist)) if a.allowlist else ""
+        sqlite_abs = _os.path.abspath(_os.path.expanduser(a.sqlite or schedule.DEFAULT_DB))
+        if a.print == "osquery-atc":
+            print(schedule.osquery_atc(sqlite_abs))
+            return 0
+        try:
+            interval = schedule.parse_interval(a.interval)
+        except ValueError as e:
+            print(f"fleet-scan: {e}", file=_sys.stderr)
+            return 1
+        gen = {"launchd": schedule.launchd_plist,
+               "systemd": schedule.systemd_units,
+               "cron": schedule.cron_line}[a.print]
+        print(gen(allow_abs, sqlite_abs, interval=interval))
+        return 0
+
     allowlist_text = ""
     if a.allowlist:
         try:
@@ -626,6 +645,18 @@ def cmd_fleet_scan(a):
         print(_json.dumps(to_json(result, redact=redact), indent=2))
     else:
         print(render_console(result, redact=redact))
+
+    if getattr(a, "sqlite", None):
+        # SQLite sink for osquery ATC delivery (0600, redacted source by default).
+        import sqlite3 as _sqlite3
+
+        from .fleet.store import write_sqlite
+        try:
+            db = write_sqlite(result, a.sqlite, redact=redact)
+        except (OSError, _sqlite3.Error) as e:
+            print(f"fleet-scan: could not write SQLite DB {a.sqlite}: {e}", file=_sys.stderr)
+            return 1
+        print(f"wrote {len(result.findings)} findings -> {db}", file=_sys.stderr)
 
     if a.out:
         # 0600 + O_NOFOLLOW: the report can carry internal hostnames/paths; write it
@@ -879,6 +910,13 @@ def main(argv=None):
                         "SIEM rollup)")
     s.add_argument("--exit-code", action="store_true",
                    help="exit 2 if any drift is found (the scheduled/CI primitive)")
+    s.add_argument("--sqlite", help="also write findings to a SQLite DB at this path "
+                                    "(the table osquery reads via ATC)")
+    s.add_argument("--print", choices=["launchd", "systemd", "cron", "osquery-atc"],
+                   help="emit a delivery config and exit: a scheduled-scan unit "
+                        "(launchd/systemd/cron) or the osquery ATC config")
+    s.add_argument("--interval", default="12h",
+                   help="schedule interval for --print launchd/systemd/cron (default 12h)")
     s.set_defaults(func=cmd_fleet_scan)
 
     a = p.parse_args(argv)
