@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.24.0] — Fleet detection: find AI router/gateway tools on a host
+
+### Added
+- **`provenance-probe fleet-scan` — no-egress, read-only host forensics.** Discovers
+  where local agent CLIs (Claude Code, Codex, Continue, aider, Cursor) are pointed by
+  scanning config files + env for a redirected `base_url`, and classifies each endpoint
+  against an operator allowlist plus bundled `corpus.py` attribution into honest buckets
+  (`sanctioned` / `off-allowlist-attributed` / `off-allowlist-unattributed` /
+  `aggregator-unresolvable` / `gateway-upstream-unresolved`). Report headline is
+  allowlist-drift. Flags: `--allowlist`, `--json`, `--out`, `--no-redact`, `--exit-code`.
+- **Gateway-config resolution (the localhost blind-spot fix).** When a `base_url` points at
+  a local gateway (OmniRoute `localhost:20128`, LiteLLM), fleet-scan parses the gateway's
+  own config to resolve the real upstream and attributes THAT — so the founding OmniRoute
+  case is caught instead of shrugged off as "localhost".
+- **osquery delivery (T6).** `fleet-scan --sqlite <db>` writes a `fleet_findings` SQLite
+  table that osquery reads via ATC; `--print {launchd,systemd,cron,osquery-atc}` emits the
+  scheduled-scan unit or the ATC config. Recipe in `docs/fleet-osquery.md`.
+
+### Security
+- The fleet package makes **no network calls** — a structural boundary: pure gateway
+  knowledge lives in `provenance_probe/gateways.py`, which both `fleet/` and the
+  network-bearing `omniroute.py` import, so `fleet/` never imports the egress path.
+- Attribution is a **sub-CONFIRMED static pointer** (`measured=False`), never collapsed into
+  a measured provenance verdict. Exact-or-subdomain host matching rejects suffix attacks
+  (`api.deepseek.com.evil.test`).
+- Credentials in a `base_url` (`user:pass@`) are stripped at collection; reports and the
+  SQLite DB are written `0600` with home paths redacted, and the DB write refuses to follow
+  a symlink (`O_NOFOLLOW`).
+
 ## [0.23.1] — Copy fixes: extension install honesty + always-on now shipped
 
 ### Changed
