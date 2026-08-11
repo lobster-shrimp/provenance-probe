@@ -190,3 +190,19 @@ def test_bare_host_port_allowlist_entry_sanctions():
     al = load_allowlist("localhost:20128\napi.openai.com\n")
     assert is_sanctioned("localhost", al)   # port stripped, still matches
     assert is_sanctioned("api.openai.com", al)
+
+
+# --- T7: the starter allowlist template ------------------------------------- #
+
+@pytest.mark.unit
+def test_allowlist_template_parses_to_a_usable_starter():
+    from provenance_probe.fleet.allowlist import TEMPLATE
+    al = load_allowlist(TEMPLATE)
+    assert is_sanctioned("api.openai.com", al)
+    assert is_sanctioned("api.anthropic.com", al)
+    # commented placeholders (cloud tenants, the gateway) are NOT active
+    assert not is_sanctioned("tenant.openai.azure.com", al)
+    # the starter never sanctions a PRC host, and ships no PRC/aggregator hosts
+    assert not is_sanctioned("api.deepseek.com", al)
+    assert all("deepseek" not in h and "moonshot" not in h and "bigmodel" not in h
+               for h in al)

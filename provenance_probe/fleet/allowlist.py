@@ -43,3 +43,43 @@ def is_sanctioned(host: str, allowlist: list[str]) -> bool:
         if h == e or h.endswith("." + e):
             return True
     return False
+
+
+# A STARTER egress allowlist an operator forks into their own policy (T7). This is
+# the "prevention posture" input, not a second competing allowlist and not the
+# corpus registry: it names the hosts the org SANCTIONS, and fleet-scan reports
+# everything else as drift. Emitted by `fleet-scan --print allowlist-template`.
+# The first-party hosts are a curated SUBSET of corpus.py's FIRST_PARTY_ENDPOINTS
+# (the common ones) — a starting point to trim/extend, not the full set.
+TEMPLATE = """\
+# provenance-probe fleet-scan — reference egress allowlist (STARTER — fork this).
+#
+# List the AI inference hosts your org SANCTIONS. fleet-scan reports any agent-CLI
+# base_url NOT on this list as drift. Matching is exact-or-subdomain on the
+# hostname: a subdomain of a listed host is allowed; a suffix attack like
+# api.openai.com.evil.test is NOT. One host per line; '#' starts a comment; a URL
+# is accepted (its hostname is used). This is a starting point, not policy —
+# delete what you don't sanction and add your own. See docs/fleet-posture.md.
+
+# --- US / EU first-party providers (trim to match your policy) ---
+api.openai.com
+api.anthropic.com
+generativelanguage.googleapis.com
+api.mistral.ai
+api.cohere.com
+api.x.ai
+
+# --- your cloud tenants (uncomment and set your tenant/region) ---
+# <tenant>.openai.azure.com
+# bedrock-runtime.<region>.amazonaws.com
+# <region>-aiplatform.googleapis.com
+
+# --- your ONE sanctioned gateway, if you run one (the prevention posture) ---
+# Prefer a LOCALHOST gateway: fleet-scan resolves a loopback gateway's real
+# upstream from its config, so a localhost gateway pointed at a PRC backend is
+# still caught. A NON-loopback gateway host (below) is matched directly and its
+# upstream is NOT resolved — sanctioning it hides whatever it routes to. See
+# docs/fleet-posture.md ("gateway blind spot").
+# localhost:8080
+# ai-gateway.internal.example.com   # non-loopback: upstream NOT resolved — probe it directly
+"""
