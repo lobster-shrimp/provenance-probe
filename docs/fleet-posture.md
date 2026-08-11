@@ -69,6 +69,42 @@ removing it (fix the config). The number, not the developer, is the target.
 - **Fleet-wide:** schedule the scan and collect the SQLite table through osquery —
   see [fleet-osquery.md](fleet-osquery.md).
 
+## Trust-store watch (the transparent-MITM case)
+
+The base_url scan catches a gateway you *intentionally* point an agent CLI at. It
+does not catch a **transparent** interceptor — a proxy that installs a root CA and
+terminates TLS without any base_url change. That case has one unavoidable tell: a
+MITM-capable proxy **must install a root CA**, and no fork removes that requirement.
+
+`fleet-scan --trust-store` enumerates the host's admin/user-added trusted roots,
+fingerprints each (SHA-256 of the DER), and flags any not in your baseline —
+escalating CAs whose label matches a known interception tool (mitmproxy, Charles,
+Burp, …).
+
+```sh
+# 1. On a GOLDEN (known-clean) machine, capture the trusted-root baseline:
+provenance-probe fleet-scan --print ca-baseline --i-am-authorized > ca-baseline.txt
+
+# 2. On fleet hosts, diff against it:
+provenance-probe fleet-scan --trust-store --ca-baseline ca-baseline.txt --i-am-authorized
+```
+
+Two things to understand before you enable it:
+
+- **"Non-enterprise root" is not machine-computable.** Zscaler, Netskope, corp-MDM
+  and developer roots are legitimate and vary per org, so there is no built-in
+  "bad root" list — you supply the baseline. Without `--ca-baseline`, every root
+  reads as `unbaselined` (the report says so).
+- **It reads the system trust store — a privacy/labor-review surface**, so it is
+  inert until you pass `--i-am-authorized` (attesting documented policy). And the
+  **installing process** of a rogue CA is not captured here (the macOS keychain
+  records no PID); attributing *who* installed it needs an EDR/osquery event hook.
+
+macOS and Linux only for now. On an unsupported OS (or if the reader can't run),
+`fleet-scan --trust-store` **refuses with a non-zero exit (3, "host not certified
+clean")** rather than reporting a green result — a host whose store was never read
+is never counted as clean.
+
 ## What this is not
 
 - Not a package/registry — the allowlist is your policy, forked from a starter.

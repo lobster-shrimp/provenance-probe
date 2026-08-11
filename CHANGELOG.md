@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.25.0] — Fleet trust-store watch: transparent-MITM root-CA detection
+
+### Added
+- **`provenance-probe fleet-scan --trust-store`** — watches the host's trusted root
+  CAs for transparent interception. A MITM-capable proxy must install a root CA;
+  this enumerates admin/user-added roots, fingerprints each (SHA-256 of the DER,
+  stdlib — no `cryptography` dep), and flags any not in an operator-supplied
+  baseline, escalating known interception tools (mitmproxy/Charles/Burp, matched on
+  the DER commonName). Capture a golden baseline with `--print ca-baseline`.
+- macOS + Linux; no-egress (reads local trust stores via the `security` CLI / cert
+  dirs, no network). Report + `--json` + `--out` (0600 / `O_NOFOLLOW`).
+
+### Security
+- **Inert without `--i-am-authorized`** — reading the system trust store is a
+  privacy/labor-review surface, so both `--trust-store` and `--print ca-baseline`
+  refuse until documented policy is attested.
+- **Never a silent false-clean** — an unsupported OS (Windows) or an unreadable
+  store (`security` errored) refuses with exit 3 ("host not certified clean")
+  rather than reporting a green result; a genuinely empty admin-CA dir is clean.
+- **Honest limits** — attribution of the *installing process* is out of scope (the
+  macOS keychain records no PID); that needs an EDR/osquery event hook.
+
 ## [0.24.1] — Fleet posture: prevention-first framing + starter allowlist (T7)
 
 ### Added
