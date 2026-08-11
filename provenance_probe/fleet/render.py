@@ -65,6 +65,39 @@ def _attr_line(f: Finding) -> str:
             f"[static pointer, NOT a measured provenance verdict]")
 
 
+def truststore_to_json(result) -> dict:
+    from .truststore import BASELINE
+    return {
+        "headline": result.headline,
+        "total": result.total,
+        "baseline": result.baseline,
+        "unbaselined": result.unbaselined,
+        "interception": result.interception,
+        "findings": [
+            {"sha256": f.ca.sha256, "label": f.ca.label, "source": f.ca.source,
+             "classification": f.classification, "notes": f.notes}
+            for f in result.findings if f.classification != BASELINE
+        ],
+    }
+
+
+def render_truststore_console(result) -> str:
+    from .truststore import BASELINE, INTERCEPTION_TOOL
+    lines = [result.headline, ""]
+    drift = [f for f in result.findings if f.classification != BASELINE]
+    if not drift:
+        lines.append("  all trusted roots are in the baseline.")
+        return "\n".join(lines)
+    for f in drift:
+        marker = "MITM" if f.classification == INTERCEPTION_TOOL else "FLAG"
+        who = f.ca.label or f.ca.source or "(unlabelled)"
+        lines.append(f"  [{marker}] {who}  ({f.classification})")
+        lines.append(f"      sha256: {f.ca.sha256}")
+        for n in f.notes:
+            lines.append(f"      note: {n}")
+    return "\n".join(lines)
+
+
 def render_console(result: ScanResult, redact: bool = True) -> str:
     lines: list[str] = [result.headline, ""]
     if not result.findings:

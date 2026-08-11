@@ -612,6 +612,19 @@ def cmd_fleet_scan(a):
             from .fleet.allowlist import TEMPLATE
             print(TEMPLATE, end="")
             return 0
+        if a.print == "ca-baseline":
+            if not a.i_am_authorized:
+                print("fleet-scan --print ca-baseline reads the system trust store "
+                      "(a privacy/labor-review surface). Re-run with --i-am-authorized "
+                      "to attest documented policy.", file=_sys.stderr)
+                return 1
+            from .fleet import truststore
+            try:
+                print(truststore.baseline_template(), end="")
+            except truststore.TrustStoreUnavailable as e:
+                print(f"fleet-scan: {e}", file=_sys.stderr)
+                return 3
+            return 0
         from .fleet import schedule
         allow_abs = _os.path.abspath(_os.path.expanduser(a.allowlist)) if a.allowlist else ""
         sqlite_abs = _os.path.abspath(_os.path.expanduser(a.sqlite or schedule.DEFAULT_DB))
@@ -627,6 +640,44 @@ def cmd_fleet_scan(a):
                "systemd": schedule.systemd_units,
                "cron": schedule.cron_line}[a.print]
         print(gen(allow_abs, sqlite_abs, interval=interval))
+        return 0
+
+    # Trust-store watch (B-phase): inert until documented-policy attestation.
+    if getattr(a, "trust_store", False):
+        from .fleet import truststore
+        from .fleet.render import render_truststore_console, truststore_to_json
+        if not a.i_am_authorized:
+            print("fleet-scan --trust-store reads the system trust store (a "
+                  "privacy/labor-review surface). Re-run with --i-am-authorized to "
+                  "attest documented policy.", file=_sys.stderr)
+            return 1
+        baseline = set()
+        if a.ca_baseline:
+            try:
+                with open(_os.path.expanduser(a.ca_baseline), encoding="utf-8") as fh:
+                    baseline = truststore.load_baseline(fh.read())
+            except OSError as e:
+                print(f"could not read ca-baseline {a.ca_baseline}: {e}", file=_sys.stderr)
+                return 1
+        else:
+            print("note: no --ca-baseline given; every root reads as unbaselined. "
+                  "Capture a golden machine with --print ca-baseline first.", file=_sys.stderr)
+        try:
+            ts = truststore.scan_trust_store(truststore.default_load_certs, baseline)
+        except truststore.TrustStoreUnavailable as e:
+            print(f"fleet-scan --trust-store: {e} (host not certified clean)", file=_sys.stderr)
+            return 3
+        if a.json:
+            print(_json.dumps(truststore_to_json(ts), indent=2))
+        else:
+            print(render_truststore_console(ts))
+        if a.out:
+            out_path = _os.path.expanduser(a.out)
+            flags = _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC | getattr(_os, "O_NOFOLLOW", 0)
+            with _os.fdopen(_os.open(out_path, flags, 0o600), "w", encoding="utf-8") as fh:
+                _json.dump(truststore_to_json(ts), fh, indent=2)
+        if a.exit_code and (ts.unbaselined + ts.interception) > 0:
+            return 2
         return 0
 
     allowlist_text = ""
@@ -917,10 +968,18 @@ def main(argv=None):
     s.add_argument("--sqlite", help="also write findings to a SQLite DB at this path "
                                     "(the table osquery reads via ATC)")
     s.add_argument("--print",
-                   choices=["launchd", "systemd", "cron", "osquery-atc", "allowlist-template"],
+                   choices=["launchd", "systemd", "cron", "osquery-atc",
+                            "allowlist-template", "ca-baseline"],
                    help="emit a config and exit: a scheduled-scan unit "
-                        "(launchd/systemd/cron), the osquery ATC config, or a starter "
-                        "egress allowlist to fork")
+                        "(launchd/systemd/cron), the osquery ATC config, a starter "
+                        "egress allowlist, or this host's trusted-root CA baseline")
+    s.add_argument("--trust-store", action="store_true",
+                   help="B-phase: watch the system trust store for non-baseline root CAs "
+                        "(a MITM gateway must install one). Needs --i-am-authorized.")
+    s.add_argument("--ca-baseline", help="trusted-root baseline for --trust-store "
+                                         "(capture with --print ca-baseline on a golden host)")
+    s.add_argument("--i-am-authorized", action="store_true",
+                   help="attest documented policy / privacy-review to read the trust store")
     s.add_argument("--interval", default="12h",
                    help="schedule interval for --print launchd/systemd/cron (default 12h)")
     s.set_defaults(func=cmd_fleet_scan)
