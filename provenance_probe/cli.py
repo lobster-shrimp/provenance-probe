@@ -608,6 +608,10 @@ def cmd_fleet_scan(a):
 
     # Delivery generators (emit a config and exit; no scan).
     if getattr(a, "print", None):
+        if a.print == "allowlist-template":
+            from .fleet.allowlist import TEMPLATE
+            print(TEMPLATE, end="")
+            return 0
         from .fleet import schedule
         allow_abs = _os.path.abspath(_os.path.expanduser(a.allowlist)) if a.allowlist else ""
         sqlite_abs = _os.path.abspath(_os.path.expanduser(a.sqlite or schedule.DEFAULT_DB))
@@ -912,9 +916,11 @@ def main(argv=None):
                    help="exit 2 if any drift is found (the scheduled/CI primitive)")
     s.add_argument("--sqlite", help="also write findings to a SQLite DB at this path "
                                     "(the table osquery reads via ATC)")
-    s.add_argument("--print", choices=["launchd", "systemd", "cron", "osquery-atc"],
-                   help="emit a delivery config and exit: a scheduled-scan unit "
-                        "(launchd/systemd/cron) or the osquery ATC config")
+    s.add_argument("--print",
+                   choices=["launchd", "systemd", "cron", "osquery-atc", "allowlist-template"],
+                   help="emit a config and exit: a scheduled-scan unit "
+                        "(launchd/systemd/cron), the osquery ATC config, or a starter "
+                        "egress allowlist to fork")
     s.add_argument("--interval", default="12h",
                    help="schedule interval for --print launchd/systemd/cron (default 12h)")
     s.set_defaults(func=cmd_fleet_scan)

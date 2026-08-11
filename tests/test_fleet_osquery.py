@@ -180,3 +180,9 @@ def test_cli_sqlite_and_atc(tmp_path, monkeypatch, capsys):
     rc = main(["fleet-scan", "--print", "launchd", "--interval", "12hh"])
     assert rc == 1
     assert "fleet-scan:" in capsys.readouterr().err
+
+    # --print allowlist-template emits a forkable starter (T7)
+    rc = main(["fleet-scan", "--print", "allowlist-template"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "api.openai.com" in out and "STARTER" in out

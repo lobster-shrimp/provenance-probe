@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.24.1] — Fleet posture: prevention-first framing + starter allowlist (T7)
+
+### Added
+- **`provenance-probe fleet-scan --print allowlist-template`** emits a starter
+  egress allowlist (sanctioned first-party hosts + commented placeholders for cloud
+  tenants and one sanctioned gateway) for an operator to fork into their own policy.
+- **`docs/fleet-posture.md`** — the prevention-first posture: the control is an
+  egress allowlist + one sanctioned gateway, and `fleet-scan`'s
+  `allowlist holding: N sanctioned, M drifted` headline is the posture's health,
+  not a rogue-developer list. Documents the gateway blind spot honestly (upstream
+  resolution is loopback-only + config-dependent; a non-loopback sanctioned gateway
+  hides its backend — probe it directly).
+
 ## [0.24.0] — Fleet detection: find AI router/gateway tools on a host
 
 ### Added
