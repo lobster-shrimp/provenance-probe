@@ -590,6 +590,51 @@ def cmd_capture(a):
     _proxy_capture_and_save(a)                         # default: end-to-end proxy capture
 
 
+def cmd_build_registry(a):
+    """Generate the provider-attribution registry from corpus.py (deterministic)."""
+    import json as _json
+    import os as _os
+    import sys as _sys
+
+    from .registry import build_registry
+    doc = build_registry()
+    out = _json.dumps(doc, indent=2, sort_keys=False) + "\n"
+    if a.out:
+        with open(_os.path.expanduser(a.out), "w", encoding="utf-8") as fh:
+            fh.write(out)
+        print(f"wrote registry: {doc['entry_count']} entries "
+              f"({len(doc['excluded_nonhostname'])} non-hostname excluded: "
+              f"{', '.join(doc['excluded_nonhostname']) or 'none'}) -> {a.out}",
+              file=_sys.stderr)
+    else:
+        _sys.stdout.write(out)
+    return 0
+
+
+def cmd_verify_registry(a):
+    """Check that a registry file still matches corpus.py exactly (drift gate)."""
+    import json as _json
+    import os as _os
+    import sys as _sys
+
+    from .registry import verify_registry
+    try:
+        with open(_os.path.expanduser(a.file), encoding="utf-8") as fh:
+            doc = _json.load(fh)
+    except (OSError, ValueError) as e:
+        print(f"could not read registry {a.file}: {e}", file=_sys.stderr)
+        return 2
+    problems = verify_registry(doc)
+    if problems:
+        print("registry verification FAILED:", file=_sys.stderr)
+        for p in problems:
+            print(f"  - {p}", file=_sys.stderr)
+        return 1
+    print(f"registry OK: {doc.get('entry_count')} entries match corpus.py "
+          f"(corpus {doc.get('corpus_version')})")
+    return 0
+
+
 def cmd_init(a):
     write_example(a.path)
     print(f"Wrote example config -> {a.path}")
@@ -814,6 +859,17 @@ def main(argv=None):
 
     s = sub.add_parser("verify-reference", help="self-check the reference file")
     s.set_defaults(func=cmd_verify_reference)
+
+    s = sub.add_parser("build-registry",
+                       help="generate the public provider-attribution registry from "
+                            "corpus.py (deterministic; the observatory signs + publishes it)")
+    s.add_argument("--out", help="write the registry JSON here (default: stdout)")
+    s.set_defaults(func=cmd_build_registry)
+
+    s = sub.add_parser("verify-registry",
+                       help="assert a registry file still matches corpus.py (drift gate)")
+    s.add_argument("file", help="registry JSON to verify")
+    s.set_defaults(func=cmd_verify_registry)
 
     s = sub.add_parser("build-reference-endpoint",
                        help="measure a reference vector from a live authorized first-party "
