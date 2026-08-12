@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.27.0] — Provider-attribution registry generator (from corpus.py)
+
+### Added
+- **`provenance-probe build-registry`** — generates the public provider-attribution
+  registry (`domain → operating_entity → jurisdiction → kind → confidence`)
+  deterministically FROM `corpus.py`, which stays the single source of truth. The
+  registry is exact-or-subdomain, most-specific-wins; substring-only corpus keys
+  (`openai-proxy`, `bedrock-runtime`) are excluded and counted. Entries are
+  sub-CONFIRMED static pointers, never a measured verdict; aggregators carry
+  `jurisdiction: unresolved`.
+- **`provenance-probe verify-registry <file>`** — a drift gate that fails if a
+  checked-in/published registry no longer matches a fresh generation. Compares the
+  WHOLE document (not just entries), so a tampered honesty `note` or a `match` field
+  flipped to `substring` is caught — the integrity gate until the observatory signs it.
+
+Increment 1 of the signed public registry: signing (cosign/Rekor) and publication
+are a follow-on in provenance-observatory, which owns the signing machinery.
+
 ## [0.26.0] — Fleet Tier-2: observed egress / loopback fan-out shape
 
 ### Added
