@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.26.0] — Fleet Tier-2: observed egress / loopback fan-out shape
+
+### Added
+- **`provenance-probe fleet-scan --egress`** — reads the OS connection table
+  (`lsof -n`, no DNS) for the structural router shape, complementing the config
+  scan's `configured` tier with an `observed` one. Two signals, both name-independent:
+  **router fan-out** (a loopback/wildcard listener fanning out to ≥N distinct
+  upstream hosts — `--min-upstreams`, default 8) and **routed-via-gateway** (a
+  process connected to a known local-gateway port, `:20128`/`:4000`). macOS + Linux.
+
+### Security
+- **No egress** — reads the connection table only; upstream IPs are reported, never
+  resolved (IP→operator attribution needs RDAP = the prober's authorized path; JA3
+  needs pcap — both deferred and documented).
+- **Inert without `--i-am-authorized`** (per-process connections are a privacy surface).
+- **Never a silent false-clean** — refuses (exit 3) on an unsupported OS or an `lsof`
+  read error (including exit-1-with-no-output); a zero-finding **unprivileged** scan
+  is qualified "current user's sockets only" in the headline/report/JSON, since a
+  router running as root or another user is invisible to a non-root `lsof`.
+- Port 4000 (a common dev port) is hedged, not auto-accused; `--out` is 0600 / `O_NOFOLLOW`.
+
 ## [0.25.0] — Fleet trust-store watch: transparent-MITM root-CA detection
 
 ### Added

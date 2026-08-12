@@ -642,6 +642,35 @@ def cmd_fleet_scan(a):
         print(gen(allow_abs, sqlite_abs, interval=interval))
         return 0
 
+    # Observed-egress / loopback-fan-out (Tier-2, B-phase): inert until attestation.
+    if getattr(a, "egress", False):
+        from .fleet import connections
+        from .fleet.render import egress_to_json, render_egress_console
+        if not a.i_am_authorized:
+            print("fleet-scan --egress reads the per-process connection table (a "
+                  "privacy surface). Re-run with --i-am-authorized to attest "
+                  "documented policy.", file=_sys.stderr)
+            return 1
+        try:
+            eg = connections.analyze(connections.default_connections(),
+                                     min_upstreams=a.min_upstreams,
+                                     privileged=connections.is_privileged())
+        except connections.EgressUnavailable as e:
+            print(f"fleet-scan --egress: {e} (host not certified clean)", file=_sys.stderr)
+            return 3
+        if a.json:
+            print(_json.dumps(egress_to_json(eg), indent=2))
+        else:
+            print(render_egress_console(eg))
+        if a.out:
+            out_path = _os.path.expanduser(a.out)
+            flags = _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC | getattr(_os, "O_NOFOLLOW", 0)
+            with _os.fdopen(_os.open(out_path, flags, 0o600), "w", encoding="utf-8") as fh:
+                _json.dump(egress_to_json(eg), fh, indent=2)
+        if a.exit_code and eg.findings:
+            return 2
+        return 0
+
     # Trust-store watch (B-phase): inert until documented-policy attestation.
     if getattr(a, "trust_store", False):
         from .fleet import truststore
@@ -976,6 +1005,13 @@ def main(argv=None):
     s.add_argument("--trust-store", action="store_true",
                    help="B-phase: watch the system trust store for non-baseline root CAs "
                         "(a MITM gateway must install one). Needs --i-am-authorized.")
+    s.add_argument("--egress", action="store_true",
+                   help="Tier-2 (B-phase): read the connection table for the loopback "
+                        "fan-out shape (a local router) + processes routed via a known "
+                        "gateway port. No egress. Needs --i-am-authorized.")
+    s.add_argument("--min-upstreams", type=int, default=8,
+                   help="distinct upstreams from one loopback listener to call it a "
+                        "router fan-out (--egress; default 8)")
     s.add_argument("--ca-baseline", help="trusted-root baseline for --trust-store "
                                          "(capture with --print ca-baseline on a golden host)")
     s.add_argument("--i-am-authorized", action="store_true",

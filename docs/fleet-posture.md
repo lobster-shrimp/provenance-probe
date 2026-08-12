@@ -105,6 +105,45 @@ macOS and Linux only for now. On an unsupported OS (or if the reader can't run),
 clean")** rather than reporting a green result — a host whose store was never read
 is never counted as clean.
 
+## Observed egress: the loopback fan-out shape (Tier-2)
+
+The base_url scan reads *configured* intent; `fleet-scan --egress` reads the
+*observed* network shape from the connection table. It flags two structural signals
+that hold regardless of what a router is named:
+
+- **Router fan-out** — a process listening on a loopback port that fans out to many
+  distinct upstream hosts is a router (OmniRoute-class), even if renamed.
+- **Routed-via-gateway** — a process connected to a known local-gateway port
+  (`localhost:20128`, LiteLLM `:4000`) is a client using one.
+
+```sh
+provenance-probe fleet-scan --egress --i-am-authorized   # --min-upstreams N to tune
+```
+
+Scope is deliberately narrow, for the no-egress invariant:
+
+- It reads the connection table with `lsof -n` (no DNS) and **makes no network
+  call**. So a snapshot yields upstream **IPs**, not entities — attributing an IP to
+  a PRC operator needs reverse-DNS/RDAP (egress), which is the prober's *authorized*
+  `assess`/`network` path, not this collector. Fan-out findings say "upstream IPs
+  need an active probe to attribute."
+- **JA3 / TLS fingerprint** mismatch (a Node process presenting a browser
+  ClientHello) needs raw packet capture (pcap/root) and is not implemented here.
+- It reads per-process connections (a privacy surface), so it is **inert without
+  `--i-am-authorized`**, and it **refuses (exit 3), never reports clean**, when the
+  connection table can't be read (unsupported OS / `lsof` unavailable).
+- Point-in-time: a short-lived agent call may not be in-flight during the snapshot;
+  schedule it, or pair it with the config scan (which sees the persistent `base_url`).
+- **Privilege matters.** Unprivileged, `lsof` sees only the current user's sockets —
+  a router running as root or another user is invisible. A zero-finding result is
+  **qualified as "current user's sockets only"** (in the headline, report, and JSON)
+  when the scan isn't root, so it never reads as an unqualified clean. Run it as root
+  (or via the scheduled-scan unit) for a host-wide view.
+- Single-process assumption: fan-out attributes the listener and its upstreams to one
+  `(command, pid)`. A pre-fork router (LiteLLM under gunicorn/uvicorn workers) splits
+  the listening master from the upstream-holding workers across pids, which this
+  increment does not yet aggregate — corroborate with the config scan.
+
 ## What this is not
 
 - Not a package/registry — the allowlist is your policy, forked from a starter.
