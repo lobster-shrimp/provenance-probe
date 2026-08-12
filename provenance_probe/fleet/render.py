@@ -98,6 +98,41 @@ def render_truststore_console(result) -> str:
     return "\n".join(lines)
 
 
+_UNPRIV_NOTE = ("scan ran unprivileged — only the current user's sockets were "
+                "visible; run as root for a host-wide view (a router running as "
+                "root or another user is otherwise invisible)")
+
+
+def egress_to_json(result) -> dict:
+    return {
+        "headline": result.headline,
+        "connections": result.connections,
+        "privileged": result.privileged,
+        "caveat": None if result.privileged else _UNPRIV_NOTE,
+        "findings": [
+            {"classification": f.classification, "command": f.command, "pid": f.pid,
+             "detail": f.detail, "upstreams": f.upstreams, "notes": f.notes}
+            for f in result.findings
+        ],
+    }
+
+
+def render_egress_console(result) -> str:
+    lines = [result.headline, ""]
+    if not result.privileged:
+        lines += [f"  NOTE: {_UNPRIV_NOTE}.", ""]
+    if not result.findings:
+        tail = "" if result.privileged else " in the current user's sockets"
+        lines.append(f"  no router fan-out or local-gateway routing observed{tail}.")
+        return "\n".join(lines)
+    for f in result.findings:
+        lines.append(f"  [FLAG] {f.command} (pid {f.pid})  ({f.classification})")
+        lines.append(f"      {f.detail}")
+        for n in f.notes:
+            lines.append(f"      note: {n}")
+    return "\n".join(lines)
+
+
 def render_console(result: ScanResult, redact: bool = True) -> str:
     lines: list[str] = [result.headline, ""]
     if not result.findings:
