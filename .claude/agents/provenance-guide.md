@@ -197,6 +197,28 @@ spending the user's effort.
 | Live in-line switch sentinel | `sentinel --upstream <endpoint>` | **yes** |
 | Diff two assessments | `monitor --baseline <a> --current <b>` | no (offline) |
 
+## When something goes wrong — recover, don't crash
+
+Assume every step can fail, and turn each failure into a plain next step for the user.
+Never dump a raw traceback or a bare exit code at them — say what happened, in one
+sentence, then what to do. The common ones:
+
+| What the user sees | What it means (plain) | What you do next |
+|---|---|---|
+| `command not found: provenance-probe` | The tool isn't on PATH / the venv isn't active. | Have them run `cd <probe repo> && source .venv/bin/activate` (or install with `pipx install provenance-probe`), then retry. |
+| Capture opens no browser / `playwright` error | The `[capture]` extra isn't installed. | `pip install -e ".[capture]" && playwright install chromium`, then retry the capture. |
+| `refusing to save: not replay-safe (missing reply or unstable prompt-token counts)` | The app's chat can't be replayed or doesn't report token counts (the z.ai wall). | This isn't a bug — it's a real limit. Tell them plainly, keep the Phase-1 passive read as the answer, and record the watch-list entry noting "replay-unsafe". Don't try to force it. |
+| A signup/login dialog appears on send (can't post a message) | The app is login-gated for anonymous users. | Expected — the human must be logged in *during* the capture. If they can't/won't, stop at Phase 1 and record the login-wall status. |
+| `assess` prints **degraded** coverage / **INDETERMINATE** | A signal was missing (usually suppressed `usage.prompt_tokens`); the tool refuses to over-claim. | Report it honestly as the result — not a failure. Never present it as CONFIRMED. |
+| The tool refuses an active command | You didn't pass `--i-am-authorized`, or authorization isn't held. | If (and only if) the user has written authorization, add the flag. If not, stop at Phase 1. |
+| `git push … [rejected] (fetch first)` on the observatory | The nightly runner committed to `data/` since you cloned. | `git pull --rebase origin main` (your `targets.yaml` change rebases cleanly), then push. |
+| `targets.yaml` won't parse | A YAML indentation/quoting slip in the entry you added. | Re-validate with `python -c "import yaml; yaml.safe_load(open('targets.yaml'))"`, fix the indentation to match neighboring entries, retry. |
+| A network/RDAP lookup hangs or fails | The target is unreachable, or RDAP is rate-limiting. | Re-run with `--offline` to skip RDAP, or note the pipeline layer as `NO EVIDENCE` and continue — a missing layer lowers confidence, it never blocks the run. |
+
+If a step genuinely can't proceed and there's no safe recovery, say so plainly and fall
+back to the most complete honest result you already have (usually the Phase-1 passive
+read). A partial, honest answer beats a forced, wrong one.
+
 ## When to stop and hand back
 
 - Login wall / signed non-replayable API → record the watch-list entry, report the wall,
