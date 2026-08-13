@@ -635,6 +635,89 @@ def cmd_verify_registry(a):
     return 0
 
 
+def cmd_build_catalog(a):
+    """Build the LLM-API catalog: fetch models.dev (or read --input), join each
+    provider's api host with corpus.py provenance, write the catalog JSON. The one
+    explicit egress (like build-reference); the search path stays offline."""
+    import json as _json
+    import os as _os
+    import sys as _sys
+
+    from . import catalog as _catalog
+    try:
+        if a.input:
+            with open(_os.path.expanduser(a.input), encoding="utf-8") as fh:
+                src = _json.load(fh)
+        else:
+            src = _catalog.fetch_models_dev(a.source or _catalog.SOURCE_URL)
+    except Exception as e:   # network / parse — a generator command, degrade loudly
+        print(f"[build-catalog] could not obtain models.dev data: {e}", file=_sys.stderr)
+        return 2
+    doc = _catalog.build_catalog(src)
+    out = _json.dumps(doc, indent=2, sort_keys=False) + "\n"
+    if a.out:
+        with open(_os.path.expanduser(a.out), "w", encoding="utf-8") as fh:
+            fh.write(out)
+        cn = sum(1 for p in doc["providers"] if (p.get("provenance") or {}).get("kind") == "prc")
+        print(f"wrote catalog: {doc['provider_count']} providers / {doc['model_count']} models "
+              f"({cn} PRC-attributed) -> {a.out}", file=_sys.stderr)
+    else:
+        _sys.stdout.write(out)
+    return 0
+
+
+def _catalog_table(rows: list, limit: int) -> str:
+    """Compact fixed-width table of catalog rows for the terminal."""
+    cols = [("JURISDICTION", 14), ("PROVIDER", 20), ("MODEL", 26),
+            ("CONTEXT", 9), ("$IN", 7), ("$OUT", 7), ("API HOST", 30)]
+    out = ["  ".join(h.ljust(w) for h, w in cols)]
+    for r in rows[:limit]:
+        ctx = r.get("context")
+        cells = [
+            (r.get("jurisdiction") or "-"),
+            (r.get("provider_name") or "")[:20],
+            (r.get("model_id") or "")[:26],
+            (f"{ctx//1000}k" if isinstance(ctx, int) and ctx else "-"),
+            ("" if r.get("cost_input") is None else str(r["cost_input"])),
+            ("" if r.get("cost_output") is None else str(r["cost_output"])),
+            (r.get("api_host") or "")[:30],
+        ]
+        out.append("  ".join(str(c).ljust(w) for c, (_, w) in zip(cells, cols)))
+    return "\n".join(out)
+
+
+def cmd_catalog(a):
+    """Search the bundled LLM-API catalog (offline): API url, models, model-card
+    facts, joined with a provenance/jurisdiction pointer. A static pointer (who a
+    host is registered to), never a measured verdict — run `assess` for that."""
+    import json as _json
+    import os as _os
+    import sys as _sys
+
+    from . import catalog as _catalog
+    doc = _catalog.load_path(_os.path.expanduser(a.file)) if a.file else _catalog.load_bundled()
+    if doc is None:
+        print("[catalog] no catalog snapshot found. Generate one with:\n"
+              "  provenance-probe build-catalog --out provenance_probe/data/catalog.json",
+              file=_sys.stderr)
+        return 2
+    ow = True if a.open_weights else (False if a.closed_weights else None)
+    rows = _catalog.search(doc, query=a.search or "", jurisdiction=a.jurisdiction or "",
+                           kind=a.kind or "", cn_only=a.cn, open_weights=ow,
+                           modality=a.modality or "")
+    if a.json:
+        _sys.stdout.write(_json.dumps(rows, indent=2) + "\n")
+        return 0
+    total = len(rows)
+    print(f"LLM-API catalog — {total} model row(s) match "
+          f"(source: {doc.get('generated_from')}; corpus {doc.get('corpus_version')})")
+    print("provenance/jurisdiction is a SUB-CONFIRMED pointer, not a measured verdict.\n")
+    print(_catalog_table(rows, a.limit))
+    if total > a.limit:
+        print(f"\n… {total - a.limit} more (raise --limit or narrow the search).")
+    return 0
+
+
 def cmd_init(a):
     write_example(a.path)
     print(f"Wrote example config -> {a.path}")
@@ -870,6 +953,35 @@ def main(argv=None):
                        help="assert a registry file still matches corpus.py (drift gate)")
     s.add_argument("file", help="registry JSON to verify")
     s.set_defaults(func=cmd_verify_registry)
+
+    s = sub.add_parser("build-catalog",
+                       help="build the LLM-API catalog: fetch models.dev (MIT) and join each "
+                            "provider's api host with corpus.py provenance (the observatory "
+                            "refreshes + signs it nightly)")
+    s.add_argument("--out", help="write the catalog JSON here (default: stdout)")
+    s.add_argument("--source", default=None,
+                   help="models.dev api.json URL (default: https://models.dev/api.json)")
+    s.add_argument("--input", help="read a local models.dev api.json instead of fetching (offline)")
+    s.set_defaults(func=cmd_build_catalog)
+
+    s = sub.add_parser("catalog",
+                       help="search the LLM-API catalog offline: api url, models, model-card facts, "
+                            "joined with a provenance/jurisdiction pointer")
+    s.add_argument("search", nargs="?", default="",
+                   help="free-text match over provider / api host / model / family")
+    s.add_argument("--file", help="catalog JSON to search (default: the bundled snapshot)")
+    s.add_argument("--jurisdiction", help="filter by jurisdiction ('CN'/'PRC', 'US', 'EU', …)")
+    s.add_argument("--cn", action="store_true", help="only Chinese-origin / PRC-jurisdiction APIs")
+    s.add_argument("--kind", choices=["prc", "first-party", "aggregator"],
+                   help="filter by attribution kind")
+    s.add_argument("--open-weights", action="store_true", dest="open_weights",
+                   help="only open-weights models")
+    s.add_argument("--closed-weights", action="store_true", dest="closed_weights",
+                   help="only closed-weights models")
+    s.add_argument("--modality", help="require an input/output modality (e.g. image, audio)")
+    s.add_argument("--limit", type=int, default=50, help="max rows to print (default 50)")
+    s.add_argument("--json", action="store_true", help="emit matching rows as JSON")
+    s.set_defaults(func=cmd_catalog)
 
     s = sub.add_parser("build-reference-endpoint",
                        help="measure a reference vector from a live authorized first-party "

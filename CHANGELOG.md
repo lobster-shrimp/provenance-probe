@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+### Added
+- **LLM-API catalog — a searchable running table of inference APIs, their models,
+  and model-card facts, joined with this project's provenance/jurisdiction.**
+  - `provenance-probe catalog [query] [--cn/--jurisdiction/--kind/--open-weights/
+    --modality/--json]` — search offline: API URL, model, context window, price,
+    modalities, open-weights, **plus a provenance/jurisdiction column** (from the
+    `corpus.py` join) that no generic model catalog has.
+  - `provenance-probe build-catalog [--out/--input]` — generates the catalog from
+    `models.dev` (MIT, `github.com/sst/models.dev`) by joining each provider's `api`
+    host to `corpus.py` via the same exact-or-subdomain matcher the registry/fleet
+    scanner use. The one explicit egress (like `build-reference`); search stays local.
+  - `serve` **`/catalog`** page — a searchable table (external field values all
+    `html.escape`d); linked from the nav. Parsed once and cached; never shipped to
+    the browser.
+  - New pure `provenance_probe/catalog.py` (build/join/flatten/search) + a bundled
+    `data/catalog.json` snapshot (184 providers / 6,293 models at first build).
+  - **Honesty:** every row's provenance is a **SUB-CONFIRMED pointer** (who a host is
+    registered to), never a measured verdict — `assess` is for that; aggregators
+    resolve jurisdiction but not provenance; unknown-open-weights is tri-state (a
+    `--closed-weights` filter never lumps in "unknown"). The observatory will own the
+    nightly refresh + signing (next increment).
+
 ### Changed
 - **Friendlier local web UI (`serve`).** The home page gains a plain-language
   "Start here — three steps" strip (Quick check → Deep scan → Watch for swaps),
