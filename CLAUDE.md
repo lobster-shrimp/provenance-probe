@@ -52,7 +52,7 @@ OmniRoute (local router, ~290 providers, `localhost:20128`) injects a hidden ~20
 - **`serve` binds 127.0.0.1**, same-origin gate on state-changing POSTs, constant-time basic-auth in `before_request`, no secret ever reflected or logged.
 - **Never over-claim, never auto-accuse, authorization gates all active probing** (`authorized` flag per target/backend; behavioral probes send politically sensitive prompts — written authorization must cover that explicitly).
 
-`.claude/agents/provenance-reviewer.md` is the repo-tuned read-only reviewer that checks changes against these invariants — use it for anything touching transport/egress, serve, capture/replay, fingerprint/scoring, or the observatory runner/signing.
+`.claude/agents/provenance-reviewer.md` is the repo-tuned read-only reviewer that checks changes against these invariants — use it for anything touching transport/egress, serve, capture/replay, fingerprint/scoring, or the observatory runner/signing. `.claude/agents/provenance-guide.md` is the repo-tuned interactive **assessment guide** — it walks a user through a passive scan → observatory watch-list entry, then an authorization-gated deep scan (two-phase capture → tokenizer fingerprint) and continuous model-switch monitoring, doing the non-interactive work and handing off only the human login + authorization attestation.
 
 ## provenance-observatory — Python ≥3.11
 
