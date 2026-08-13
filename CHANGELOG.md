@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **`.claude/agents/provenance-guide.md`** — a repo-tuned interactive guide agent that
+  walks a user through a full assessment end-to-end and does the non-interactive work
+  itself. Phase 1: a no-auth passive scan (`clientsrc`, catalog read, `network`/RDAP) →
+  an honest Face/Brain-hints/Pipeline summary → an observatory **watch-list entry**
+  (`authorized: false`, NO VERDICT). Phase 2 (authorization-gated): a two-phase login
+  capture (login handed off to the human — no password handling), a tokenizer-only
+  `assess`, and set-up of continuous model-switch detection (`watch --pin/--once`,
+  launchd/systemd, `session`, `sentinel`). Bakes in the invariants: authorization gates
+  all active probing, passive yields pointers not verdicts, degraded coverage is never
+  upgraded, and named-vendor adverse verdicts are handed to a human (Gate 1), never
+  auto-published.
+
 ## [0.27.0] — Provider-attribution registry generator (from corpus.py)
 
 ### Added
