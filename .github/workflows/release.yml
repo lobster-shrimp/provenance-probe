@@ -1,0 +1,64 @@
+name: release
+
+# Publish provenance-probe to PyPI on a version tag, via PyPI Trusted Publishing
+# (OIDC) — NO stored token/secret. Gated: the tag must equal the package version,
+# and the full test suite + zero-FP eval must pass before anything is published.
+#
+# One-time setup on pypi.org (maintainer): PyPI project `provenance-probe` ->
+# Manage -> Publishing -> Add a trusted publisher:
+#   Owner: lobster-shrimp   Repository: provenance-probe
+#   Workflow name: release.yml   Environment: (leave blank)
+# Then release with:  git tag vX.Y.Z && git push origin vX.Y.Z
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read        # least privilege at the top; publish job elevates id-token
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    # A release must pass the same gate as main, plus tag==version consistency.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Tag must equal the package version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VER="$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          echo "tag=$TAG version=$VER"
+          if [ "$TAG" != "$VER" ]; then
+            echo "::error::tag v$TAG does not match pyproject version $VER — refusing to publish"
+            exit 1
+          fi
+      - name: Install (test + eval extras)
+        run: pip install -e ".[test,eval]"
+      - name: Full test suite
+        run: python -m pytest tests/ -q
+      - name: Accuracy / consistency eval (zero-FP gate)
+        run: python -m eval.run_eval --json
+
+  publish:
+    needs: gate
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write     # OIDC token for PyPI Trusted Publishing (no secret)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+      - name: Publish to PyPI (trusted publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
