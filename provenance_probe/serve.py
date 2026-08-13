@@ -371,6 +371,108 @@ def help_page():
                     mimetype="text/html")
 
 
+# --- LLM-API catalog (searchable running table) ------------------------------
+# A searchable table of inference APIs, their models, and model-card facts,
+# JOINED with corpus.py provenance/jurisdiction. Server-rendered per query (the
+# bundled snapshot is a few MB — parsed once and cached, never shipped to the
+# browser). All catalog text is EXTERNAL data (models.dev), so every field is
+# html.escape()d on the way into the DOM.
+_CATALOG_CACHE: dict = {}
+
+
+def _catalog_doc():
+    if "doc" not in _CATALOG_CACHE:
+        from . import catalog as _catmod
+        _CATALOG_CACHE["doc"] = _catmod.load_bundled()
+    return _CATALOG_CACHE["doc"]
+
+
+def _cost_pair(r) -> str:
+    ci, co = r.get("cost_input"), r.get("cost_output")
+    if ci is None and co is None:
+        return "—"
+    return f"${'' if ci is None else ci} / ${'' if co is None else co}"
+
+
+def _catalog_rows_html(rows, limit) -> str:
+    # Single-quoted f-strings + precomputed fragments so no backslash escapes appear
+    # inside an f-string (invalid on Python 3.10/3.11). Every value is html.escape()d.
+    out = []
+    for r in rows[:limit]:
+        cn = bool(r.get("cn_flagged"))
+        jur = html.escape(r.get("jurisdiction") or "—")
+        # green = clean, coral = flagged CN — one accent, per DESIGN.md.
+        pill_style = ' style="border-color:#c2542f;color:#a23a1c;background:#f7e6de"' if cn else ""
+        pill = f'<span class="pill"{pill_style}>{jur}</span>'
+        ctx = r.get("context")
+        ctx_s = f"{ctx // 1000}k" if isinstance(ctx, int) and ctx else "—"
+        ow = r.get("open_weights")
+        ow_s = "open" if ow is True else ("closed" if ow is False else "—")
+        ent = html.escape(r.get("operating_entity") or "")
+        ent_html = f'<div class="sub" style="margin:3px 0 0">{ent}</div>' if ent else ""
+        prov = html.escape(r.get("provider_name") or "")
+        api = html.escape(r.get("api_url") or "")
+        model = html.escape(r.get("model_id") or "")
+        modin = ", ".join(html.escape(str(x)) for x in (r.get("modalities_in") or []))
+        out.append(
+            f'<tr><td>{pill}{ent_html}</td>'
+            f'<td><b>{prov}</b>'
+            f'<div class="mono" style="font-size:12px;color:var(--muted)">{api}</div></td>'
+            f'<td>{model}</td>'
+            f'<td>{ctx_s}</td><td>{html.escape(_cost_pair(r))}</td><td>{ow_s}</td>'
+            f'<td class="sub">{modin}</td></tr>')
+    return "".join(out)
+
+
+def _sel(opts, current):
+    return "".join(
+        f'<option value="{html.escape(v)}"{" selected" if v == current else ""}>{html.escape(lbl)}</option>'
+        for v, lbl in opts)
+
+
+@app.get("/catalog")
+def catalog_page():
+    """Searchable LLM-API catalog: API url, models, model-card facts, joined with a
+    provenance/jurisdiction POINTER (never a measured verdict). Server-rendered per
+    query from the bundled snapshot; external field values are all escaped. Behind
+    the global auth gate like every route."""
+    doc = _catalog_doc()
+    a = request.args
+    q = a.get("q", "")
+    jur = a.get("jur", "")
+    kind = a.get("kind", "")
+    cn = a.get("cn") == "1"
+    open_only = a.get("open") == "1"
+    if doc is None:
+        body = ("<div class=\"topnav\"><a href=\"/\">&larr; Live probe</a></div>"
+                "<h1>LLM-API catalog</h1>"
+                "<div class=\"err\">No catalog snapshot is bundled yet. Generate one:"
+                "<br><code>provenance-probe build-catalog --out provenance_probe/data/catalog.json</code></div>")
+        return Response(_doc("Catalog · provenance-probe", body, right=_ui_nav("/catalog")),
+                        mimetype="text/html")
+    from . import catalog as _catmod
+    rows = _catmod.search(doc, query=q, jurisdiction=jur, kind=kind, cn_only=cn,
+                          open_weights=(True if open_only else None))
+    LIMIT = 200
+    total = len(rows)
+    body = CATALOG_PAGE.format(
+        q=html.escape(q),
+        jur_opts=_sel((("", "Any jurisdiction"), ("CN", "Chinese-origin (PRC)"),
+                       ("US", "US"), ("EU", "EU")), jur),
+        kind_opts=_sel((("", "Any attribution"), ("prc", "PRC operator"),
+                        ("first-party", "First-party vendor"), ("aggregator", "Aggregator")), kind),
+        cn_checked="checked" if cn else "", open_checked="checked" if open_only else "",
+        providers=doc.get("provider_count", 0), models=doc.get("model_count", 0),
+        source=html.escape(doc.get("generated_from", "")),
+        corpus=html.escape(doc.get("corpus_version", "")),
+        total=total, shown=min(total, LIMIT),
+        rows=_catalog_rows_html(rows, LIMIT),
+        more=(f"<p class='sub' style='margin-top:12px'>Showing the first {LIMIT} of {total} matches — "
+              "narrow your search to see the rest.</p>" if total > LIMIT else ""))
+    return Response(_doc("Catalog · provenance-probe", body, right=_ui_nav("/catalog")),
+                    mimetype="text/html")
+
+
 @app.get("/watch")
 def watch_page():
     """Client-side 'watch a service for a silent swap' (P2, #64).
@@ -401,6 +503,7 @@ def index():
     obs_url = os.environ.get("PROVENANCE_OBSERVATORY_URL",
                              "https://lobster-shrimp.github.io/provenance-observatory/")
     nav = ('<nav><a href="/" class="active" style="opacity:1;font-weight:700">Live probe</a>'
+           '<a href="/catalog">Catalog</a>'
            '<a href="/agent">Agent board</a><a href="/wizard">Add target</a>'
            '<a href="/help">Help</a>'
            '<a href="__OBSERVATORY_URL__" target="_blank" rel="noopener noreferrer">Observatory ↗</a></nav>')
@@ -1562,6 +1665,43 @@ def wizard_save():
              f'<button style="font:15px system-ui;padding:.5rem 1rem">Probe it now &rarr;</button></a></p>'
              + '<p class=sub><a href="/wizard">Add another</a> · <a href="/">probe tool</a></p>')
     return _wiz_page("Saved", inner)
+
+
+# Body fragment for the catalog page. .format() template — literal CSS braces are
+# doubled. {rows} is pre-escaped server-rendered HTML; {q}/{source}/{corpus} are
+# html.escape()d by the caller; the select option lists are built with _sel().
+CATALOG_PAGE = r"""<style>
+.cat{{width:100%;border-collapse:collapse;font-size:14px}}
+.cat td,.cat th{{padding:9px 12px;text-align:left;vertical-align:top}}
+.cat tbody tr{{border-top:1px solid var(--line)}}
+.cat thead th{{font:600 11px var(--ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}}
+</style>
+<section style="margin-bottom:16px">
+<p class="seclabel" style="margin:0 0 8px">A running table of LLM APIs</p>
+<h1 class="display" style="font-size:clamp(26px,4.2vw,40px);margin:0 0 10px">Which APIs serve which models — and who runs them</h1>
+<p class="lead">Search {providers} inference providers and {models} models — API address, context window, price, modalities — each row joined with a provenance / jurisdiction pointer from this tool's own attribution data. That last column is what a generic model catalog can't give you.</p>
+<p class="stat" style="margin:0">A <b>sub-confirmed pointer</b> (who an API host is registered to), never a measured verdict — run a probe for that. Source: {source} · corpus {corpus}. <a href="/help">What do these mean?</a></p>
+</section>
+<form class="card" method="get" action="/catalog" style="margin-bottom:16px">
+ <div class="row grid3">
+  <div><label>Search</label><input type="text" name="q" value="{q}" placeholder="deepseek, api.openai.com, glm, qwen…"></div>
+  <div><label>Jurisdiction</label><select name="jur">{jur_opts}</select></div>
+  <div><label>Attribution</label><select name="kind">{kind_opts}</select></div>
+ </div>
+ <div class="row chk" style="gap:18px;align-items:center">
+  <label style="font-weight:400;text-transform:none;letter-spacing:0"><input type="checkbox" name="cn" value="1" {cn_checked}> Chinese-origin only</label>
+  <label style="font-weight:400;text-transform:none;letter-spacing:0"><input type="checkbox" name="open" value="1" {open_checked}> Open-weights only</label>
+  <button type="submit">Search &rarr;</button>
+ </div>
+</form>
+<p class="sub" style="margin:0 0 10px">{total} model row(s) match · showing {shown}</p>
+<div class="card" style="padding:0;overflow-x:auto">
+<table class="cat">
+<thead><tr><th>Jurisdiction</th><th>Provider / API</th><th>Model</th><th>Context</th><th>$ in / out</th><th>Weights</th><th>Input modes</th></tr></thead>
+<tbody>{rows}</tbody>
+</table>
+</div>
+{more}"""
 
 
 # Body fragment for the live probe tool (rendered inside _doc, which supplies the

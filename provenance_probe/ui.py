@@ -240,7 +240,7 @@ figure.demo.noimg figcaption::before{content:"\1F3AC  "}
 
 # Standard internal nav. One place so every page links the same set — and so the
 # Help link reaches pages that don't build their own nav (see `header`).
-_NAV_ITEMS = (("/", "Live probe"), ("/agent", "Agent board"),
+_NAV_ITEMS = (("/", "Live probe"), ("/catalog", "Catalog"), ("/agent", "Agent board"),
               ("/wizard", "Add target"), ("/help", "Help"))
 
 
