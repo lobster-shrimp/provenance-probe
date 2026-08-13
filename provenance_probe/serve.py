@@ -419,7 +419,7 @@ def _catalog_rows_html(rows, limit) -> str:
             f'<td><b>{prov}</b>'
             f'<div class="mono" style="font-size:12px;color:var(--muted)">{api}</div></td>'
             f'<td>{model}</td>'
-            f'<td>{ctx_s}</td><td>{_cost_pair(r)}</td><td>{ow_s}</td>'
+            f'<td>{ctx_s}</td><td>{html.escape(_cost_pair(r))}</td><td>{ow_s}</td>'
             f'<td class="sub">{modin}</td></tr>')
     return "".join(out)
 

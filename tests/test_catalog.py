@@ -165,10 +165,26 @@ def test_serve_catalog_page_escapes_external_data(monkeypatch):
     from provenance_probe import serve
     evil = {"x": {"id": "x", "name": "<script>alert(1)</script>",
                   "api": "https://api.deepseek.com/v1",       # so it flags CN and renders
-                  "models": {"m": {"id": "<img src=x onerror=alert(1)>", "name": "m"}}}}
+                  "models": {"m": {
+                      "id": "<img src=x onerror=alert(1)>", "name": "m",
+                      # a hostile numeric field: must NOT reach the DOM as markup
+                      "cost": {"input": "<svg/onload=alert(2)>", "output": 1},
+                      "limit": {"context": "<b>x</b>"},
+                  }}}}
     monkeypatch.setitem(serve._CATALOG_CACHE, "doc", catalog.build_catalog(evil))
     page = serve.app.test_client().get("/catalog").get_data(as_text=True)
     assert "<script>alert(1)</script>" not in page            # not a live sink
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page    # escaped instead
     assert "<img src=x onerror=alert(1)>" not in page
+    assert "<svg/onload=alert(2)>" not in page                # cost coerced/escaped
+    assert "<b>x</b>" not in page                             # context coerced (type-guarded)
     serve._CATALOG_CACHE.clear()
+
+
+def test_num_coercion_drops_non_numeric_card_fields():
+    evil = {"p": {"id": "p", "name": "P", "api": "https://api.openai.com/v1",
+                  "models": {"m": {"id": "m", "cost": {"input": "<x>", "output": 2},
+                                   "limit": {"context": "oops"}}}}}
+    m = catalog.build_catalog(evil)["providers"][0]["models"][0]
+    assert m["cost_input"] is None and m["cost_output"] == 2   # string dropped, number kept
+    assert m["context"] is None

@@ -71,8 +71,17 @@ def _provenance_for(host: str) -> dict | None:
     return None
 
 
+def _num(v):
+    """A real number, or None. External catalog data is untrusted — a non-numeric
+    cost/limit (e.g. a string, or an HTML payload) is dropped, not carried through
+    to a numeric column (defence-in-depth against a hostile/compromised upstream)."""
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
 def _model_card(model_id: str, m: dict) -> dict:
-    """Project one models.dev model object into a flat, stable model-card record."""
+    """Project one models.dev model object into a flat, stable model-card record.
+    Numeric fields are coerced to number-or-None so only text-typed fields (id, name,
+    family, modalities — all html.escape()d at render) can ever carry a string."""
     limit = m.get("limit") or {}
     cost = m.get("cost") or {}
     modal = m.get("modalities") or {}
@@ -80,10 +89,10 @@ def _model_card(model_id: str, m: dict) -> dict:
         "id": m.get("id") or model_id,
         "name": m.get("name") or model_id,
         "family": m.get("family") or "",
-        "context": limit.get("context"),
-        "max_output": limit.get("output"),
-        "cost_input": cost.get("input"),
-        "cost_output": cost.get("output"),
+        "context": _num(limit.get("context")),
+        "max_output": _num(limit.get("output")),
+        "cost_input": _num(cost.get("input")),
+        "cost_output": _num(cost.get("output")),
         "modalities_in": list(modal.get("input") or []),
         "modalities_out": list(modal.get("output") or []),
         "open_weights": bool(m.get("open_weights")) if "open_weights" in m else None,
