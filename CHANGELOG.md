@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Changed
+- **Friendlier local web UI (`serve`).** The home page gains a plain-language
+  "Start here — three steps" strip (Quick check → Deep scan → Watch for swaps),
+  each linking to where it happens. The probe form now validates inline and shows
+  plain, actionable messages instead of `alert()`s and raw stack traces: a blank
+  endpoint no longer fires a request; a failed run renders a friendly "that check
+  couldn't finish" card with a **try again** button; and dropped-connection cases
+  say the *local* probe is unreachable (accurate — those calls hit 127.0.0.1, not
+  the target). Server-side, a new `_friendly_error()` maps common assessment
+  failures (missing endpoint address, invalid request-template JSON) to plain
+  sentences — presentation only; the full `traceback` is preserved and no error is
+  swallowed. Wizard cross-origin/invalid-JSON refusals reworded to plain, actionable
+  copy. No change to the auth gate, same-origin gate, consent tokens, cookie/secret
+  handling, or egress logic; all user text stays `html.escape`d / `textContent`.
+
+### Security
+- **Hardening (incidental):** the reworded run-error branch now escapes the server-sent
+  `status` through the page's `esc()` before writing it to the DOM, closing a latent
+  unescaped-`innerHTML` write that previously rendered the status raw inside a `<pre>`.
+
 ### Added
 - **`.claude/agents/provenance-guide.md`** — a repo-tuned interactive guide agent that
   walks a user through a full assessment end-to-end and does the non-interactive work
@@ -13,7 +33,10 @@
   launchd/systemd, `session`, `sentinel`). Bakes in the invariants: authorization gates
   all active probing, passive yields pointers not verdicts, degraded coverage is never
   upgraded, and named-vendor adverse verdicts are handed to a human (Gate 1), never
-  auto-published.
+  auto-published. Includes a plain-language **"When something goes wrong"** recovery
+  table so the guide turns each real failure (missing venv, replay-unsafe capture,
+  login walls, INDETERMINATE/degraded coverage, missing authorization, git push
+  conflicts, YAML slips, RDAP hangs) into a clear next step instead of a traceback.
 
 ## [0.27.0] — Provider-attribution registry generator (from corpus.py)
 

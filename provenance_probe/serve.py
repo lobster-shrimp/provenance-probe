@@ -7,7 +7,14 @@ you explicitly ask it to assess. Run history is stored on local disk only.
     provenance-probe serve            # http://127.0.0.1:8770
 """
 from __future__ import annotations
-import hmac, json, os, stat, threading, uuid, traceback, html
+import hmac
+import html
+import json
+import os
+import stat
+import threading
+import traceback
+import uuid
 
 from flask import Flask, request, jsonify, Response
 
@@ -79,6 +86,24 @@ def _require_basic_auth():
 
 
 # ------------------------------------------------------------------ engine ---
+def _friendly_error(e: Exception) -> str:
+    """Map the most common assessment failures to a plain, actionable sentence for
+    the web UI. Presentation only: the full technical detail is preserved
+    unchanged in the run's ``traceback`` field — this rewrites just the
+    user-facing ``status`` string, and never swallows the error (the caller still
+    ends the run in state="error")."""
+    msg = str(e)
+    if isinstance(e, KeyError) and "base_url" in msg:
+        return ("No endpoint address was given. Enter the endpoint base URL "
+                "(e.g. https://api.vendor.com/v1) and try again.")
+    if msg.startswith("Request template is not valid JSON"):
+        return ("The request template isn't valid JSON — check for a missing "
+                "quote, comma, or brace, then try again.")
+    if not msg.strip():
+        return "The assessment couldn't finish — check the endpoint address and try again."
+    return f"{msg} — check the endpoint address and try again."
+
+
 def _run(run_id: str, spec: dict):
     st = RUNS[run_id]
     def step(msg, pct):
@@ -158,7 +183,7 @@ def _run(run_id: str, spec: dict):
                   bundle=b, files={"json": base + ".json", "html": base + ".html",
                                    "warning": base + "_USER-WARNING.html"})
     except Exception as e:
-        st.update(state="error", status=str(e), traceback=traceback.format_exc())
+        st.update(state="error", status=_friendly_error(e), traceback=traceback.format_exc())
 
 
 # ------------------------------------------------------------------- routes --
@@ -1374,7 +1399,7 @@ def wizard_probe_response():
     response — removes the hand-typed-path error the operator hit on cURL paste."""
     from . import wizard
     if not _same_origin_ok(request):                   # defense-in-depth (already token-gated)
-        return _wiz_page("Refused", '<p class="err">Cross-site request refused.</p>')
+        return _wiz_page("Refused", '<p class="err">This request didn&rsquo;t come from the wizard page, so it was refused. Start over from the wizard.</p>')
     token = request.form.get("token", "")
     pending = _WIZARD_PENDING.get(token)
     if pending is None:
@@ -1385,7 +1410,7 @@ def wizard_probe_response():
         if not isinstance(target, dict):
             raise ValueError("target must be a JSON object")
     except (json.JSONDecodeError, ValueError) as e:
-        return _wiz_page("Invalid", f'<p class="err">Edited target is not valid JSON: '
+        return _wiz_page("Invalid", f'<p class="err">The target you edited isn&rsquo;t valid JSON &mdash; check for a missing quote, comma, or brace. Detail: '
                          f'{html.escape(str(e))}</p><p><a href="/wizard">&larr; back</a></p>')
     # Origin binding: never replay the captured cookie off its captured host.
     ok, why = _cookie_origin_ok(pending, target)
@@ -1433,7 +1458,7 @@ def wizard_probe_response():
 def wizard_save():
     from . import wizard
     if not _same_origin_ok(request):                   # defense-in-depth (already token-gated)
-        return _wiz_page("Refused", '<p class="err">Cross-site request refused.</p>')
+        return _wiz_page("Refused", '<p class="err">This request didn&rsquo;t come from the wizard page, so it was refused. Start over from the wizard.</p>')
     token = request.form.get("token", "")
     pending = _WIZARD_PENDING.get(token)
     if pending is None:
@@ -1445,7 +1470,7 @@ def wizard_save():
         if not isinstance(target, dict):
             raise ValueError("target must be a JSON object")
     except (json.JSONDecodeError, ValueError) as e:
-        return _wiz_page("Invalid", f'<p class="err">Edited target is not valid JSON: '
+        return _wiz_page("Invalid", f'<p class="err">The target you edited isn&rsquo;t valid JSON &mdash; check for a missing quote, comma, or brace. Detail: '
                          f'{html.escape(str(e))}</p><p><a href="/wizard">&larr; back</a></p>')
     # The dry-run below sends the stashed cookie to base_url+chat_path — apply the
     # SAME origin binding as the replay so an edited host can't exfiltrate it
@@ -1550,6 +1575,17 @@ PAGE = r"""<section style="margin-bottom:24px">
 <p class="stat" style="margin:0">Runs on your machine &middot; nothing leaves it except the requests to the endpoint you name.</p>
 </section>
 
+<!-- Plain-language "Start here" strip: the whole journey framed as three steps,
+     each linking to where it happens. Reuses the shared ol.steps green-chip style. -->
+<section aria-label="Start here" style="margin:0 0 26px">
+<p class="seclabel" style="margin:0 0 6px">Start here &mdash; three steps</p>
+<ol class="steps" style="max-width:66ch">
+ <li><b>Quick check &mdash; safe, no login.</b><span class="sub">See what an app claims and where its requests go, sending nothing sensitive. <a href="#probe">Probe an endpoint &darr;</a></span></li>
+ <li><b>Deep scan.</b><span class="sub">Find out which model is <i>really</i> answering. You log in yourself &mdash; your login is never recorded. <a href="/wizard">Add a target &rarr;</a></span></li>
+ <li><b>Watch for swaps.</b><span class="sub">Get alerted if the model silently changes later. <a href="/watch">Set up a watch &rarr;</a></span></li>
+</ol>
+</section>
+
 <!-- The two jobs, named plainly: probe now vs. watch over time. -->
 <div class="jobs">
  <div class="card job">
@@ -1647,6 +1683,7 @@ PAGE = r"""<section style="margin-bottom:24px">
  <div class="row chk"><input type=checkbox id=authorized>
   <span>I confirm I am authorized to test this endpoint. The deception and alignment
   probes send politically sensitive prompts and may trip the provider's abuse monitoring.</span></div>
+ <div id=probe_err class="err hide" style="margin:10px 0 0"></div>
  <button id=go onclick=start()>Run assessment</button>
  <div id=prog class=hide><div class=bar><i id=fill></i></div><div class=stat id=stat></div></div>
 </div>
@@ -1669,8 +1706,14 @@ PAGE = r"""<section style="margin-bottom:24px">
 const $=i=>document.getElementById(i);
 let timer=null;
 function toggleTmpl(){$('tmpl').classList.toggle('hide',$('api_style').value!=='template')}
+// Inline, plain-language form validation + failure messages, shown in #probe_err
+// (never a raw stack trace or bare status code). Passing null/'' clears it.
+function probeErr(msg){const e=$('probe_err');if(!e)return;
+ if(msg){e.textContent=msg;e.classList.remove('hide');e.scrollIntoView({block:'nearest'})}
+ else{e.textContent='';e.classList.add('hide')}}
 function start(){
- if(!$('authorized').checked){alert('Confirm authorization first.');return}
+ probeErr('');
+ if(!$('authorized').checked){probeErr('Confirm you are authorized to test this endpoint — tick the checkbox below the form.');return}
  const spec={base_url:$('base_url').value.trim(),model:$('model').value.trim(),
   name:$('name').value.trim()||'target',api_style:$('api_style').value,
   api_key:$('api_key').value,client_url:$('client_url').value.trim(),
@@ -1688,23 +1731,29 @@ function start(){
   spec.cookie=$('cookie').value;
   spec.stream_mode=$('stream_mode').value;
   spec.stream_delta_path=$('stream_delta_path').value.trim();
-  if(!spec.request_template){alert('Request template required for web-app (template) mode.');return}
-  if(!spec.response_text_path){alert('Response text path required for template mode.');return}
+  if(!spec.request_template){probeErr('Paste the captured request into “Request template” for web-app (template) mode.');return}
+  if(!spec.response_text_path){probeErr('Set “Response text path” so the probe knows where the reply text is (template mode).');return}
  }
- if(!spec.base_url){alert('Endpoint base URL required.');return}
+ if(!spec.base_url){probeErr('Enter the endpoint address to check, e.g. https://api.vendor.com/v1');$('base_url').focus();return}
  $('go').disabled=true;$('prog').classList.remove('hide');$('out').innerHTML='';
  fetch('/api/assess',{method:'POST',headers:{'Content-Type':'application/json'},
   body:JSON.stringify(spec)}).then(r=>r.json()).then(d=>{
-   if(d.error){alert(d.error);$('go').disabled=false;return}
-   timer=setInterval(()=>poll(d.run_id),900);});
+   if(d.error){probeErr(d.error);$('go').disabled=false;$('prog').classList.add('hide');return}
+   timer=setInterval(()=>poll(d.run_id),900);})
+  .catch(()=>{$('go').disabled=false;$('prog').classList.add('hide');
+   probeErr("Couldn't reach the probe running on your machine. Make sure provenance-probe is still running, then try again.");});
 }
 function poll(rid){
  fetch('/api/run/'+rid).then(r=>r.json()).then(d=>{
   $('fill').style.width=(d.progress||0)+'%';$('stat').textContent=d.status||'';
   if(d.state==='done'){clearInterval(timer);$('go').disabled=false;render(d,rid);loadHist()}
-  if(d.state==='error'){clearInterval(timer);$('go').disabled=false;
-   $('out').innerHTML='<div class="card"><b>Error</b><pre class=mono>'+
-   (d.status||'')+'</pre></div>'}});
+  if(d.state==='error'){clearInterval(timer);$('go').disabled=false;$('prog').classList.add('hide');
+   $('out').innerHTML='<div class="card"><div class="err"><b>That check couldn\'t finish.</b><br>'+
+   esc(d.status||'Something went wrong while assessing the endpoint.')+'</div>'+
+   '<p class="hint" style="margin:10px 0 0">Check the endpoint address and options above, then '+
+   '<button type="button" onclick="start()">try again</button>.</p></div>'}})
+  .catch(()=>{clearInterval(timer);$('go').disabled=false;$('prog').classList.add('hide');
+   probeErr("Lost contact with the probe on your machine while it was running. Make sure provenance-probe is still running, then try again.");});
 }
 function esc(s){return (s||'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}
 // "Watch this" hand-off: carry the target config (NOT the key or cookie) to the
