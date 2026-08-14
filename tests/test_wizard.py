@@ -615,4 +615,6 @@ def test_wizard_save_rejects_bad_json_with_valid_token():
                                    "fmt": "curl", "capture": _CURL})
     token = _re.search(rb'name=token value="([0-9a-f]+)"', prev.data).group(1).decode()
     r = c.post("/wizard/save", data={"token": token, "target": "{not json"})
-    assert r.status_code == 200 and b"not valid JSON" in r.data
+    # invalid-JSON message reworded in the UX pass (#79): "…isn't valid JSON — check
+    # for a missing quote, comma, or brace." Assert the stable, distinctive phrase.
+    assert r.status_code == 200 and b"check for a missing quote" in r.data

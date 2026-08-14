@@ -39,8 +39,10 @@ jobs:
             echo "::error::tag v$TAG does not match pyproject version $VER — refusing to publish"
             exit 1
           fi
-      - name: Install (test + eval extras)
-        run: pip install -e ".[test,eval]"
+      - name: Install (test + reference + eval extras)
+        # Match ci.yml exactly — the full suite needs `reference` (tiktoken) for the
+        # probe-variant roundtrip tests; installing only [test,eval] fails them.
+        run: pip install -e ".[test,reference,eval]"
       - name: Full test suite
         run: python -m pytest tests/ -q
       - name: Accuracy / consistency eval (zero-FP gate)
