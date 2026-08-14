@@ -1,6 +1,8 @@
 # Changelog
 
-## [Unreleased]
+## [0.28.0] — LLM-API catalog + guided assessment + friendlier UI (2026-08-14)
+
+First PyPI release. Assigns the accumulated unreleased work a version.
 
 ### Added
 - **LLM-API catalog — a searchable running table of inference APIs, their models,
