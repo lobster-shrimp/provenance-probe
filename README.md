@@ -62,6 +62,18 @@ provenance-probe assess --config docs/media/demo-target.json --i-am-authorized -
 
 ## 📦 Install — Mac · Linux · Windows
 
+**From PyPI** (fastest — the CLI + engine, with the tokenizer reference vectors and the
+LLM-API catalog snapshot bundled):
+
+```bash
+pip install llm-provenance-probe      # PyPI name; the command is `provenance-probe`
+provenance-probe --help
+```
+
+Add extras as needed: `llm-provenance-probe[reference]` (build tokenizer refs from Hugging
+Face), `[capture]` (Playwright/mitmproxy web-app capture), `[eval]`. For the one-command
+setup, the demo, and the reference builder, clone the repo instead:
+
 <details open>
 <summary><b>🍎 macOS / 🐧 Linux</b></summary>
 
@@ -134,8 +146,9 @@ Reports persist to `/data` in the container (`~/.provenance-probe/reports` local
 
 | Command | Purpose |
 |---|---|
-| `serve` | Local web UI (probe tool + add-target wizard + agent board) |
+| `serve` | Local web UI (probe tool + `/catalog` LLM-API table + add-target wizard + agent board) |
 | `assess` | Full multi-layer assessment of a configured target |
+| `catalog` / `build-catalog` | Searchable running table of LLM APIs × their models × model-card facts (context, price, modalities, open-weights), **joined with a provenance/jurisdiction pointer** — built from [models.dev](https://models.dev) (MIT). Also the `/catalog` page in `serve`. |
 | `agent-trace` / `agent` | Assess an **agent** (trace ingest, or active backend probe) |
 | `watch` | **Unattended always-on daemon** — assess targets on a schedule, diff vs a pinned baseline, alert loudly on a silent swap (`--loop`/`--once`; launchd/systemd generators) |
 | `sentinel` | Live reverse-proxy flight recorder — tees an agent's model calls, live board |
