@@ -1,13 +1,17 @@
 name: release
 
-# Publish provenance-probe to PyPI on a version tag, via PyPI Trusted Publishing
-# (OIDC) — NO stored token/secret. Gated: the tag must equal the package version,
-# and the full test suite + zero-FP eval must pass before anything is published.
+# Publish the probe to PyPI on a version tag, via PyPI Trusted Publishing (OIDC) —
+# NO stored token/secret. Gated: the tag must equal the package version, and the full
+# test suite + zero-FP eval must pass before anything is published.
 #
-# One-time setup on pypi.org (maintainer): PyPI project `provenance-probe` ->
-# Manage -> Publishing -> Add a trusted publisher:
-#   Owner: lobster-shrimp   Repository: provenance-probe
-#   Workflow name: release.yml   Environment: (leave blank)
+# PyPI DISTRIBUTION name is `llm-provenance-probe` (the CLI command + import package
+# stay `provenance-probe` / `provenance_probe`; `provenance-probe` is too similar to
+# the existing PyPI project `provenance` for PyPI to allow it).
+#
+# One-time setup on pypi.org (maintainer): Account -> Publishing -> Add a pending
+# publisher (GitHub):
+#   PyPI Project Name: llm-provenance-probe   Owner: lobster-shrimp
+#   Repository: provenance-probe   Workflow name: release.yml   Environment: (blank)
 # Then release with:  git tag vX.Y.Z && git push origin vX.Y.Z
 on:
   push:

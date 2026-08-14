@@ -176,7 +176,8 @@ cd $HOME\CODE\provenance-observatory
 pip install fastapi "uvicorn>=0.29" "httpx>=0.27" "pyyaml>=6.0"
 ```
 
-> `requirements.txt` pins `provenance-probe==0.4.1` from PyPI — for local dev you
+> `requirements.txt` pins `llm-provenance-probe==0.28.0` from PyPI (the PyPI
+> distribution name; the CLI command is still `provenance-probe`) — for local dev you
 > want the **editable engine you just installed** instead, so install the four
 > packages above directly rather than `pip install -r requirements.txt`. The
 > editable `provenance-probe` from Part 2 stays on the path.
