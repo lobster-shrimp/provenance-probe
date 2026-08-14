@@ -4,6 +4,12 @@
 
 First PyPI release. Assigns the accumulated unreleased work a version.
 
+**PyPI distribution name: `llm-provenance-probe`** (`pip install llm-provenance-probe`).
+`provenance-probe` itself is too similar to the pre-existing PyPI project `provenance`
+for PyPI to allow, so the distribution is namespaced. The **CLI command stays
+`provenance-probe`**, the import package stays `provenance_probe`, and the GitHub repo
+stays `provenance-probe` — only the `pip install` name differs.
+
 ### Added
 - **LLM-API catalog — a searchable running table of inference APIs, their models,
   and model-card facts, joined with this project's provenance/jurisdiction.**

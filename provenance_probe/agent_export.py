@@ -17,9 +17,11 @@ SCHEMA_VERSION = "0.1.0"
 def _engine_version() -> str:
     try:
         from importlib.metadata import version
-        return f"provenance-probe=={version('provenance-probe')}"
+        # PyPI distribution name is llm-provenance-probe (the CLI command + import
+        # package stay provenance-probe / provenance_probe).
+        return f"llm-provenance-probe=={version('llm-provenance-probe')}"
     except Exception:
-        return "provenance-probe"
+        return "llm-provenance-probe"
 
 
 def sha256_text(text: str) -> str:
