@@ -7,7 +7,7 @@ with the code.
 ## Why publish to PyPI
 
 1. **Reproducible, pinned installs — the load-bearing reason.** The
-   [Observatory](../README.md#-companion--the-observatory) consumes the probe strictly
+   [Observatory](https://github.com/lobster-shrimp/provenance-observatory) consumes the probe strictly
    as a black-box CLI and its whole value is *signed, trustworthy evidence*. That
    evidence is only as trustworthy as a **known engine version**. Before the release,
    the Observatory's nightly installed the probe from `git+…@main` — a moving target,
