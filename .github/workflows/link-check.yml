@@ -1,0 +1,46 @@
+name: link-check
+
+# Audit repo docs for broken links (relative files, in-page/cross-file anchors,
+# external URLs). Split so the PR gate is deterministic:
+#   - internal: OFFLINE — local files + anchor fragments only. No network, never
+#     flaky. This is the gate that runs on every docs PR/push.
+#   - external: online URL reachability, LENIENT + scheduled/on-demand only, so a
+#     transient 5xx / rate-limit never red-flags an unrelated PR.
+on:
+  push:
+    branches: [main]
+    paths: ["**/*.md", ".github/workflows/link-check.yml"]
+  pull_request:
+    paths: ["**/*.md"]
+  schedule:
+    - cron: "0 6 * * 1"          # Mondays — catch external link rot
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  internal:
+    name: internal links + anchors (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: lychee (offline — files + fragments)
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: "--offline --include-fragments --no-progress '**/*.md'"
+          fail: true
+
+  external:
+    name: external URLs (scheduled / on-demand, lenient)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: lychee (online — external reachability)
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: "--include-fragments --no-progress --max-retries 3 --accept 200..=299,403,429 --exclude-loopback '**/*.md'"
+          fail: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # avoid GitHub API rate limits on gh.com links
