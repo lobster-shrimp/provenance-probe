@@ -71,8 +71,10 @@ provenance-probe --help
 ```
 
 Add extras as needed: `llm-provenance-probe[reference]` (build tokenizer refs from Hugging
-Face), `[capture]` (Playwright/mitmproxy web-app capture), `[eval]`. For the one-command
-setup, the demo, and the reference builder, clone the repo instead:
+Face), `[capture]` (Playwright/mitmproxy web-app capture), `[eval]`. (Why the install name
+differs from the command, and why it's on PyPI at all — see
+[docs/PACKAGING.md](docs/PACKAGING.md).) For the one-command setup, the demo, and the
+reference builder, clone the repo instead:
 
 <details open>
 <summary><b>🍎 macOS / 🐧 Linux</b></summary>
@@ -206,6 +208,7 @@ Only run against systems you are **authorized in writing** to test. Targets carr
 - **[WHITEPAPER.md](WHITEPAPER.md)** — the problem, the method, and why it's open (for consumers, security, legal/compliance, policy).
 - **[QUICKSTART.md](QUICKSTART.md)** — project layout and first run.
 - **[RUNNING-LOCALLY.md](RUNNING-LOCALLY.md)** — from-scratch cross-platform local run (Windows/macOS/Linux).
+- **[docs/PACKAGING.md](docs/PACKAGING.md)** — why the engine ships on PyPI (reproducible pinning for the Observatory + distribution), the dist-name-vs-command split, the trusted-publishing release flow, and why PyPI does *not* automate captures.
 - **[docs/adding-sources.md](docs/adding-sources.md)** — point the probe at a new API or web app.
 - **[docs/EXTENDING.md](docs/EXTENDING.md)** — grow coverage: endpoints, web apps, agents, reference families.
 - **[docs/CONOPS.md](docs/CONOPS.md)** — executive / federal concept of operations.
