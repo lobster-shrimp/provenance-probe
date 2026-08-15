@@ -95,4 +95,4 @@ When the user's request matches an available skill, invoke it via the Skill tool
 
 ## Pointers
 
-Probe: `docs/ARCHITECTURE.md` (math + invariants), `WHITEPAPER.md` (why), `docs/CONOPS.md` (executive/federal agent framing), `QUICKSTART.md`, `RUNNING-LOCALLY.md`, `docs/WIZARD.md`, `docs/EXTENDING.md` / `docs/adding-sources.md`, `DISCLOSURE.md`. Observatory: `docs/ARCHITECTURE.md` (decision record), `docs/adding-targets.md`, `api/README.md` + `api/DEPLOY.md`, `DISCLOSURE.md` (publication policy).
+Probe: `docs/ARCHITECTURE.md` (math + invariants), `WHITEPAPER.md` (why), `docs/CONOPS.md` (executive/federal agent framing), `QUICKSTART.md`, `RUNNING-LOCALLY.md`, `docs/WIZARD.md`, `docs/EXTENDING.md` / `docs/adding-sources.md`, `docs/PACKAGING.md` (why PyPI + the `llm-provenance-probe` dist-name vs `provenance-probe` command), `DISCLOSURE.md`. Observatory: `docs/ARCHITECTURE.md` (decision record), `docs/adding-targets.md`, `api/README.md` + `api/DEPLOY.md`, `DISCLOSURE.md` (publication policy).
