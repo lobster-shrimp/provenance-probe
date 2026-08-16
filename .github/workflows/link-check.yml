@@ -25,6 +25,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Guard emoji-heading anchors
+        # lychee can't catch these: GitHub keeps the U+FE0F variation selector in an
+        # emoji heading's anchor, lychee drops it — so a link to an emoji-heading
+        # auto-anchor breaks on GitHub yet false-passes lychee. Require an explicit
+        # <a id> instead (resolves identically on both). See the script's guidance.
+        run: python3 scripts/check-emoji-anchors.py
       - name: lychee (offline — files + fragments)
         uses: lycheeverse/lychee-action@v2
         with:
