@@ -1,5 +1,12 @@
 name: link-check
 
+# `internal links + anchors (offline)` is a REQUIRED status check on this repo's
+# `main` (branch protection) — a broken-link PR cannot merge. Admins can bypass
+# (enforce_admins:false). This is safe here because all changes land via PR; there
+# is no bot pushing directly to main. (The observatory is SOFT-gated instead — its
+# nightly bot direct-pushes to main and a required check would reject that; see its
+# link-check.yml.)
+#
 # Audit repo docs for broken links (relative files, in-page/cross-file anchors,
 # external URLs). Split so the PR gate is deterministic:
 #   - internal: OFFLINE — local files + anchor fragments only. No network, never
