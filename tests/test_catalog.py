@@ -188,3 +188,20 @@ def test_num_coercion_drops_non_numeric_card_fields():
     m = catalog.build_catalog(evil)["providers"][0]["models"][0]
     assert m["cost_input"] is None and m["cost_output"] == 2   # string dropped, number kept
     assert m["context"] is None
+
+
+def test_hostless_first_party_provider_resolves_via_fallback():
+    """models.dev omits the api URL for some vendors (empty host). The provider_id
+    fallback must still resolve first-party provenance (Anthropic -> US)."""
+    src = {
+        "anthropic": {"id": "anthropic", "name": "Anthropic", "api": "",
+                      "models": {"claude-opus-5": {"id": "claude-opus-5", "context": 1000000}}},
+        "mystery-gw": {"id": "mystery-gw", "name": "Mystery Gateway", "api": "",
+                       "models": {"x": {"id": "x"}}},
+    }
+    by = {p["provider_id"]: p for p in catalog.build_catalog(src)["providers"]}
+    a = by["anthropic"]
+    assert a["api_host"] == "api.anthropic.com"                 # fallback host applied
+    assert a["provenance"]["kind"] == "first-party"
+    assert a["provenance"]["jurisdiction"] == "US"
+    assert by["mystery-gw"]["provenance"] is None               # unknown hostless -> still unresolved (honest)

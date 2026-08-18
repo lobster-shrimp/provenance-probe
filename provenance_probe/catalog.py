@@ -35,6 +35,26 @@ SOURCE_URL = "https://models.dev/api.json"
 SOURCE_NOTE = "generated from models.dev (MIT, github.com/sst/models.dev), joined with corpus.py"
 _BUNDLED = os.path.join(os.path.dirname(__file__), "data", "catalog.json")
 
+# models.dev omits the `api` URL for some providers (empty host -> no provenance
+# join). For recognizable first-party vendors + known aggregators, fall back to the
+# canonical host so corpus.py can still attribute them. Keyed by models.dev
+# provider id; the host must exist in corpus.py (that's what carries the origin).
+_PROVIDER_ID_HOST = {
+    # first-party vendors
+    "openai": "api.openai.com",
+    "anthropic": "api.anthropic.com",
+    "google": "generativelanguage.googleapis.com",
+    "google-vertex": "generativelanguage.googleapis.com",
+    "google-vertex-anthropic": "generativelanguage.googleapis.com",
+    "mistral": "api.mistral.ai",
+    "cohere": "api.cohere.com",
+    "xai": "api.x.ai",
+    # neutral aggregators
+    "togetherai": "api.together.xyz",
+    "deepinfra": "api.deepinfra.com",
+    "groq": "api.groq.com",
+}
+
 
 def _host_of(api_url: str) -> str:
     """Hostname of a provider `api` base URL (lowercased, trailing dot stripped)."""
@@ -115,7 +135,9 @@ def build_catalog(models_dev: dict) -> dict:
         if not isinstance(p, dict):
             continue
         api_url = p.get("api") or ""
-        host = _host_of(api_url)
+        # fall back to a canonical host for recognizable providers models.dev leaves
+        # without an `api` URL, so first-party vendors still resolve provenance.
+        host = _host_of(api_url) or _PROVIDER_ID_HOST.get(pid, "")
         models_obj = p.get("models") or {}
         models = [_model_card(mid, models_obj[mid])
                   for mid in sorted(models_obj) if isinstance(models_obj[mid], dict)]
