@@ -48,7 +48,8 @@ def strip_userinfo(url: str) -> str:
     return rebuilt if "://" in s else rebuilt.split("://", 1)[-1]
 
 # Per-tool config files to scan (path is relative to home; "~" expanded by caller).
-# Ships macOS + Linux first (plan defers Windows).
+# These are home-relative dotfile paths, so they resolve on macOS, Linux AND Windows
+# (`expanduser("~")` → the user profile; open() accepts the forward slashes).
 DEFAULT_CONFIG_TARGETS: list[str] = [
     ".codex/config.toml",
     ".continue/config.json",

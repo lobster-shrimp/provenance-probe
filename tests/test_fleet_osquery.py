@@ -96,6 +96,56 @@ def test_launchd_plist_runs_fleet_scan_with_sqlite():
     assert "--allowlist" in p and "/etc/allow.txt" in p
 
 @pytest.mark.unit
+def test_schtasks_xml_is_well_formed_and_runs_fleet_scan():
+    import xml.dom.minidom as minidom
+    x = schedule.schtasks_xml("C:/allow.txt", "C:/fleet.db", interval=schedule.parse_interval("6h"))
+    minidom.parseString(x)  # raises if not well-formed
+    assert "<Interval>PT6H</Interval>" in x
+    assert "provenance_probe.cli" in x and "fleet-scan" in x
+    assert "--sqlite" in x and "C:/fleet.db" in x
+    assert "--allowlist" in x and "C:/allow.txt" in x
+
+
+@pytest.mark.unit
+def test_schtasks_xml_escapes_ampersand():
+    x = schedule.schtasks_xml("", "C:/a & b/fleet.db", interval=3600)
+    import xml.dom.minidom as minidom
+    minidom.parseString(x)                 # still well-formed with an & in the path
+    assert "&amp;" in x and "a & b" not in x
+
+
+@pytest.mark.unit
+def test_intune_script_installs_and_schedules():
+    s = schedule.intune_script("C:/allow.txt", "C:/fleet.db", interval=schedule.parse_interval("12h"))
+    assert "pip install --upgrade llm-provenance-probe" in s
+    assert "Register-ScheduledTask" in s
+    assert "provenance_probe.cli" in s and "fleet-scan" in s
+    assert "New-TimeSpan -Seconds 43200" in s
+
+
+@pytest.mark.unit
+def test_tanium_recipe_points_at_osquery_and_cli():
+    t = schedule.tanium_recipe("", "/var/fleet.db", interval=3600)
+    assert "osquery-atc" in t and TABLE in t
+    assert "fleet-scan" in t
+
+
+@pytest.mark.unit
+def test_iso8601_duration_forms():
+    assert schedule._iso8601_duration(43200) == "PT12H"
+    assert schedule._iso8601_duration(1800) == "PT30M"
+    assert schedule._iso8601_duration(45) == "PT45S"
+
+
+@pytest.mark.unit
+def test_cli_print_schtasks_intune_tanium(capsys):
+    for choice, needle in (("schtasks", "<Task"), ("intune", "Register-ScheduledTask"),
+                           ("tanium", "osquery-atc")):
+        assert main(["fleet-scan", "--print", choice]) == 0
+        assert needle in capsys.readouterr().out
+
+
+@pytest.mark.unit
 def test_systemd_units_have_timer_and_execstart():
     u = schedule.systemd_units("", "/var/fleet.db", interval=3600)
     assert "ExecStart=" in u and "fleet-scan" in u and "--sqlite" in u

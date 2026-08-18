@@ -190,6 +190,29 @@ def roots_from_pem_bundle(text: str, source: str = "") -> list[RootCA]:
     return out
 
 
+def pem_from_der_b64_lines(text: str, source: str = "") -> list[RootCA]:
+    """Turn base64-DER lines (one cert per line) into RootCA records.
+
+    The input is what PowerShell emits on Windows: one base64 string of a cert's
+    raw DER per line (blank/whitespace lines ignored). Each line is re-wrapped at
+    64 columns into a well-formed PEM block and fed through `roots_from_pem_bundle`,
+    so the SHA-256 identity is BYTE-IDENTICAL to the macOS/Linux PEM path (same DER
+    -> same hash -> baselines are cross-platform-comparable). A line that isn't
+    valid base64/DER is skipped by the bundle parser (der_from_pem -> None), never
+    raised."""
+    blocks: list[str] = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        wrapped = "\n".join(line[i:i + 64] for i in range(0, len(line), 64))
+        blocks.append(
+            "-----BEGIN CERTIFICATE-----\n" + wrapped + "\n-----END CERTIFICATE-----")
+    if not blocks:
+        return []
+    return roots_from_pem_bundle("\n".join(blocks), source)
+
+
 def default_load_certs() -> list[RootCA]:
     """Read the host's admin/user-added trusted roots (where a rogue CA lands).
     Platform-specific, local-only (no network — the `security` CLI / cert files).
@@ -229,6 +252,33 @@ def default_load_certs() -> list[RootCA]:
                     roots += roots_from_pem_bundle(fh.read(), path)
             except OSError:
                 continue
+    elif system == "Windows":
+        # Emit each root cert's raw DER as base64 via PowerShell (no cert-text
+        # parsing), then reuse the tested PEM path so the fingerprint identity
+        # matches macOS/Linux. LocalMachine is the admin surface (must be readable,
+        # or we refuse — never report a false-clean); CurrentUser is best-effort.
+        for store, src in (("LocalMachine", "windows-localmachine-root"),
+                           ("CurrentUser", "windows-currentuser-root")):
+            is_machine = store == "LocalMachine"
+            cmd = ("Get-ChildItem Cert:\\" + store + "\\Root | "
+                   "ForEach-Object { [Convert]::ToBase64String($_.RawData) }")
+            try:
+                out = subprocess.run(
+                    ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd],
+                    capture_output=True, text=True, timeout=20)
+            except (OSError, subprocess.SubprocessError):
+                if is_machine:
+                    raise TrustStoreUnavailable(
+                        "could not read the Windows trust store "
+                        "(PowerShell could not be run)") from None
+                continue  # CurrentUser is best-effort
+            if out.returncode != 0:
+                if is_machine:
+                    raise TrustStoreUnavailable(
+                        "could not read the Windows trust store "
+                        "(PowerShell returned an error)")
+                continue
+            roots += pem_from_der_b64_lines(out.stdout, src)
     else:
         raise TrustStoreUnavailable(f"trust-store watch is not implemented on {system}")
     # de-dup by fingerprint, keeping the first (labelled) occurrence

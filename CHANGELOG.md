@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.31.0] — finish fleet: Windows collector + Intune/Tanium delivery (2026-08-18)
+
+Closes the fleet B-phase: the scanner now runs on Windows and delivers through the
+enterprise MDMs, so `fleet-scan` covers the three major desktop OSes and the common
+management planes.
+
+### Added
+- **Windows collector.**
+  - **Connection table** (`--egress`): `netstat -ano` + `tasklist` readers
+    (`connections.parse_netstat` / `parse_tasklist`) feed the SAME analyzer as the
+    macOS/Linux `lsof` path (`LISTENING`→`LISTEN`, wildcard-bind + gateway-port
+    recognition unchanged). Refuses (never `[]`) on a netstat read failure.
+  - **Trust-store watch** (`--trust-store`): roots read via PowerShell
+    (`Get-ChildItem Cert:\LocalMachine\Root|CurrentUser\Root` → base64 DER) and run
+    through the existing tested PEM path, so a Windows root's SHA-256 is byte-identical
+    to a macOS/Linux baseline (cross-platform baselines). Refuses on a read failure.
+  - **Config discovery** already resolves on Windows (home-relative dotfile paths).
+  - `--ja3` stays honestly refused on Windows (raw capture needs npcap/pktmon) rather
+    than false-clean.
+- **Enterprise delivery.** `fleet-scan --print`:
+  - `schtasks` — Windows Task Scheduler XML (parity with launchd/systemd/cron).
+  - `intune` — a Microsoft Intune PowerShell deploy script (installs the probe +
+    registers the scheduled task; idempotent, SYSTEM context).
+  - `tanium` — a Tanium recipe (Package to schedule + osquery-ATC / Sensor to read).
+  - The osquery ATC `platform` now includes `windows`.
+- Delivery docs: `docs/fleet-osquery.md` gains the Windows + Intune + Tanium sections.
+
 ## [0.30.0] — fleet Tier-2 attribution: egress RDAP + JA3 (2026-08-18)
 
 Extends `fleet-scan`'s observed-egress surface from "a connection exists" toward
