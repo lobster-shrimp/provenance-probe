@@ -770,6 +770,11 @@ def cmd_fleet_scan(a):
         print(gen(allow_abs, sqlite_abs, interval=interval))
         return 0
 
+    if getattr(a, "rdap", False) and not getattr(a, "egress", False):
+        print("fleet-scan: --rdap only applies with --egress (it resolves the upstream "
+              "IPs that --egress observes). Add --egress.", file=_sys.stderr)
+        return 1
+
     # Observed-egress / loopback-fan-out (Tier-2, B-phase): inert until attestation.
     if getattr(a, "egress", False):
         from .fleet import connections
@@ -780,22 +785,68 @@ def cmd_fleet_scan(a):
                   "documented policy.", file=_sys.stderr)
             return 1
         try:
-            eg = connections.analyze(connections.default_connections(),
-                                     min_upstreams=a.min_upstreams,
-                                     privileged=connections.is_privileged())
+            conns = connections.default_connections()
         except connections.EgressUnavailable as e:
             print(f"fleet-scan --egress: {e} (host not certified clean)", file=_sys.stderr)
             return 3
+        eg = connections.analyze(conns, min_upstreams=a.min_upstreams,
+                                 privileged=connections.is_privileged())
+        # --rdap is the OPT-IN egress step: resolve the observed upstream IPs to a
+        # jurisdiction/operator pointer. Bare --egress stays no-egress; this MAKES
+        # network calls (RDAP + reverse-DNS), so it is separately flagged here.
+        attr = None
+        if getattr(a, "rdap", False):
+            from .fleet import egress_attr
+            from .fleet.render import egress_attr_to_json, render_egress_attr_console
+            print("fleet-scan --egress --rdap: resolving observed upstream IPs via "
+                  "reverse-DNS + RDAP (this makes network calls).", file=_sys.stderr)
+            attr = egress_attr.attribute_egress(conns)
+        payload = egress_to_json(eg)
+        if attr is not None:
+            payload["attribution"] = egress_attr_to_json(attr)
         if a.json:
-            print(_json.dumps(egress_to_json(eg), indent=2))
+            print(_json.dumps(payload, indent=2))
         else:
             print(render_egress_console(eg))
+            if attr is not None:
+                print("\n" + render_egress_attr_console(attr))
         if a.out:
             out_path = _os.path.expanduser(a.out)
             flags = _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC | getattr(_os, "O_NOFOLLOW", 0)
             with _os.fdopen(_os.open(out_path, flags, 0o600), "w", encoding="utf-8") as fh:
-                _json.dump(egress_to_json(eg), fh, indent=2)
-        if a.exit_code and eg.findings:
+                _json.dump(payload, fh, indent=2)
+        if a.exit_code and (eg.findings or (attr is not None and attr.flagged)):
+            return 2
+        return 0
+
+    # JA3 client-TLS fingerprint capture (Tier-2, B-phase): passive raw capture,
+    # needs privilege + tcpdump, so it is gated + REFUSES (exit 3) rather than
+    # false-clean when capture can't run.
+    if getattr(a, "ja3", False):
+        from .fleet import ja3 as _ja3
+        from .fleet.render import ja3_to_json, render_ja3_console
+        if not a.i_am_authorized:
+            print("fleet-scan --ja3 captures TLS ClientHellos off the wire (raw packet "
+                  "capture — a privacy surface, needs root). Re-run with --i-am-authorized "
+                  "to attest documented policy.", file=_sys.stderr)
+            return 1
+        try:
+            obs = _ja3.capture_ja3(seconds=a.ja3_seconds)
+        except _ja3.Ja3Unavailable as e:
+            print(f"fleet-scan --ja3: {e} (host not certified clean)", file=_sys.stderr)
+            return 3
+        if a.json:
+            print(_json.dumps(ja3_to_json(obs), indent=2))
+        else:
+            print(render_ja3_console(obs))
+        if a.out:
+            out_path = _os.path.expanduser(a.out)
+            flags = _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC | getattr(_os, "O_NOFOLLOW", 0)
+            with _os.fdopen(_os.open(out_path, flags, 0o600), "w", encoding="utf-8") as fh:
+                _json.dump(ja3_to_json(obs), fh, indent=2)
+        # exit-code flags only a POSITIVELY-classified interception fingerprint
+        # (KNOWN_JA3 is operator-populated; an unknown JA3 is not auto-suspicious).
+        if a.exit_code and any(_ja3.classify_ja3(o.ja3_hash) for o in obs):
             return 2
         return 0
 
@@ -1180,6 +1231,16 @@ def main(argv=None):
     s.add_argument("--min-upstreams", type=int, default=8,
                    help="distinct upstreams from one loopback listener to call it a "
                         "router fan-out (--egress; default 8)")
+    s.add_argument("--rdap", action="store_true",
+                   help="with --egress: RESOLVE the observed upstream IPs via reverse-DNS "
+                        "+ RDAP to a jurisdiction/operator pointer. Unlike bare --egress "
+                        "this MAKES network calls. Needs --i-am-authorized.")
+    s.add_argument("--ja3", action="store_true",
+                   help="Tier-2 (B-phase): passively capture TLS ClientHellos and compute "
+                        "JA3 client fingerprints (spot an interception proxy / an unexpected "
+                        "second client). Needs root + tcpdump + --i-am-authorized.")
+    s.add_argument("--ja3-seconds", type=int, default=5,
+                   help="capture window for --ja3 in seconds (default 5)")
     s.add_argument("--ca-baseline", help="trusted-root baseline for --trust-store "
                                          "(capture with --print ca-baseline on a golden host)")
     s.add_argument("--i-am-authorized", action="store_true",

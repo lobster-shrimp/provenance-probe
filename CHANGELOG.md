@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.30.0] — fleet Tier-2 attribution: egress RDAP + JA3 (2026-08-18)
+
+Extends `fleet-scan`'s observed-egress surface from "a connection exists" toward
+"who it talks to" and "what client is talking" — both as **opt-in** flags so the
+bare `fleet-scan --egress` keeps its structural no-egress guarantee.
+
+### Added
+- **`fleet-scan --egress --rdap` — IP → operator/jurisdiction attribution.** Resolves
+  the observed upstream IPs (reverse-DNS + RDAP) to a jurisdiction/operator pointer,
+  reusing the hardened `probes.network` RDAP path (SSRF denylist, PRC-ASN heuristic,
+  vCard fallback) and joining the PTR to `corpus.py`. New `probes.network.attribute_ip`
+  (single-IP, SSRF-guarded, never raises) + `fleet/egress_attr.py` (orchestration,
+  bounded IP cap with dropped-count surfaced, deterministic). Bare `--egress` stays
+  no-egress; `--rdap` is the explicit-egress opt-in (mirrors `catalog` vs
+  `build-catalog`). A PRC-pointing upstream trips `--exit-code`.
+- **`fleet-scan --ja3` — JA3 client-TLS fingerprint.** Passively captures TLS
+  ClientHellos (`tcpdump`) and computes JA3 (Salesforce spec: field order, GREASE
+  strip, MD5) to spot a known interception proxy or an unexpected second client
+  fingerprint to a sanctioned upstream (corroborates `--trust-store`). New pure
+  `fleet/ja3.py` (bounds-checked ClientHello parser, minimal pcap reader for
+  Ethernet/loopback/raw link types, JA3 compute). `KNOWN_JA3` ships **empty** and is
+  operator-populated from golden captures — an unknown JA3 is never auto-suspicious,
+  and a wrong "this is curl" is worse than "unknown".
+
+### Invariants held
+- Both signals are **SUB-CONFIRMED pointers (`measured:false`)**, never measured
+  verdicts. Both are **gated on `--i-am-authorized`**. `--ja3` needs root + `tcpdump`
+  and **refuses (exit 3), never false-cleans**, when it can't capture — same contract
+  as the connection-table and trust-store collectors.
+
 ## [0.29.0] — first-party provenance join in the catalog (2026-08-18)
 
 ### Fixed
