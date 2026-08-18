@@ -108,7 +108,9 @@ def test_default_connections_refuses_on_exit1_empty(monkeypatch):
 @pytest.mark.unit
 def test_default_connections_refuses_unsupported_platform(monkeypatch):
     import platform
-    monkeypatch.setattr(platform, "system", lambda: "Windows")
+    # Windows is supported now — use a genuinely-unsupported OS so this exercises the
+    # real unsupported-OS refuse branch (not a Windows netstat shell-out).
+    monkeypatch.setattr(platform, "system", lambda: "SunOS")
     with pytest.raises(C.EgressUnavailable):
         C.default_connections()
 

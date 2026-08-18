@@ -56,8 +56,18 @@ provenance-probe fleet-scan --print cron --allowlist /etc/provenance/allow.txt \
 # paste the printed line into `crontab -e`
 ```
 
-The generated unit runs, verbatim, the same interpreter and package you invoked it
-with, so it works from a venv or a system install.
+**Windows (Task Scheduler):**
+```sh
+provenance-probe fleet-scan --print schtasks --interval 12h \
+  --sqlite "C:\ProgramData\provenance-probe\fleet.db" > fleet.xml
+# then, on the target:  schtasks /Create /XML fleet.xml /TN "com.provenance-probe.fleet-scan"
+```
+
+The launchd/systemd/cron units run, verbatim, the same interpreter and package you
+invoked the generator with, so they work from a venv or a system install. The
+Windows XML uses a bare `python.exe` (resolved on the target's PATH) since it's
+usually generated on another host — edit `<Command>`/`<Arguments>` if you pin a path,
+or use the Intune script below which installs the probe for you.
 
 ## 2. Register the SQLite DB with osquery (ATC)
 
@@ -81,6 +91,31 @@ Merge `fleet_atc.conf` into your osquery config (or drop it in
   }
 }
 ```
+
+## MDM delivery: Intune and Tanium
+
+For managed fleets you usually push the scheduled scan through the MDM you already
+run, then collect results through the same channel.
+
+**Microsoft Intune** — a PowerShell deploy script (installs the probe + registers the
+scheduled task; idempotent, runs as SYSTEM):
+```sh
+provenance-probe fleet-scan --print intune --interval 12h \
+  --allowlist "C:\ProgramData\provenance-probe\allow.txt" > deploy.ps1
+```
+Add `deploy.ps1` under **Devices → Scripts and remediations → Platform scripts**
+(64-bit, run as SYSTEM). For a Win32 app, use it as the install command with a
+detection rule of `schtasks /Query /TN "com.provenance-probe.fleet-scan"` (exit 0).
+
+**Tanium** — deploy the scheduled scan as a Package, then read results either via the
+osquery ATC table (if you run Tanium's osquery) or a Sensor that runs `fleet-scan
+--json`:
+```sh
+provenance-probe fleet-scan --print tanium --interval 12h   # prints the recipe
+```
+
+Both keep the report on the endpoint (`0600`, redacted); the MDM collects the
+derived table/JSON, never raw config.
 
 ## 3. Query it
 
@@ -110,6 +145,10 @@ WHERE classification IN ('aggregator-unresolvable','gateway-upstream-unresolved'
 - **The DB is `0600` and `source` is redacted** (home paths collapse to `~/`). If you
   need full local detail on-box, run the scan with `--no-redact` and read the console
   or JSON output directly instead of collecting the DB.
-- **Windows** trust-store/collector support is deferred (macOS + Linux first).
+- **Windows** is supported: config discovery, the connection table (`netstat -ano`
+  + `tasklist`), and the trust-store watch (roots via PowerShell) all run on Windows;
+  the ATC `platform` includes `windows`. The one exception is `--ja3` (raw packet
+  capture needs npcap/pktmon), which refuses cleanly on Windows rather than
+  false-clean.
 - Direct execution to see it work: `provenance-probe fleet-scan --allowlist allow.txt`
   (console report) or `--json` / `--out report.json`.

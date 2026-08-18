@@ -766,7 +766,10 @@ def cmd_fleet_scan(a):
             return 1
         gen = {"launchd": schedule.launchd_plist,
                "systemd": schedule.systemd_units,
-               "cron": schedule.cron_line}[a.print]
+               "cron": schedule.cron_line,
+               "schtasks": schedule.schtasks_xml,
+               "intune": schedule.intune_script,
+               "tanium": schedule.tanium_recipe}[a.print]
         print(gen(allow_abs, sqlite_abs, interval=interval))
         return 0
 
@@ -1216,10 +1219,11 @@ def main(argv=None):
     s.add_argument("--sqlite", help="also write findings to a SQLite DB at this path "
                                     "(the table osquery reads via ATC)")
     s.add_argument("--print",
-                   choices=["launchd", "systemd", "cron", "osquery-atc",
-                            "allowlist-template", "ca-baseline"],
+                   choices=["launchd", "systemd", "cron", "schtasks", "osquery-atc",
+                            "intune", "tanium", "allowlist-template", "ca-baseline"],
                    help="emit a config and exit: a scheduled-scan unit "
-                        "(launchd/systemd/cron), the osquery ATC config, a starter "
+                        "(launchd/systemd/cron/schtasks), the osquery ATC config, an "
+                        "Intune PowerShell deploy script, a Tanium recipe, a starter "
                         "egress allowlist, or this host's trusted-root CA baseline")
     s.add_argument("--trust-store", action="store_true",
                    help="B-phase: watch the system trust store for non-baseline root CAs "

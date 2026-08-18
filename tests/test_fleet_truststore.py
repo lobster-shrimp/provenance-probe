@@ -133,7 +133,9 @@ def test_cli_trust_store_flags_interception(monkeypatch, capsys):
 @pytest.mark.unit
 def test_default_load_certs_refuses_unsupported_platform(monkeypatch):
     import platform
-    monkeypatch.setattr(platform, "system", lambda: "Windows")
+    # Windows is supported now — use a genuinely-unsupported OS so this exercises the
+    # real `else` refuse branch, not PowerShell-absence on the CI host.
+    monkeypatch.setattr(platform, "system", lambda: "SunOS")
     with pytest.raises(T.TrustStoreUnavailable):
         T.default_load_certs()
 
@@ -156,7 +158,7 @@ def test_default_load_certs_refuses_when_security_errors(monkeypatch):
 @pytest.mark.integration
 def test_cli_trust_store_unavailable_returns_nonzero_not_clean(monkeypatch, capsys):
     def _raise():
-        raise T.TrustStoreUnavailable("not implemented on Windows")
+        raise T.TrustStoreUnavailable("trust store could not be read")
     monkeypatch.setattr(T, "default_load_certs", _raise)
     rc = main(["fleet-scan", "--trust-store", "--i-am-authorized", "--exit-code"])
     assert rc == 3                                    # NOT 0 — host not certified clean

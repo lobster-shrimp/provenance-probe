@@ -20,6 +20,7 @@ the connection table cannot be read.
 """
 from __future__ import annotations
 
+import csv
 import re
 from dataclasses import dataclass, field
 
@@ -90,10 +91,14 @@ class EgressResult:
 
 
 def is_privileged() -> bool:
-    """True if the process can see all sockets (root). An unprivileged scan sees
-    only the current user's connections, so a zero-finding result must be qualified
-    (a router running as root/another user is otherwise invisible)."""
+    """True if the process can see all sockets. On POSIX that means root (an
+    unprivileged `lsof` sees only the current user's connections, so a zero-finding
+    result must be qualified). On Windows, `netstat -ano` returns the whole-system
+    TCP table regardless of elevation, so visibility is full."""
     import os
+    import platform
+    if platform.system() == "Windows":
+        return True
     return hasattr(os, "geteuid") and os.geteuid() == 0
 
 
@@ -127,6 +132,50 @@ def parse_lsof(text: str) -> list[Conn]:
             lh, lp = _split_addr(name)
             rh, rp = "", None
         conns.append(Conn(m.group("cmd"), m.group("pid"), lh, lp, rh, rp, state))
+    return conns
+
+
+def parse_tasklist(text: str) -> dict[str, str]:
+    """Parse `tasklist /fo csv /nh` (`"image","pid","session","#","mem"`) into a
+    pid->image map, so a netstat PID can be named. Robust to CSV quoting/commas;
+    malformed rows are skipped, never raised."""
+    names: dict[str, str] = {}
+    for row in csv.reader((text or "").splitlines()):
+        if len(row) < 2:
+            continue
+        image, pid = row[0].strip(), row[1].strip()
+        if image and pid.isdigit():
+            names[pid] = image
+    return names
+
+
+def parse_netstat(text: str, names: dict[str, str] | None = None) -> list[Conn]:
+    """Parse Windows `netstat -ano` output into Conn records (TCP rows only, both
+    IPv4 and IPv6; UDP rows are filtered out by the `TCP`-proto check).
+
+    Columns: `Proto  Local Address  Foreign Address  State  PID`. Windows renders
+    `LISTENING` (mapped -> "LISTEN" for `analyze`) and keeps `ESTABLISHED`; a
+    LISTENING row's foreign address is a placeholder (`0.0.0.0:0` / `[::]:0`) so its
+    remote is emptied, mirroring how `parse_lsof` treats a LISTEN line. `command`
+    comes from the injected pid->name map, falling back to the PID itself so a
+    finding still identifies the process. No DNS — the input is already numeric."""
+    conns: list[Conn] = []
+    for line in (text or "").splitlines():
+        parts = line.split()
+        # Proto Local Foreign State PID — anything else (headers, banner, UDP) skips.
+        if len(parts) < 5 or parts[0].upper() != "TCP":
+            continue
+        _proto, local, foreign, raw_state, pid = parts[0], parts[1], parts[2], parts[3], parts[4]
+        if not pid.isdigit():
+            continue
+        state = "LISTEN" if raw_state.upper() == "LISTENING" else raw_state.upper()
+        lh, lp = _split_addr(local)
+        if state == "LISTEN":
+            rh, rp = "", None
+        else:
+            rh, rp = _split_addr(foreign)
+        command = (names or {}).get(pid, pid)
+        conns.append(Conn(command, pid, lh, lp, rh, rp, state))
     return conns
 
 
@@ -185,9 +234,12 @@ def default_connections() -> list[Conn]:
     import platform
     import subprocess
 
-    if platform.system() not in ("Darwin", "Linux"):
+    system = platform.system()
+    if system == "Windows":
+        return _windows_connections(subprocess)
+    if system not in ("Darwin", "Linux"):
         raise EgressUnavailable(
-            f"observed-egress scan is not implemented on {platform.system()}")
+            f"observed-egress scan is not implemented on {system}")
     try:
         out = subprocess.run(
             ["lsof", "-nP", "-iTCP", "-sTCP:ESTABLISHED,LISTEN"],
@@ -203,3 +255,32 @@ def default_connections() -> list[Conn]:
         raise EgressUnavailable("`lsof` exited 1 with no output — likely a read error, "
                                 "not an empty connection table")
     return parse_lsof(out.stdout)
+
+
+def _windows_connections(subprocess) -> list[Conn]:  # noqa: ANN001 (module handle)
+    """Read the Windows TCP table via `netstat -ano` (already numeric → no DNS).
+    `tasklist` names the PIDs and is best-effort; a netstat failure REFUSES
+    (EgressUnavailable) rather than reporting a false-clean empty table."""
+    try:
+        # NB: no `-p TCP` — on Windows that filters to IPv4 TCP only, hiding IPv6 TCP
+        # (a false-clean vs the lsof path). Bare `-ano` lists both families as "TCP"
+        # (IPv6 rows carry `[..]` addresses); UDP rows are dropped by parse_netstat's
+        # `TCP`-proto filter.
+        net = subprocess.run(
+            ["netstat", "-ano"],
+            capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise EgressUnavailable(f"could not run `netstat` to read the connection table: {e}")
+    if net.returncode != 0:
+        raise EgressUnavailable(f"`netstat` returned an error (exit {net.returncode})")
+    # tasklist enriches PIDs with process names; if it fails we still report by PID.
+    names: dict[str, str] | None = None
+    try:
+        tl = subprocess.run(
+            ["tasklist", "/fo", "csv", "/nh"],
+            capture_output=True, text=True, timeout=30)
+        if tl.returncode == 0:
+            names = parse_tasklist(tl.stdout)
+    except (OSError, subprocess.SubprocessError):
+        names = None
+    return parse_netstat(net.stdout, names)
