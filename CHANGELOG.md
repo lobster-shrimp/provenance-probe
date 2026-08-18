@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.29.0] — first-party provenance join in the catalog (2026-08-18)
+
+### Fixed
+- **Catalog first-party attribution.** models.dev omits the `api` base URL for ~26
+  providers (openai, anthropic, google, mistral, cohere, xai, and several
+  aggregators), so their catalog rows carried a blank provenance/jurisdiction
+  column. `catalog.py` now falls back to a canonical host per known provider id
+  (`_PROVIDER_ID_HOST`), keyed only to hosts that already exist in `corpus.py`, so
+  first-party vendors resolve their origin (Anthropic/OpenAI/Google → US,
+  Mistral → EU) and known aggregators resolve `jurisdiction:unresolved`. Still a
+  SUB-CONFIRMED pointer (`measured:false`), never a measured verdict — the join
+  only says who a host is registered to, not which model actually served.
+- Regenerated the bundled `data/catalog.json` snapshot with the fallback applied.
+
 ## [0.28.0] — LLM-API catalog + guided assessment + friendlier UI (2026-08-14)
 
 First PyPI release. Assigns the accumulated unreleased work a version.
