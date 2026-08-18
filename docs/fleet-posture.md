@@ -120,15 +120,12 @@ that hold regardless of what a router is named:
 provenance-probe fleet-scan --egress --i-am-authorized   # --min-upstreams N to tune
 ```
 
-Scope is deliberately narrow, for the no-egress invariant:
+Bare `--egress` is deliberately narrow, for the no-egress invariant:
 
 - It reads the connection table with `lsof -n` (no DNS) and **makes no network
-  call**. So a snapshot yields upstream **IPs**, not entities — attributing an IP to
-  a PRC operator needs reverse-DNS/RDAP (egress), which is the prober's *authorized*
-  `assess`/`network` path, not this collector. Fan-out findings say "upstream IPs
-  need an active probe to attribute."
-- **JA3 / TLS fingerprint** mismatch (a Node process presenting a browser
-  ClientHello) needs raw packet capture (pcap/root) and is not implemented here.
+  call**. A snapshot yields upstream **IPs**, not entities — turning an IP into an
+  operator needs reverse-DNS/RDAP, which is a network call and therefore an *opt-in*
+  step (see below), never something the bare collector does.
 - It reads per-process connections (a privacy surface), so it is **inert without
   `--i-am-authorized`**, and it **refuses (exit 3), never reports clean**, when the
   connection table can't be read (unsupported OS / `lsof` unavailable).
@@ -143,6 +140,37 @@ Scope is deliberately narrow, for the no-egress invariant:
   `(command, pid)`. A pre-fork router (LiteLLM under gunicorn/uvicorn workers) splits
   the listening master from the upstream-holding workers across pids, which this
   increment does not yet aggregate — corroborate with the config scan.
+
+### Tier-2 attribution (opt-in, EGRESS/capture — separate from the no-egress collector)
+
+Two attribution signals go one step past "a connection exists". Each is a **separate
+opt-in flag** so the bare `--egress` keeps its structural no-egress guarantee — the
+same boundary as `catalog` (offline) vs `build-catalog` (explicit egress):
+
+```sh
+# IP → operator/jurisdiction pointer: RDAP + reverse-DNS the observed upstream IPs.
+# MAKES network calls (unlike bare --egress); reuses the hardened assess/network
+# RDAP path (SSRF denylist, PRC-ASN heuristic) and joins the PTR to corpus.py.
+provenance-probe fleet-scan --egress --rdap --i-am-authorized
+
+# JA3 client-TLS fingerprint: passively capture ClientHellos (tcpdump) and compute
+# JA3 — spot a known interception proxy, or an unexpected second client fingerprint
+# to a sanctioned upstream (corroborates the trust-store watch).
+provenance-probe fleet-scan --ja3 --i-am-authorized      # --ja3-seconds N to tune
+```
+
+Both stay honest and safe:
+
+- **Still a pointer, never a verdict.** RDAP tells you who an IP is *registered* to;
+  JA3 tells you what a TLS stack *looks* like. Neither is a measured provenance
+  verdict (`measured:false`) — treat a flag as a lead to probe.
+- **Bounded + transparent.** `--rdap` caps how many distinct IPs it will look up and
+  reports any it dropped (no silent truncation); an unknown JA3 is **not**
+  auto-suspicious — `KNOWN_JA3` is operator-populated from golden captures (like the
+  CA baseline), so it ships empty rather than shipping guessed fingerprints.
+- **Refuse, never false-clean.** `--ja3` needs root + `tcpdump`; if it can't capture
+  (unsupported OS / no `tcpdump` / not root) it **refuses (exit 3)**, exactly like the
+  connection-table and trust-store collectors — an unrunnable check never reads clean.
 
 ## What this is not
 

@@ -1,6 +1,7 @@
 """Layer 2: jurisdictional / egress analysis. Passive DNS + RDAP, no traffic sent to target."""
 from __future__ import annotations
-import socket, ipaddress, json
+import ipaddress
+import socket
 from urllib.parse import urlparse
 from ..data.corpus import PRC_ENDPOINTS, AGGREGATOR_ENDPOINTS, FIRST_PARTY_ENDPOINTS
 
@@ -124,6 +125,58 @@ def analyze_host(url: str, do_rdap: bool = True, resolve: bool = True) -> dict:
             out["confidence"] = max(out["confidence"], 0.75)
         out["addresses"].append(rec)
     return out
+
+
+def attribute_ip(ip: str, *, session=None, do_rdap: bool = True) -> dict:
+    """RDAP/PTR a SINGLE egress IP into a jurisdiction pointer.
+
+    Unlike `analyze_host` (which starts from a URL and does its own DNS), this takes
+    an IP already observed on the wire — e.g. a remote address from the no-egress
+    connection table — and resolves *who it is registered to*. It is the "authorized
+    network path" the fleet connection collector defers IP→operator attribution to.
+
+    SSRF-guarded: a private/loopback/reserved IP is never looked up (returns a record
+    with `skipped=True`). Never raises — a failed lookup yields an `unknown` record so
+    one bad IP can't sink a batch. The result is a SUB-CONFIRMED pointer, never a
+    measured verdict (guardrail 2): registration != which model served.
+    """
+    rec = {"ip": ip, "ptr": None, "asn_name": None, "country": None,
+           "jurisdiction": "unknown", "confidence": 0.0, "prc_hint": False,
+           "skipped": False}
+    if _blocked_ip(ip):
+        rec["skipped"] = True
+        return rec
+    if do_rdap:
+        # Reverse-DNS + RDAP are BOTH network calls, so both live under do_rdap —
+        # `do_rdap=False` is then honestly a no-egress mode.
+        try:
+            rec["ptr"] = socket.gethostbyaddr(ip)[0]
+        except Exception:
+            pass
+        # RDAP is untrusted external data at a system boundary: a well-formed 200 may
+        # still carry a wrong-shaped body (a JSON list, non-dict entities, a short
+        # vCard). Every access is type-guarded so a hostile response degrades this IP
+        # to `unknown` — honouring the never-raises contract (one bad IP can't sink a
+        # batch), never an AttributeError/IndexError.
+        d = _rdap(ip, session)
+        if isinstance(d, dict):
+            rec["country"] = d.get("country")
+            rec["asn_name"] = d.get("name")
+            ents = d.get("entities")
+            for e in (ents if isinstance(ents, list) else []):
+                if not isinstance(e, dict):
+                    continue
+                v = e.get("vcardArray")
+                if isinstance(v, list) and len(v) > 1 and isinstance(v[1], list):
+                    for f in v[1]:
+                        if isinstance(f, list) and len(f) >= 4 and f[0] == "fn":
+                            rec["asn_name"] = rec["asn_name"] or f[3]
+    blob = " ".join(str(x) for x in (rec["ptr"], rec["asn_name"], rec["country"]) if x).lower()
+    if rec.get("country") == "CN":
+        rec.update(jurisdiction="PRC", confidence=0.95)
+    elif any(h in blob for h in PRC_ASN_HINTS):
+        rec.update(jurisdiction="PRC-operator", confidence=0.75, prc_hint=True)
+    return rec
 
 
 def scan_pcap_hosts(hosts: list[str]) -> list[dict]:

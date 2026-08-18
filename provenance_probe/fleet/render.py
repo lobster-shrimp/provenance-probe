@@ -133,6 +133,91 @@ def render_egress_console(result) -> str:
     return "\n".join(lines)
 
 
+def egress_attr_to_json(result) -> dict:
+    """Render an EgressAttrResult (the opt-in --rdap attribution)."""
+    return {
+        "headline": result.headline,
+        "ips_total": result.ips_total,
+        "ips_resolved": result.ips_resolved,
+        "dropped": result.dropped,
+        "flagged": result.flagged,
+        "measured": False,  # invariant: a static pointer, never a verdict
+        "attributions": [
+            {"ip": a.ip, "ptr": a.ptr, "country": a.country, "asn_name": a.asn_name,
+             "jurisdiction": a.jurisdiction, "operator": a.operator, "origin": a.origin,
+             "confidence": a.confidence, "prc_hint": a.prc_hint,
+             "corpus_source": a.corpus_source, "processes": a.processes,
+             "flagged": a.flagged, "measured": a.measured}
+            for a in result.attributions
+        ],
+    }
+
+
+def render_egress_attr_console(result) -> str:
+    lines = [result.headline,
+             "  (RDAP/PTR pointer — who an IP is registered to, NOT a measured verdict)", ""]
+    if not result.attributions:
+        lines.append("  no external upstream IPs to attribute.")
+        return "\n".join(lines)
+    for a in sorted(result.attributions, key=lambda x: (not x.flagged, x.ip)):
+        tag = "[FLAG]" if a.flagged else "[ ok ]"
+        who = a.operator or a.asn_name or a.ptr or "unattributed"
+        juris = a.origin or a.jurisdiction
+        lines.append(f"  {tag} {a.ip}  {who}  ({juris})")
+        sub = []
+        if a.ptr:
+            sub.append(f"ptr={a.ptr}")
+        if a.country:
+            sub.append(f"cc={a.country}")
+        if a.prc_hint:
+            sub.append("PRC ASN heuristic")
+        if sub:
+            lines.append(f"      {', '.join(sub)}")
+        lines.append(f"      used by: {', '.join(a.processes)}")
+    return "\n".join(lines)
+
+
+def ja3_to_json(observations) -> dict:
+    """Render captured JA3 ClientHello observations (the --ja3 mode)."""
+    from .ja3 import classify_ja3
+    distinct = sorted({o.ja3_hash for o in observations})
+    return {
+        "headline": (f"JA3 capture: {len(observations)} ClientHello(s), "
+                     f"{len(distinct)} distinct fingerprint(s)"),
+        "measured": False,  # a client-TLS fingerprint pointer, never a verdict
+        "distinct_fingerprints": len(distinct),
+        "observations": [
+            {"src_ip": o.src_ip, "dst_ip": o.dst_ip, "dst_port": o.dst_port,
+             "ja3": o.ja3, "ja3_hash": o.ja3_hash, "known": classify_ja3(o.ja3_hash)}
+            for o in observations
+        ],
+    }
+
+
+def render_ja3_console(observations) -> str:
+    from .ja3 import classify_ja3
+    lines = ["JA3 client-TLS capture (passive; a fingerprint pointer, NOT a verdict)", ""]
+    if not observations:
+        lines.append("  no TLS ClientHellos captured in the window.")
+        return "\n".join(lines)
+    by_dst: dict[str, list] = {}
+    for o in observations:
+        by_dst.setdefault(o.dst_ip, []).append(o)
+    for dst in sorted(by_dst):
+        obs = by_dst[dst]
+        hashes = sorted({o.ja3_hash for o in obs})
+        lines.append(f"  {dst}:{obs[0].dst_port}  ({len(hashes)} distinct JA3)")
+        for h in hashes:
+            label = classify_ja3(h)
+            lines.append(f"      {h} — {label if label else 'unknown client'}")
+    distinct = len({o.ja3_hash for o in observations})
+    if distinct > 1:
+        lines += ["", "  note: multiple distinct client fingerprints observed — an "
+                      "unexpected second JA3 to a sanctioned upstream can indicate an "
+                      "interception proxy (corroborate with --trust-store)."]
+    return "\n".join(lines)
+
+
 def render_console(result: ScanResult, redact: bool = True) -> str:
     lines: list[str] = [result.headline, ""]
     if not result.findings:
