@@ -1,6 +1,6 @@
 {
   "name": "provenance-probe-capture-extension",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "type": "module",
   "description": "MV3 browser extension: one-click capture of an AI chat request, uploaded to a hosted provenance-probe instance (#54). Versioned independently of the Python package.",
