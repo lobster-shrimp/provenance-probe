@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "provenance-probe capture",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "One-click capture of an AI chat request in your own browser and upload to your hosted provenance-probe instance. No server-side browser.",
   "minimum_chrome_version": "116",
   "icons": {

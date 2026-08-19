@@ -1,7 +1,14 @@
+/* Fonts bundled LOCALLY — MV3/CSP forbids a font CDN, so the .woff2 files ship in
+   fonts/ (latin subsets from Google Fonts, OFL-1.1; see fonts/OFL.txt). Loaded from
+   the extension's own origin, allowed by the default MV3 CSP (font-src 'self'). */
+@font-face { font-family: "Geist"; font-style: normal; font-weight: 400; font-display: swap; src: url("fonts/geist-400.woff2") format("woff2"); }
+@font-face { font-family: "Geist"; font-style: normal; font-weight: 600; font-display: swap; src: url("fonts/geist-600.woff2") format("woff2"); }
+@font-face { font-family: "Geist Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url("fonts/geist-mono-400.woff2") format("woff2"); }
+@font-face { font-family: "Fraunces"; font-style: normal; font-weight: 400 700; font-display: swap; src: url("fonts/fraunces.woff2") format("woff2"); }
+
 /* Tokens mirror DESIGN.md ("a lab report you'd trust"): warm cream, deep-green
-   poster, one hot accent (coral). Font stacks name Geist/Fraunces first but fall
-   back to system serif/sans until those are shipped locally (a P1.5 follow-up —
-   MV3/CSP forbids a CDN, so the .woff2 files must be bundled). */
+   poster, one hot accent (coral). Geist (UI) / Fraunces (headline) / Geist Mono
+   (evidence) are now bundled above; the system stacks remain as fallbacks. */
 :root {
   --ink: #14171A;
   --paper: #F5F3EC;   /* warm cream, never stark white */
@@ -69,6 +76,6 @@ kbd {
   border-radius: 4px;
   padding: 0 4px;
   background: #fff;
-  font-family: ui-monospace, monospace;
+  font-family: "Geist Mono", ui-monospace, monospace;
 }
-code { font-family: ui-monospace, monospace; background: #efe9dc; padding: 0 3px; border-radius: 3px; }
+code { font-family: "Geist Mono", ui-monospace, monospace; background: #efe9dc; padding: 0 3px; border-radius: 3px; }

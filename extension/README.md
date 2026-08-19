@@ -139,6 +139,7 @@ This does **not** reintroduce a CSRF risk:
 | `devtools.{html,js}` | Registers the "Provenance Capture" DevTools panel. |
 | `panel.{html,js}` | Arm/capture, pick the request, cookie consent, upload. |
 | `icons/` | Toolbar + store icons (16/32/48/128) rendered from `icon.svg`. |
+| `fonts/` | Bundled Geist / Geist Mono / Fraunces woff2 (latin subsets, OFL-1.1). |
 | `lib/sanitize.js` | Pure, DOM-free payload-assembly + sanitization (unit-tested). |
 | `lib/config.js` | Pure URL validation + connection-test result mapping + picker label (unit-tested). |
 | `test/sanitize.test.mjs` | `node --test` unit tests for the logic above. |
