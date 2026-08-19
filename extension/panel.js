@@ -128,7 +128,8 @@ async function arm() {
   chrome.devtools.network.onRequestFinished.addListener(onRequestFinished);
   $("arm").disabled = true;
   $("stop").disabled = false;
-  $("armnote").textContent = "Armed — now send ONE short message in the app. Captured requests appear below.";
+  $("recpill").classList.add("on");   // ARMED: the coral recording pill carries the prompt
+  $("armnote").textContent = "";
   $("out").textContent = "";
 }
 
@@ -141,9 +142,10 @@ function stop() {
   }
   $("arm").disabled = false;
   $("stop").disabled = true;
+  $("recpill").classList.remove("on");
   $("armnote").textContent = entries.length
     ? "Stopped. Pick the request and upload."
-    : "Stopped. No POST request was captured — try again and send a message.";
+    : "No request captured — click Arm capture and send one short message in the app.";
 }
 
 function renderResult(res) {
@@ -152,22 +154,41 @@ function renderResult(res) {
   const warnings = (server.warnings || [])
     .map((w) => '<div class="warn">&#9888; ' + escapeHtml(w) + "</div>")
     .join("");
-  const targetPre = server.target
-    ? "<h3>Synthesized target</h3><pre>" + escapeHtml(JSON.stringify(server.target, null, 2)) + "</pre>"
+  // Keep the raw JSON for the Copy affordance; render it escaped in the evidence <pre>.
+  const targetJson = server.target ? JSON.stringify(server.target, null, 2) : "";
+  const targetPre = targetJson
+    ? '<h3>Synthesized target</h3><pre>' + escapeHtml(targetJson) + "</pre>" +
+      '<div class="row"><button id="copyjson" type="button" class="ghost copyjson">Copy target JSON</button></div>'
     : "";
   if (res.ok && server.ok) {
-    // Honest copy: the endpoint is dry-run only (it never persists a target), so we
-    // do NOT imply a "saved" state or link to a save page — we tell the user the
-    // next step is to copy the target JSON into their instance as a watch target.
+    // RESULT-ok: Fraunces headline + honest copy. The endpoint is dry-run only (it
+    // never persists a target), so we do NOT imply a "saved" state — the next step is
+    // to copy the target JSON into the instance as a watch target.
     const note = server.note || "Dry-run succeeded.";
     out.innerHTML =
-      '<div class="ok-box"><b>' + escapeHtml(note) + "</b><br>" +
-      "This instance confirmed it can reach the model. Copy the target JSON below to " +
-      "add it as a watch target on your instance.</div>" +
+      '<div class="ok-box"><p class="result-head">' + escapeHtml(note) + "</p>" +
+      "<p>This instance confirmed it can reach the model. Copy the target JSON below " +
+      "to add it as a watch target on your instance.</p></div>" +
       warnings + targetPre;
   } else {
+    // RESULT-err: Fraunces headline + the plain-language reason.
     const err = res.error || (server && server.error) || "Upload failed.";
-    out.innerHTML = '<div class="err-box">' + escapeHtml(err) + "</div>" + warnings + targetPre;
+    out.innerHTML =
+      '<div class="err-box"><p class="result-head">Couldn\'t complete the dry-run</p>' +
+      "<p>" + escapeHtml(err) + "</p></div>" + warnings + targetPre;
+  }
+  // Wire the Copy button (a real affordance for the "copy the JSON" next step).
+  const copyBtn = $("copyjson");
+  if (copyBtn && targetJson) {
+    copyBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(targetJson);
+        copyBtn.textContent = "Copied ✓";
+        setTimeout(() => { copyBtn.textContent = "Copy target JSON"; }, 1500);
+      } catch (e) {
+        copyBtn.textContent = "Copy failed — select the JSON above";
+      }
+    });
   }
 }
 
