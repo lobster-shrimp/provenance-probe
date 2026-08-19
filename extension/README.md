@@ -39,7 +39,14 @@ field-for-field from the server's built-in uploader (`_WIZARD_IMPORT_JS` in
 
 ---
 
-## Install (unpacked, for testing)
+## Install
+
+**Easiest — download a build (see [INSTALL.md](INSTALL.md)):** grab the latest
+`provenance-probe-extension-X.Y.Z.zip` from the repo's Releases page, unzip, and
+**Load unpacked**. Each `ext-v*` tag publishes one automatically (unit tests + a
+tag-vs-manifest version guard run first).
+
+**From source (for development):**
 
 1. `chrome://extensions` → enable **Developer mode**.
 2. **Load unpacked** → select this `extension/` directory.
@@ -47,9 +54,9 @@ field-for-field from the server's built-in uploader (`_WIZARD_IMPORT_JS` in
    connection** to confirm they work, then **Save** (Chrome will prompt to grant
    access to that one host).
 
-CI (`.github/workflows/extension.yml`) packages a Chrome Web Store upload zip on
-every change. **NOT PUBLISHED** — submitting to the Chrome Web Store is the
-owner's manual step.
+CI packages the zip two ways: `extension.yml` on every change (a build artifact),
+and `extension-release.yml` attaches it to a **GitHub Release** on an `ext-v*` tag.
+**NOT on the Chrome Web Store** — submitting there is the owner's manual step.
 
 ---
 
