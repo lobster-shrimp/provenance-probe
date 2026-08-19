@@ -1,0 +1,75 @@
+name: extension-release
+
+# Publishes a downloadable, versioned build of the MV3 extension so users can
+# "download one zip and Load unpacked" instead of cloning the whole repo.
+#
+# Triggered by an `ext-v*` tag (the extension versions INDEPENDENTLY of the Python
+# package's `v*`/PyPI tags — see extension/package.json). It lives in its own file,
+# not extension.yml, on purpose: a `push` trigger that mixes `paths:` (needed for the
+# branch/PR test-and-package job) with `tags:` silently drops tag runs, because path
+# filters evaluate against a tag push as "no changed files". A dedicated tag-only
+# trigger has no such gotcha.
+#
+# Flow: run the unit tests, GUARD that the tag version == manifest.json == package.json
+# (so `ext-v0.2.0` can't ship a manifest that still says 0.1.9), package the same
+# runtime files extension.yml packages (icons included), and attach the zip to a
+# GitHub Release. NOT the Chrome Web Store — that submission stays the owner's manual
+# step (see extension/README.md).
+on:
+  push:
+    tags: ["ext-v*"]
+
+# Least privilege: only the release job needs to create a Release.
+permissions:
+  contents: write
+
+concurrency:
+  group: extension-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Unit tests (payload assembly + sanitization + config)
+        run: node --test
+
+      - name: Validate manifest.json is valid JSON
+        run: node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8')); console.log('manifest.json OK')"
+
+      - name: Version guard — tag must match manifest.json AND package.json
+        run: |
+          TAG="${GITHUB_REF_NAME#ext-v}"
+          MAN="$(node -p "require('./manifest.json').version")"
+          PKG="$(node -p "require('./package.json').version")"
+          echo "tag=$TAG  manifest=$MAN  package=$PKG"
+          if [ "$TAG" != "$MAN" ] || [ "$TAG" != "$PKG" ]; then
+            echo "::error::tag ext-v$TAG must match manifest ($MAN) and package.json ($PKG). Bump both, re-tag."
+            exit 1
+          fi
+          echo "VERSION=$TAG" >> "$GITHUB_ENV"
+
+      - name: Package the extension zip (runtime files only — never tests/docs)
+        run: |
+          zip -r -X "../provenance-probe-extension-${VERSION}.zip" \
+            manifest.json background.js devtools.html devtools.js \
+            panel.html panel.js popup.html popup.js popup.css lib icons \
+            -x "*/.*"
+          echo "Packaged provenance-probe-extension-${VERSION}.zip"
+
+      - name: Create the GitHub Release with the zip attached
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            "../provenance-probe-extension-${VERSION}.zip" \
+            --title "Capture extension ${GITHUB_REF_NAME}" \
+            --notes "MV3 capture extension build. Install: download the zip below, unzip, then Load unpacked (see extension/INSTALL.md). NOT the Chrome Web Store — this is the developer-mode build."
