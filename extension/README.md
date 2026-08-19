@@ -56,7 +56,9 @@ tag-vs-manifest version guard run first).
 
 CI packages the zip two ways: `extension.yml` on every change (a build artifact),
 and `extension-release.yml` attaches it to a **GitHub Release** on an `ext-v*` tag.
-**NOT on the Chrome Web Store** — submitting there is the owner's manual step.
+**NOT on the Chrome Web Store** — submitting there is the owner's manual step; the full
+listing package (copy, permission justifications, data-safety answers, privacy policy,
+promo tile, and a submission checklist) is prepared in [`store/`](store/).
 
 ---
 
