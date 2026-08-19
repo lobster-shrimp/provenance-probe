@@ -1,7 +1,7 @@
 # Privacy policy — provenance-probe capture
 
 _Canonical source. This exact text is published at the store's required privacy-policy URL:
-https://lobster-shrimp.github.io/provenance-observatory/extension-privacy (observatory
+https://lobster-shrimp.github.io/provenance-observatory/extension-privacy.html (observatory
 `site/build.py`). Keep the two in sync._
 
 _Last updated: 2026-08-19_

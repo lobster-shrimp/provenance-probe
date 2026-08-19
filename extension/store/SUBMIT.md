@@ -6,7 +6,7 @@ prerequisites first.
 
 ## Prerequisites (do these first)
 - [ ] **Publish the privacy page.** Merge the observatory PR that adds `/extension-privacy`
-      (`site/build.py`) so `https://lobster-shrimp.github.io/provenance-observatory/extension-privacy`
+      (`site/build.py`) so `https://lobster-shrimp.github.io/provenance-observatory/extension-privacy.html`
       resolves. The store requires a live privacy-policy URL for an item that handles auth data.
 - [ ] **Have a packaged zip.** Use the `provenance-probe-extension-X.Y.Z.zip` from a GitHub
       Release (tag `ext-vX.Y.Z`), or build locally. This is what you upload.

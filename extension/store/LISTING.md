@@ -54,5 +54,5 @@ connection test, the cookie-consent prompt) exists solely to support that one pu
 `https://github.com/lobster-shrimp/provenance-probe`
 
 ## Privacy policy URL
-`https://lobster-shrimp.github.io/provenance-observatory/extension-privacy` (see the
+`https://lobster-shrimp.github.io/provenance-observatory/extension-privacy.html` (see the
 observatory PR that publishes this page before submitting).
