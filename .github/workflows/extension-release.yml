@@ -61,7 +61,7 @@ jobs:
         run: |
           zip -r -X "../provenance-probe-extension-${VERSION}.zip" \
             manifest.json background.js devtools.html devtools.js \
-            panel.html panel.js popup.html popup.js popup.css lib icons \
+            panel.html panel.js popup.html popup.js popup.css lib icons fonts \
             -x "*/.*"
           echo "Packaged provenance-probe-extension-${VERSION}.zip"
 
