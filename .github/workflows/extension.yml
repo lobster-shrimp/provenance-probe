@@ -53,7 +53,7 @@ jobs:
           # Ship only the runtime files — never the tests, package.json, or docs.
           zip -r -X "../provenance-probe-extension-${{ steps.ver.outputs.version }}.zip" \
             manifest.json background.js devtools.html devtools.js \
-            panel.html panel.js popup.html popup.js popup.css lib \
+            panel.html panel.js popup.html popup.js popup.css lib icons \
             -x "*/.*"
           echo "Packaged provenance-probe-extension-${{ steps.ver.outputs.version }}.zip"
 

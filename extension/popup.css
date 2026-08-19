@@ -1,21 +1,35 @@
+/* Tokens mirror DESIGN.md ("a lab report you'd trust"): warm cream, deep-green
+   poster, one hot accent (coral). Font stacks name Geist/Fraunces first but fall
+   back to system serif/sans until those are shipped locally (a P1.5 follow-up —
+   MV3/CSP forbids a CDN, so the .woff2 files must be bundled). */
 :root {
-  --ink: #1a1a1a;
-  --paper: #fbf7ee;
-  --line: #d9d2c4;
-  --green: #143d2e;
-  --accent: #1a6b4c;
-  --err: #b3402a;
+  --ink: #14171A;
+  --paper: #F5F3EC;   /* warm cream, never stark white */
+  --surface: #FBFAF6;
+  --line: #E3E0D6;
+  --muted: #6B7280;
+  --green: #0E3B2E;   /* poster band, CLEAN verdict, primary button */
+  --green-2: #0B2B22; /* dark evidence cards */
+  --green-ink: #7DD3A8;
+  --coral: #D2483F;   /* the one hot accent: flagged/error, button hover */
+  --amber: #C9821F;
+  --accent: #0E3B2E;  /* success/ok reads GREEN per DESIGN.md */
+  --err: #D2483F;     /* flagged/error reads CORAL */
 }
 * { box-sizing: border-box; }
 body {
   width: 340px;
   margin: 0;
   padding: 14px 16px 18px;
-  font: 13px/1.45 system-ui, "Segoe UI", Roboto, sans-serif;
+  font: 13px/1.45 "Geist", system-ui, "Segoe UI", Roboto, sans-serif;
   color: var(--ink);
   background: var(--paper);
 }
-h1 { font-size: 16px; margin: 0 0 2px; color: var(--green); }
+h1 {
+  font-family: "Fraunces", Georgia, "Times New Roman", serif;
+  font-size: 18px; margin: 0 0 2px; color: var(--green);
+  padding-bottom: 6px; border-bottom: 2px solid var(--green);
+}
 h2 { font-size: 13px; margin: 14px 0 6px; }
 .sub { color: #5c5647; margin: 0 0 10px; }
 label { display: block; font-weight: 600; margin: 8px 0 3px; }
@@ -40,7 +54,9 @@ button {
   font-weight: 600;
   cursor: pointer;
 }
+button:hover:not(:disabled) { background: var(--coral); border-color: var(--coral); }
 button.ghost { flex: 0 0 auto; background: transparent; color: var(--green); }
+button.ghost:hover:not(:disabled) { background: transparent; color: var(--coral); border-color: var(--coral); }
 button:disabled { opacity: 0.5; cursor: default; }
 .status { min-height: 1.2em; margin: 10px 0 0; font-weight: 600; }
 .status.ok { color: var(--accent); }

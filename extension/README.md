@@ -43,8 +43,9 @@ field-for-field from the server's built-in uploader (`_WIZARD_IMPORT_JS` in
 
 1. `chrome://extensions` → enable **Developer mode**.
 2. **Load unpacked** → select this `extension/` directory.
-3. Click the toolbar icon, enter your instance URL + credentials, **Save**
-   (Chrome will prompt to grant access to that one host).
+3. Click the toolbar icon, enter your instance URL + credentials, click **Test
+   connection** to confirm they work, then **Save** (Chrome will prompt to grant
+   access to that one host).
 
 CI (`.github/workflows/extension.yml`) packages a Chrome Web Store upload zip on
 every change. **NOT PUBLISHED** — submitting to the Chrome Web Store is the
@@ -125,10 +126,12 @@ This does **not** reintroduce a CSRF risk:
 |---|---|
 | `manifest.json` | MV3 manifest (permissions, popup, devtools page, background). |
 | `background.js` | Reads creds, manages the Origin-strip rule, performs the upload. |
-| `popup.{html,js,css}` | Configure instance URL + Basic-auth creds (once). |
+| `popup.{html,js,css}` | Configure instance URL + Basic-auth creds (once) + **Test connection**. |
 | `devtools.{html,js}` | Registers the "Provenance Capture" DevTools panel. |
 | `panel.{html,js}` | Arm/capture, pick the request, cookie consent, upload. |
+| `icons/` | Toolbar + store icons (16/32/48/128) rendered from `icon.svg`. |
 | `lib/sanitize.js` | Pure, DOM-free payload-assembly + sanitization (unit-tested). |
+| `lib/config.js` | Pure URL validation + connection-test result mapping + picker label (unit-tested). |
 | `test/sanitize.test.mjs` | `node --test` unit tests for the logic above. |
 
 ## Versioning

@@ -1,7 +1,9 @@
-// Popup: set the hosted instance URL + Basic-auth credentials ONCE. Credentials
-// live only in chrome.storage.local on this machine and are sent (by the
-// background worker) only to the configured instance. This script never logs
-// them and never sends them anywhere itself.
+// Popup: set the hosted instance URL + Basic-auth credentials ONCE, and optionally
+// TEST the connection before saving. Credentials live only in chrome.storage.local
+// on this machine and are sent (by the background worker) only to the configured
+// instance. This script never logs them and never sends them anywhere itself.
+
+import { validateInstanceUrl } from "./lib/config.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -11,20 +13,25 @@ function setStatus(msg, kind) {
   el.className = "status" + (kind ? " " + kind : "");
 }
 
-/** Validate the instance URL the same way the background worker does: HTTPS
- * only, except loopback for local development. */
-function validateInstance(raw) {
-  let u;
+/** Read + validate the form's instance URL, or set an error status and return null. */
+function readInstance() {
   try {
-    u = new URL(String(raw || "").trim());
+    return validateInstanceUrl($("instanceUrl").value);
   } catch (e) {
-    throw new Error("Enter a full URL, e.g. https://your-instance.example.com");
+    setStatus(e.message, "err");
+    return null;
   }
-  const isLoopback = u.hostname === "localhost" || u.hostname === "127.0.0.1";
-  if (u.protocol !== "https:" && !(u.protocol === "http:" && isLoopback)) {
-    throw new Error("Use https:// (http:// is only allowed for localhost).");
+}
+
+/** Request host access to exactly this instance origin (user gesture required).
+ * Never requests <all_urls>; only the origin the user typed. Returns true if granted. */
+async function ensurePermission(origin) {
+  try {
+    return await chrome.permissions.request({ origins: [origin + "/*"] });
+  } catch (e) {
+    setStatus("Could not request permission: " + (e.message || e), "err");
+    return false;
   }
-  return u;
 }
 
 async function load() {
@@ -39,43 +46,56 @@ async function load() {
 
 async function save(ev) {
   ev.preventDefault();
-  let u;
-  try {
-    u = validateInstance($("instanceUrl").value);
-  } catch (e) {
-    setStatus(e.message, "err");
-    return;
-  }
+  const parsed = readInstance();
+  if (!parsed) return;
   const username = $("username").value.trim();
   const password = $("password").value;
   if (!username || !password) {
     setStatus("Enter the Basic-auth username and password.", "err");
     return;
   }
-
-  // Ask for host access to exactly this instance origin (user gesture required).
-  // We never request <all_urls>; only the origin the user typed.
-  let granted;
-  try {
-    granted = await chrome.permissions.request({ origins: [u.origin + "/*"] });
-  } catch (e) {
-    setStatus("Could not request permission: " + (e.message || e), "err");
+  if (!(await ensurePermission(parsed.origin))) {
+    setStatus("Permission for " + new URL(parsed.origin).host + " was declined — cannot upload without it.", "err");
     return;
   }
-  if (!granted) {
-    setStatus("Permission for " + u.host + " was declined — cannot upload without it.", "err");
-    return;
-  }
-
   await chrome.storage.local.set({
-    config: { instanceUrl: u.origin, username, password },
+    config: { instanceUrl: parsed.origin, username, password },
   });
-  const res = await chrome.runtime.sendMessage({ type: "installRule", instanceUrl: u.origin });
+  const res = await chrome.runtime.sendMessage({ type: "installRule", instanceUrl: parsed.origin });
   if (res && res.ok) {
     setStatus("Saved. Capture from the DevTools “Provenance Capture” panel.", "ok");
   } else {
     setStatus("Saved, but could not install the upload rule: " + ((res && res.error) || "unknown"), "err");
   }
+}
+
+/** Test the CURRENTLY-TYPED URL + creds against the instance before saving, so a
+ * typo or wrong password fails here — not silently at the first capture upload. */
+async function test() {
+  const parsed = readInstance();
+  if (!parsed) return;
+  const username = $("username").value.trim();
+  const password = $("password").value;
+  if (!username || !password) {
+    setStatus("Enter the username and password to test.", "err");
+    return;
+  }
+  if (!(await ensurePermission(parsed.origin))) {
+    setStatus("Permission for " + new URL(parsed.origin).host + " was declined — can't test without it.", "err");
+    return;
+  }
+  setStatus("Testing…", null);
+  $("test").disabled = true;
+  let res;
+  try {
+    res = await chrome.runtime.sendMessage({
+      type: "testConnection", instanceUrl: parsed.origin, username, password,
+    });
+  } catch (e) {
+    res = { ok: false, message: "Could not reach the extension background worker." };
+  }
+  $("test").disabled = false;
+  setStatus((res && res.message) || "Test failed.", res && res.ok ? "ok" : "err");
 }
 
 async function forget() {
@@ -96,5 +116,6 @@ async function forget() {
 }
 
 $("cfg").addEventListener("submit", save);
+$("test").addEventListener("click", test);
 $("forget").addEventListener("click", forget);
 load();

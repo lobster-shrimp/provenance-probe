@@ -14,6 +14,7 @@ import {
   escapeHtml,
   entryBody,
 } from "./lib/sanitize.js";
+import { pickerLabel } from "./lib/config.js";
 
 const $ = (id) => document.getElementById(id);
 const MAX_ENTRIES = 60;
@@ -60,7 +61,9 @@ function renderPicker() {
     const o = document.createElement("option");
     o.value = String(i);
     // textContent — never innerHTML — so a crafted URL cannot inject markup.
-    o.textContent = (e.request.method || "POST") + " " + (e.request.url || "").slice(0, 90);
+    // Friendly "host · path-tail" instead of the raw METHOD+URL; the first
+    // candidate is the scorer's best pick, marked so a non-technical user knows.
+    o.textContent = pickerLabel(e) + (i === 0 ? "  (recommended)" : "");
     sel.appendChild(o);
   });
   $("pick").style.display = "block";
@@ -153,8 +156,14 @@ function renderResult(res) {
     ? "<h3>Synthesized target</h3><pre>" + escapeHtml(JSON.stringify(server.target, null, 2)) + "</pre>"
     : "";
   if (res.ok && server.ok) {
+    // Honest copy: the endpoint is dry-run only (it never persists a target), so we
+    // do NOT imply a "saved" state or link to a save page — we tell the user the
+    // next step is to copy the target JSON into their instance as a watch target.
+    const note = server.note || "Dry-run succeeded.";
     out.innerHTML =
-      '<div class="ok-box">' + escapeHtml(server.note || "Dry-run succeeded.") + "</div>" +
+      '<div class="ok-box"><b>' + escapeHtml(note) + "</b><br>" +
+      "This instance confirmed it can reach the model. Copy the target JSON below to " +
+      "add it as a watch target on your instance.</div>" +
       warnings + targetPre;
   } else {
     const err = res.error || (server && server.error) || "Upload failed.";
