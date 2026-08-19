@@ -1,8 +1,13 @@
-# Store screenshots — shot list (owner captures these)
+# Store screenshots
+
+**Ready to upload:** `screenshot-1-configured.png`, `screenshot-2-armed.png`,
+`screenshot-3-result.png` (this folder) are **1280×800** and rendered from the real popup /
+panel HTML + the bundled Geist/Fraunces fonts, in each target state, with demo data
+(`probe.acme-internal.com` / `acme-chat`). Upload them as-is in the Store listing tab, or
+re-capture from a live instance if you'd rather show real endpoints (shot list below).
 
 Chrome requires at least one screenshot (1280×800 or 640×400, PNG/JPEG). These three tell
-the story: configure → capture → result. Capture them from the loaded extension (Load
-unpacked), then upload in the Store listing tab.
+the story: configure → capture → result.
 
 ## 1. Configured popup — "Connected ✓"
 - Open the popup, enter a real (or demo) instance URL + credentials, click **Test connection**.
