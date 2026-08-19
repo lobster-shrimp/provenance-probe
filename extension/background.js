@@ -6,19 +6,17 @@
 // strips the `Origin` header from the extension's own upload to the configured
 // instance. Nothing here is ever logged.
 
+import { testConnResult, validateInstanceUrl } from "./lib/config.js";
+
 const ORIGIN_RULE_ID = 1;
 const CAPTURE_PATH = "/wizard/capture-import";
 
-/** Parse + validate a user-entered instance URL. Only HTTPS is allowed, except
- * loopback (http://localhost / http://127.0.0.1) for local development. Returns
- * `{ origin, base }` or throws. */
+/** Parse + validate a user-entered instance URL. Delegates to the shared
+ * `validateInstanceUrl` (one source of truth for the HTTPS-only-except-loopback
+ * rule — popup, background, and preflight all use it). Returns `{origin, base}`
+ * or throws. */
 function parseInstance(instanceUrl) {
-  const u = new URL(String(instanceUrl || "").trim());
-  const isLoopback = u.hostname === "localhost" || u.hostname === "127.0.0.1";
-  if (u.protocol !== "https:" && !(u.protocol === "http:" && isLoopback)) {
-    throw new Error("Instance URL must use https:// (http:// is only allowed for localhost).");
-  }
-  return { origin: u.origin, base: u.origin + u.pathname.replace(/\/+$/, "") };
+  return validateInstanceUrl(instanceUrl);
 }
 
 /** Build a Basic-auth header value, UTF-8 safe. */
@@ -124,6 +122,49 @@ async function upload(payload) {
   return { ok: !!(body && body.ok), status: res.status, server: body };
 }
 
+/** Preflight the CURRENTLY-TYPED instance URL + creds (passed in, not read from
+ * storage) so the popup's "Test connection" tests the form the user is editing.
+ * Two HEAD probes to `/`: one WITHOUT auth, then (only if that was challenged with
+ * 401/403) one WITH auth. That lets us tell "wrong password" apart from "this
+ * instance isn't enforcing auth" (a 200 with no challenge never checked the creds).
+ * Never logs the creds; `credentials:"omit"` so no ambient cookies ride along. */
+async function testConnection({ instanceUrl, username, password }) {
+  let origin, base;
+  try {
+    ({ origin, base } = parseInstance(instanceUrl));
+  } catch (e) {
+    return { ok: false, kind: "badurl", message: String((e && e.message) || e) };
+  }
+  const host = new URL(origin).host;
+  const granted = await chrome.permissions.contains({ origins: [origin + "/*"] });
+  if (!granted) {
+    return { ok: false, kind: "noperm",
+             message: "Grant access to this instance first (the Test/Save button asks for it)." };
+  }
+  let noAuthStatus = 0;
+  let authStatus = 0;
+  let err = "";
+  try {
+    const r1 = await fetch(base + "/", { method: "HEAD", credentials: "omit" });
+    noAuthStatus = r1.status;
+  } catch (e) {
+    err = "unreachable";
+  }
+  if (!err && (noAuthStatus === 401 || noAuthStatus === 403)) {
+    try {
+      const r2 = await fetch(base + "/", {
+        method: "HEAD",
+        credentials: "omit",
+        headers: { Authorization: basicAuth(username, password) },
+      });
+      authStatus = r2.status;
+    } catch (e) {
+      err = "unreachable";
+    }
+  }
+  return testConnResult({ noAuthStatus, authStatus, err }, host);
+}
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   (async () => {
     try {
@@ -139,6 +180,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         case "clearRule":
           await clearOriginRule();
           sendResponse({ ok: true });
+          break;
+        case "testConnection":
+          sendResponse(await testConnection(msg));
           break;
         case "upload":
           sendResponse(await upload(msg.payload));

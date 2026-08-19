@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!-- provenance-probe capture icon (variant C concept): a speech bubble under a
+       magnifier + one coral accent arc, on a warm-cream tile with a deep-green mark.
+       DESIGN.md colors. Master = 128px; the 16/32 rasters drop the interior text
+       lines (bubble + lens + arc only) so the silhouette stays legible small. -->
+  <rect x="2" y="2" width="124" height="124" rx="26" fill="#F5F3EC"/>
+  <g fill="none" stroke="#0E3B2E" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <!-- speech bubble -->
+    <path d="M20 34 h50 a10 10 0 0 1 10 10 v20 a10 10 0 0 1 -10 10 h-30 l-12 12 v-12 h-8 a10 10 0 0 1 -10 -10 v-20 a10 10 0 0 1 10 -10 z"/>
+  </g>
+  <!-- magnifier lens (cream fill so it reads over the bubble) -->
+  <circle cx="86" cy="62" r="28" fill="#F5F3EC" stroke="#0E3B2E" stroke-width="8"/>
+  <!-- interior text lines (dropped at 16/32) -->
+  <g class="detail" stroke="#0E3B2E" stroke-width="5" stroke-linecap="round">
+    <line x1="74" y1="54" x2="98" y2="54"/>
+    <line x1="74" y1="64" x2="98" y2="64"/>
+    <line x1="74" y1="74" x2="90" y2="74"/>
+  </g>
+  <!-- the one hot accent: a coral arc inside the lens -->
+  <path d="M95 78 a16 16 0 0 0 5 -12" fill="none" stroke="#D2483F" stroke-width="6" stroke-linecap="round"/>
+  <!-- magnifier handle -->
+  <line x1="106" y1="83" x2="118" y2="95" stroke="#0E3B2E" stroke-width="10" stroke-linecap="round"/>
+</svg>
