@@ -32,6 +32,9 @@ prerequisites first.
       `PERMISSIONS.md` answers it.
 
 ## After it's live
-- [ ] Update `extension/README.md` and `extension/INSTALL.md` to point at the store listing
-      as the primary install (keep the Load-unpacked path for developers).
+- [ ] In `extension/README.md`, find the `<!-- ONCE LIVE: ... -->` marker in the Install
+      section and replace the "Not published yet" line with the real store link:
+      `[Install from the Chrome Web Store](https://chromewebstore.google.com/detail/<ITEM_ID>)`.
+- [ ] In `extension/INSTALL.md`, swap the "developer-mode build" intro for a "install from the
+      Chrome Web Store" primary path (keep Load-unpacked below, for developers).
 - [ ] Note the store item ID somewhere durable for future updates.

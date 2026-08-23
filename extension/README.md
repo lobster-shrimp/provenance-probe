@@ -41,8 +41,16 @@ field-for-field from the server's built-in uploader (`_WIZARD_IMPORT_JS` in
 
 ## Install
 
-**Easiest — download a build (see [INSTALL.md](INSTALL.md)):** grab the latest
-`provenance-probe-extension-X.Y.Z.zip` from the repo's Releases page, unzip, and
+**From the Chrome Web Store (recommended once published):** install in one click from the
+listing. <!-- ONCE LIVE: replace this line with a real link once the item ID is assigned on
+first upload, e.g. [Install from the Chrome Web Store](https://chromewebstore.google.com/detail/<ITEM_ID>).
+See store/SUBMIT.md → "After it's live". --> **Not published yet** — until it is, use the
+developer build below. The full listing package (copy, permission justifications, data-safety
+answers, privacy policy, promo tile, screenshots, submission checklist) is staged in
+[`store/`](store/); submitting is the owner's manual step.
+
+**Download a build (developer build, available now — see [INSTALL.md](INSTALL.md)):** grab the
+latest `provenance-probe-extension-X.Y.Z.zip` from the repo's Releases page, unzip, and
 **Load unpacked**. Each `ext-v*` tag publishes one automatically (unit tests + a
 tag-vs-manifest version guard run first).
 
@@ -56,9 +64,6 @@ tag-vs-manifest version guard run first).
 
 CI packages the zip two ways: `extension.yml` on every change (a build artifact),
 and `extension-release.yml` attaches it to a **GitHub Release** on an `ext-v*` tag.
-**NOT on the Chrome Web Store** — submitting there is the owner's manual step; the full
-listing package (copy, permission justifications, data-safety answers, privacy policy,
-promo tile, and a submission checklist) is prepared in [`store/`](store/).
 
 ---
 
