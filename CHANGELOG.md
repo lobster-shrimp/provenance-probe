@@ -1,5 +1,9 @@
 # Changelog
 
+> This file tracks the Python package (`llm-provenance-probe`). The MV3 browser extension
+> versions **independently** (released via `ext-v*` tags) — its history lives in
+> [`extension/CHANGELOG.md`](extension/CHANGELOG.md).
+
 ## [0.31.0] — finish fleet: Windows collector + Intune/Tanium delivery (2026-08-18)
 
 Closes the fleet B-phase: the scanner now runs on Windows and delivers through the
