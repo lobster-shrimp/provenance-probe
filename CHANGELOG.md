@@ -4,6 +4,73 @@
 > versions **independently** (released via `ext-v*` tags) — its history lives in
 > [`extension/CHANGELOG.md`](extension/CHANGELOG.md).
 
+## [0.32.0] — SentencePiece enabler: validate the last CN families (2026-09-16)
+
+Closes the CN portion of Goal 3 (reference coverage). Adds a **SentencePiece
+enabler** to the eval's GGUF-vocab path, then validates the four last-gap CN
+families the byte-level-BPE mock could not serve: **Yi-1.5, InternLM2.5, MiniCPM3,
+Baichuan2**. CN consistency-tier coverage goes 5 → **9**; the eval now exercises
+17 of 25 families (TP=16 FP=0 TN=24 FN=0).
+
+**Finding (surfaced, not tuned away):** all four are SentencePiece **BPE**
+(proto `model_type=2`) with `byte_fallback`, **not** unigram — they carry piece
+scores AND a merge table, and their front-end is Metaspace (`▁`) + ByteFallback,
+not GPT-2 ByteLevel. `tokenizers.models.Unigram` is the wrong algorithm and does
+not reproduce them; the faithful reconstruction is `models.BPE(..., byte_fallback=
+True)` + a per-family SP front-end (`SP_CONFIG`), which reproduces the genuine HF
+`AutoTokenizer` counts exactly.
+
+### Added
+- **SentencePiece enabler** in `provenance_probe/tools/build_reference_from_gguf.py`:
+  `read_gguf_vocab` now also reads `tokenizer.ggml.scores`; `classify_vocab`
+  distinguishes byte-level BPE (no scores) from SentencePiece (has scores). The
+  ONE shared `build_sp_tokenizer` + `SP_CONFIG` (the SP analogue of the
+  byte-identical `REGEX`) reconstructs the SP tokenizer; `eval/mock.py`
+  `load_tokenizer` serves each SP vocab through that same builder, so mock and
+  reference cannot drift (test-asserted).
+- **Approach A** — `eval/vocabs/yi.gguf` (3.0 MB), `internlm.gguf` (4.9 MB),
+  `minicpm.gguf` (3.1 MB): vocab-only SentencePiece GGUFs carrying id-ordered
+  tokens + piece scores + merges (`tokenizer.ggml.model="llama"`), built from the
+  HF fast tokenizers of `01-ai/Yi-1.5-9B-Chat` (rev `1a0fc698`, Apache-2.0),
+  `internlm/internlm2_5-7b-chat` (rev `eb72b541`, Apache-2.0) and
+  `openbmb/MiniCPM3-4B` (rev `d6b14dda`, Apache-2.0) via the new
+  `scripts/build_spm_vocab_gguf.py`.
+- **Approach B** — `eval/vocabs/baichuan.model` (2.0 MB): the raw SentencePiece
+  `tokenizer.model` of `baichuan-inc/Baichuan2-7B-Chat` (rev `ea66ced1`, license:
+  Baichuan-2 community license), served via `sentencepiece`. Baichuan2 is a slow
+  custom tokenizer with no fast backend whose `_tokenize` is `sp_model.encode`, so
+  raw SentencePiece reproduces its HF `AutoTokenizer` counts exactly. `sentencepiece`
+  added to the `[eval]` extra for this path only.
+- **Four `VOCAB_CASE`s** in `eval/corpus.py` (Yi/01.AI, InternLM, MiniCPM,
+  Baichuan — all CN).
+- **`tests/test_eval_sentencepiece.py`** — the enabler tests (classify bpe vs
+  spm; shared-builder parity mock==reference; BPE path unchanged regression) plus
+  four tests per family (faithful reproduction of the genuine HF `AutoTokenizer`
+  counts; corpus wiring + `is_flagged_cn`; served blind → family match + flagged
+  CN; rebuild is vocab-derived + siblings intact).
+
+### Changed
+- Rebuilt the four families' `tokenizer_ref.json` vectors from their committed
+  vocab. Yi-1.5, InternLM2.5, MiniCPM3 are **byte-identical** to the prior
+  HF-derived vectors (zero detection delta; only GGUF metadata added). **Baichuan2
+  drifts on 4 probes** (`diacritics` 148→150, `cyrillic` 59→60, `base64ish`
+  256→192, `newline_storm` 122→121): a surfaced vector-drift finding — the prior
+  shipped Baichuan vector was slightly off; the genuine SentencePiece counts are
+  the ground truth. The other 23 entries are byte-unchanged.
+
+### Notes
+- **InternLM2.5 byte_fallback finding.** InternLM2.5's *current* HF fast/slow
+  tokenizers regressed `byte_fallback` to `False` (emoji/rare-unicode collapse to
+  `<unk>`). The genuine model and the pre-existing shipped reference use
+  `byte_fallback=True` with `add_dummy_prefix=False`; the served reconstruction
+  reproduces that byte-fallback-correct behaviour (which a real endpoint reports),
+  byte-for-byte with the shipped vector.
+- Verdict tiers: Yi/InternLM/MiniCPM land at **LIKELY** (the same tier as the
+  shipped Qwen/DeepSeek CN cases), Baichuan at **CONFIRMED**; all four match their
+  own family at score 1.0 and are flagged Chinese-origin. Zero false positives.
+- No change to `monitor.py`, `scoring.py`, matcher thresholds, or the
+  `reference.py` HF path. The detection engine is untouched.
+
 ## [0.31.2] — validate Moonshot in the hermetic consistency tier (2026-09-16)
 
 Continues the CN reference-coverage push (issue #107): a best-effort batch to

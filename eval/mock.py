@@ -84,12 +84,22 @@ TEMPLATE_OVERHEAD = 9
 
 
 def load_tokenizer(gguf_path: str, regex_key: str):
-    """Build a tokenizers.Tokenizer from a GGUF vocab using the family regex.
+    """Build a served tokenizer for one vocab key.
 
-    Imported lazily so the harness module stays importable without the heavy
-    optional deps (gguf, tokenizers) installed — only running a vocab case
-    needs them.
+    Byte-level BPE families (the existing 13) use the per-family pre-tokenizer
+    REGEX below. SentencePiece families (Yi, MiniCPM, InternLM, Baichuan) are
+    served through the ONE shared SP builder in build_reference_from_gguf.py
+    (`SP_CONFIG` — the SP analogue of REGEX), so a served vocab reproduces its own
+    reference vector. Imported lazily so the harness module stays importable
+    without the heavy optional deps (gguf, tokenizers, sentencepiece) installed —
+    only running a vocab case needs them.
     """
+    # SentencePiece path: the shared builder (mock == reference builder).
+    from provenance_probe.tools.build_reference_from_gguf import (
+        SP_CONFIG, load_sp_tokenizer)
+    if regex_key in SP_CONFIG or gguf_path.endswith(".model"):
+        return load_sp_tokenizer(gguf_path, regex_key)
+
     from gguf import GGUFReader
     from tokenizers import Tokenizer, models, pre_tokenizers, Regex
 
@@ -118,6 +128,16 @@ def load_tokenizer(gguf_path: str, regex_key: str):
         pre_tokenizers.ByteLevel(add_prefix_space=False, use_regex=False),
     ])
     return tk
+
+
+def vocab_path(vocab_dir: str, key: str) -> str:
+    """Resolve a vocab key to its committed file: `<key>.gguf` (byte-level BPE or
+    Approach-A SentencePiece) or `<key>.model` (Approach-B raw SentencePiece)."""
+    import os
+    gguf = os.path.join(vocab_dir, key + ".gguf")
+    if os.path.exists(gguf):
+        return gguf
+    return os.path.join(vocab_dir, key + ".model")
 
 
 def make_app(gguf_path: str, brand: str, regex_key: str, overhead: int = TEMPLATE_OVERHEAD):

@@ -12,17 +12,17 @@ Two case families:
 `is_flagged_cn()`, so the corpus and the runner agree on what a positive is.
 
 COVERAGE (honest accounting — see eval/README.md):
-  The shipped reference scores against 25 model families. Only the 13 with a
-  GGUF vocab AND a transcribed pre-tokenizer regex can be exercised end-to-end
-  here (the 11 llama.cpp-bundled vocabs plus GLM-4 and Moonshot, whose vocab-only
-  GGUFs are built from THUDM/glm-4-9b-chat-hf and moonshotai/Moonlight-16B-A3B —
-  see eval/vocabs/glm-4.gguf, eval/vocabs/moonshot.gguf). The other 12 (GLM-4.5,
-  Yi, MiniCPM3, Qwen3, DeepSeek-V3, InternLM2.5, Baichuan2, Phi-3.5,
-  Mistral-v0.3, Gemma-2, OpenAI cl100k/o200k) are reference-only and UNVALIDATED
-  by this harness — Yi, MiniCPM3, InternLM2.5 and Baichuan2 are SentencePiece-
-  derived (▁-based vocab, no byte-level BPE merges the mock can read), deferred to
-  the SentencePiece enabler; the rest were built via the HF/tiktoken path, not
-  GGUF. Do not read a green eval as coverage of those families.
+  The shipped reference scores against 25 model families. 17 are exercised
+  end-to-end here: the 11 llama.cpp-bundled byte-level-BPE vocabs; GLM-4 and
+  Moonshot (vocab-only byte-level-BPE GGUFs from THUDM/glm-4-9b-chat-hf and
+  moonshotai/Moonlight-16B-A3B); and the four SentencePiece CN families Yi,
+  InternLM2.5, MiniCPM3 and Baichuan2, served via the SP enabler (Yi/InternLM/
+  MiniCPM from committed unigram-style GGUFs carrying tokens+scores+merges,
+  Baichuan2 from its raw tokenizer.model via sentencepiece). The remaining 8
+  (GLM-4.5, Qwen3, DeepSeek-V3, Phi-3.5, Mistral-v0.3, Gemma-2, OpenAI
+  cl100k/o200k) are reference-only and UNVALIDATED by this harness — built via
+  the HF/tiktoken path, not GGUF. Do not read a green eval as coverage of those
+  families.
 """
 from __future__ import annotations
 
@@ -38,6 +38,11 @@ VOCAB_CASES = [
     {"key": "deepseek-coder", "family": "DeepSeek",     "origin": "CN", "expect_flagged": True},
     {"key": "glm-4",          "family": "GLM/Zhipu",    "origin": "CN", "expect_flagged": True},
     {"key": "moonshot",       "family": "Moonshot",     "origin": "CN", "expect_flagged": True},
+    # SentencePiece CN families (served via the SP enabler, issues #107/#109)
+    {"key": "yi",             "family": "Yi/01.AI",     "origin": "CN", "expect_flagged": True},
+    {"key": "internlm",       "family": "InternLM",     "origin": "CN", "expect_flagged": True},
+    {"key": "minicpm",        "family": "MiniCPM",      "origin": "CN", "expect_flagged": True},
+    {"key": "baichuan",       "family": "Baichuan",     "origin": "CN", "expect_flagged": True},
     # --- non-CN negatives: must NOT be flagged (false-positive gate) -------
     {"key": "llama-bpe",      "family": "Llama-3",      "origin": "US", "expect_flagged": False},
     {"key": "gpt-2",          "family": "GPT-2/OpenAI", "origin": "US", "expect_flagged": False},
@@ -111,7 +116,7 @@ def fleet_flagged_cn(attribution) -> bool:
 EXPECTED_VARIANT_SEED = 0
 
 # False-negative budget: CN families the harness is allowed to miss before the
-# build goes red. Starts at 0 (all 3 CN vocab cases must be caught) and is
+# build goes red. Held at 0 (all 9 CN vocab cases must be caught) and is
 # ratcheted DOWN only — never up to paper over a regression.
 MAX_FALSE_NEGATIVES = 0
 

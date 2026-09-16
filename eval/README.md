@@ -90,10 +90,10 @@ score from a non-CN source never reads as a Chinese flag.
 
 ## Coverage — honest accounting
 
-The shipped reference scores against **25** model families. Only the **13** with
-a GGUF vocab AND a transcribed pre-tokenizer regex are exercised end-to-end here:
+The shipped reference scores against **25** model families. **17** are exercised
+end-to-end here:
 
-- **CN (5):** Qwen2, DeepSeek-LLM, DeepSeek-Coder, GLM-4, Moonshot
+- **CN (9):** Qwen2, DeepSeek-LLM, DeepSeek-Coder, GLM-4, Moonshot, Yi, InternLM2.5, MiniCPM3, Baichuan2
 - **non-CN (8):** Llama-3, GPT-2, Command-R, Falcon, StarCoder, MPT, GPT-NeoX, Refact
 
 Eleven vocabs are llama.cpp's bundled `models/ggml-vocab-*.gguf`. **GLM-4** is a
@@ -104,21 +104,32 @@ vocab-only GGUF (`eval/vocabs/moonshot.gguf`) reconstructed to byte-level BPE fr
 the tiktoken vocabulary of `moonshotai/Moonlight-16B-A3B`; its regex `RE_MOONSHOT`
 is the model's own tiktoken `pat_str` (llama.cpp's matching `KIMI_K2` pre-type
 delegates the split to a custom `unicode.cpp` handler, so there is no single
-regex to lift from `llama-vocab.cpp`). For each, a test pins the GGUF+regex path
-to the genuine tokenizer's counts (HF `AutoTokenizer` / tiktoken oracle).
+regex to lift from `llama-vocab.cpp`).
 
-**Unvalidated by this harness (12):** GLM-4.5, Yi, MiniCPM3, Qwen3, DeepSeek-V3,
-InternLM2.5, Baichuan2, Phi-3.5, Mistral-v0.3, Gemma-2, OpenAI cl100k/o200k. Yi,
-MiniCPM3, InternLM2.5 and Baichuan2 are SentencePiece-derived (▁-based vocab, no
-byte-level BPE merges the mock can read) and are deferred to the SentencePiece
-enabler; the rest were built via the HF/tiktoken path, not GGUF, so no blind
-vocab mock exists. A green eval is **not** coverage of these families.
+**SentencePiece families (4).** Yi, InternLM2.5, MiniCPM3 and Baichuan2 are
+SentencePiece **BPE** with `byte_fallback` (proto `model_type=2`), not byte-level
+GPT-2 BPE — a `▁`-metaspace + ByteFallback front-end the byte-level mock path
+could not serve. The SP enabler adds a shared `build_sp_tokenizer` + per-family
+`SP_CONFIG` (the SP analogue of `REGEX`). Yi/InternLM/MiniCPM ship a vocab-only
+SentencePiece GGUF carrying tokens+scores+merges (`eval/vocabs/{yi,internlm,
+minicpm}.gguf`, `tokenizer.ggml.model="llama"`); Baichuan2 — a slow custom
+tokenizer with no fast backend — ships its raw `eval/vocabs/baichuan.model`,
+served via `sentencepiece`. For each, a test pins the served path to the genuine
+HF `AutoTokenizer` counts.
+
+**Unvalidated by this harness (8):** GLM-4.5, Qwen3, DeepSeek-V3, Phi-3.5,
+Mistral-v0.3, Gemma-2, OpenAI cl100k/o200k — built via the HF/tiktoken path, not
+GGUF, so no blind vocab mock exists. A green eval is **not** coverage of these
+families.
 
 ## Adding a case
 
-- **A family with a GGUF vocab:** drop `eval/vocabs/<key>.gguf`, add its regex to
-  `mock.py:REGEX` (matching the reference builder), and a row in
+- **A byte-level-BPE family with a GGUF vocab:** drop `eval/vocabs/<key>.gguf`,
+  add its regex to `mock.py:REGEX` (matching the reference builder), and a row in
   `corpus.VOCAB_CASES`.
+- **A SentencePiece family:** drop `eval/vocabs/<key>.gguf` (built via
+  `scripts/build_spm_vocab_gguf.py`) or `<key>.model`, add an `SP_CONFIG` entry in
+  `build_reference_from_gguf.py`, and a row in `corpus.VOCAB_CASES`.
 - **A scoring behavior / edge case:** add `eval/bundles/<name>.json` and a row in
   `corpus.BUNDLE_CASES`. Keep CN cases synthetic (Gate-1).
 
