@@ -90,14 +90,19 @@ score from a non-CN source never reads as a Chinese flag.
 
 ## Coverage — honest accounting
 
-The shipped reference scores against **25** model families. Only the **11** with
-a fetchable llama.cpp GGUF vocab AND a transcribed pre-tokenizer regex are
-exercised end-to-end here:
+The shipped reference scores against **25** model families. Only the **12** with
+a GGUF vocab AND a transcribed pre-tokenizer regex are exercised end-to-end here:
 
-- **CN (3):** Qwen2, DeepSeek-LLM, DeepSeek-Coder
+- **CN (4):** Qwen2, DeepSeek-LLM, DeepSeek-Coder, GLM-4
 - **non-CN (8):** Llama-3, GPT-2, Command-R, Falcon, StarCoder, MPT, GPT-NeoX, Refact
 
-**Unvalidated by this harness (14):** GLM, Yi, MiniCPM3, Qwen3, DeepSeek-V3,
+Eleven vocabs are llama.cpp's bundled `models/ggml-vocab-*.gguf`; **GLM-4** is a
+vocab-only GGUF built from `THUDM/glm-4-9b-chat-hf` (see `eval/vocabs/glm-4.gguf`)
+because llama.cpp ships no bundled GLM vocab. Its pre-tokenizer regex `RE_GLM4`
+is transcribed from llama.cpp `LLAMA_VOCAB_PRE_TYPE_CHATGLM4`, and a test pins
+the GGUF+regex path to the genuine GLM-4 tokenizer (HF AutoTokenizer) counts.
+
+**Unvalidated by this harness (13):** GLM-4.5, Yi, MiniCPM3, Qwen3, DeepSeek-V3,
 Moonshot, InternLM2.5, Baichuan2, Phi-3.5, Mistral-v0.3, Gemma-2, OpenAI
 cl100k/o200k. Most were built via the HF/tiktoken path, not GGUF, so no blind
 vocab mock exists. A green eval is **not** coverage of these families.

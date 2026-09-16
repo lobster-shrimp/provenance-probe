@@ -4,6 +4,37 @@
 > versions **independently** (released via `ext-v*` tags) — its history lives in
 > [`extension/CHANGELOG.md`](extension/CHANGELOG.md).
 
+## [0.31.1] — validate GLM (Zhipu) in the hermetic consistency tier (2026-09-16)
+
+Brings the founding z.ai/GLM field case into the eval's consistency tier, so the
+tokenizer matcher is PROVEN — blind — to identify GLM as Chinese-origin. GLM was
+the one CN family with a shipped reference vector but no blind GGUF test; this
+closes the GLM portion of the reference-coverage goal (CN gap).
+
+### Added
+- **`RE_GLM4`** — GLM-4 pre-tokenizer regex, transcribed byte-for-byte from
+  llama.cpp `src/llama-vocab.cpp` `LLAMA_VOCAB_PRE_TYPE_CHATGLM4`
+  (commit `7ceed87`). Added byte-identically to both
+  `provenance_probe/tools/build_reference_from_gguf.py` (new `"glm-4"` SPEC entry)
+  and `eval/mock.py` (`REGEX["glm-4"]`); a test pins the two copies identical.
+- **`eval/vocabs/glm-4.gguf`** (8.7 MB) — a vocab-only BPE GGUF (151329 base +
+  14 special tokens, 318088 merges) built from `THUDM/glm-4-9b-chat-hf`
+  (revision `8599336f`, license: GLM-4 / "other"). llama.cpp ships no bundled GLM
+  vocab, so it is derived from that repo's `tokenizer.json`.
+- **`glm-4` `VOCAB_CASE`** in `eval/corpus.py` (family GLM/Zhipu, origin CN).
+- Five tests (`tests/test_eval_glm.py`): regex byte-identical + equal to the
+  llama.cpp source value; GGUF loads as BPE and reproduces the genuine GLM-4
+  tokenizer's counts (HF `AutoTokenizer`, an independent oracle); `is_flagged_cn`
+  CN; integration (GLM served blind → CONFIRMED CN); other-26-entries-unchanged.
+
+### Changed
+- Rebuilt the `GLM-4-9B` `tokenizer_ref.json` vector **from the GGUF** (decision:
+  rebuild-from-GGUF, so reference and blind mock agree by construction). The
+  vector is **byte-identical** to the prior HF-derived one (zero detection
+  delta); only metadata changed (`source` → the GGUF, added
+  `gguf_model`/`gguf_pre`/`merges`, `vocab_size` 151329 → 151343). The other 26
+  reference entries are unchanged. GLM-4.5 stays HF-derived (a follow-up).
+
 ## [0.31.0] — finish fleet: Windows collector + Intune/Tanium delivery (2026-08-18)
 
 Closes the fleet B-phase: the scanner now runs on Windows and delivers through the

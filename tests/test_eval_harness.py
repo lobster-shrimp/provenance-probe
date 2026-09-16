@@ -151,3 +151,4 @@ def test_mock_regexes_match_reference_builder():
     assert mock.RE_DEEPSEEK_LLM == b.RE_DEEPSEEK_LLM
     assert mock.RE_DEEPSEEK_CODER == b.RE_DEEPSEEK_CODER
     assert mock.RE_FALCON == b.RE_FALCON
+    assert mock.RE_GLM4 == b.RE_GLM4

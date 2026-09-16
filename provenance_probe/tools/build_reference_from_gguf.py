@@ -22,12 +22,21 @@ RE_DEEPSEEK_CODER = (r"[\r\n]|\p{N}{1,3}|[^\s\p{L}\p{N}]?[\p{L}\p{M}]+"
                      r"|\s*[\r\n]+|\s+(?!\S)|\s+")
 RE_FALCON = (r"[\p{P}\$\+<=>\^~\|]+|'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+"
              r"| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+")
+# GLM-4 (Zhipu). Transcribed byte-for-byte from llama.cpp
+# src/llama-vocab.cpp, case LLAMA_VOCAB_PRE_TYPE_CHATGLM4 (commit
+# 7ceed8737fdb4eb09b4760e77bd12d38012de5a8). Differs from RE_LLAMA3 only in the
+# contraction alternation: GLM-4 spells the case-folding out explicitly
+# ((?:'[sS]|...)) instead of (?i:'s|...). Kept byte-identical to eval/mock.py.
+RE_GLM4 = (r"(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])"
+           r"|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*"
+           r"|\s*[\r\n]+|\s+(?!\S)|\s+")
 
 # vocab file -> (label, family, origin, regex)
 SPEC = {
     "qwen2":           ("Qwen2/Qwen2.5",   "Qwen",          "CN", RE_LLAMA3),
     "deepseek-llm":    ("DeepSeek-LLM",    "DeepSeek",      "CN", RE_DEEPSEEK_LLM),
     "deepseek-coder":  ("DeepSeek-Coder",  "DeepSeek",      "CN", RE_DEEPSEEK_CODER),
+    "glm-4":           ("GLM-4",           "GLM/Zhipu",     "CN", RE_GLM4),
     "llama-bpe":       ("Llama-3",         "Llama-3",       "US", RE_LLAMA3),
     "gpt-2":           ("GPT-2",           "GPT-2/OpenAI",  "US", RE_GPT2),
     "command-r":       ("Command-R",       "Cohere",        "CA", RE_GPT2),
