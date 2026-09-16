@@ -41,6 +41,12 @@ RE_DEEPSEEK_CODER = (r"[\r\n]|\p{N}{1,3}|[^\s\p{L}\p{N}]?[\p{L}\p{M}]+"
                      r"|\s*[\r\n]+|\s+(?!\S)|\s+")
 RE_FALCON = (r"[\p{P}\$\+<=>\^~\|]+|'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+"
              r"| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+")
+# GLM-4 (Zhipu). Byte-for-byte from llama.cpp src/llama-vocab.cpp, case
+# LLAMA_VOCAB_PRE_TYPE_CHATGLM4 (commit 7ceed8737fdb4eb09b4760e77bd12d38012de5a8).
+# MUST stay byte-identical to build_reference_from_gguf.py (pinned by a test).
+RE_GLM4 = (r"(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])"
+           r"|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*"
+           r"|\s*[\r\n]+|\s+(?!\S)|\s+")
 
 # vocab key -> pre-tokenizer regex. Mirrors SPEC in build_reference_from_gguf.py.
 REGEX = {
@@ -48,7 +54,7 @@ REGEX = {
     "deepseek-llm": RE_DEEPSEEK_LLM, "deepseek-coder": RE_DEEPSEEK_CODER,
     "gpt-2": RE_GPT2, "command-r": RE_GPT2, "starcoder": RE_GPT2,
     "mpt": RE_GPT2, "gpt-neox": RE_GPT2, "refact": RE_GPT2,
-    "falcon": RE_FALCON,
+    "falcon": RE_FALCON, "glm-4": RE_GLM4,
 }
 
 # Chat-template / accounting overhead a real endpoint adds on top of the raw
