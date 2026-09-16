@@ -4,6 +4,58 @@
 > versions **independently** (released via `ext-v*` tags) — its history lives in
 > [`extension/CHANGELOG.md`](extension/CHANGELOG.md).
 
+## [0.31.2] — validate Moonshot in the hermetic consistency tier (2026-09-16)
+
+Continues the CN reference-coverage push (issue #107): a best-effort batch to
+validate the four remaining CN families that ship a reference vector but no blind
+GGUF test — Moonshot, Yi, InternLM2.5, MiniCPM3 — following the #106 GLM
+template. Only **Moonshot** is byte-level-BPE-representable and lands; the other
+three are SentencePiece-derived and are deferred (see below). Issue #107 stays
+open for the SentencePiece enabler follow-up.
+
+### Added
+- **`RE_MOONSHOT`** — Moonshot (Moonlight/Kimi) pre-tokenizer regex. This family
+  ships a *tiktoken* tokenizer, not an HF `tokenizer.json`; llama.cpp's matching
+  pre-type `LLAMA_VOCAB_PRE_TYPE_KIMI_K2` (commit `7ceed87`) triggers on
+  `\p{Han}+` and delegates the split to a custom `unicode.cpp` handler, so it
+  carries no single-regex transcription. The faithful source is the model's own
+  `pat_str` (`moonshotai/Moonlight-16B-A3B` `tokenization_moonshot.py`, revision
+  `476b36a4`). Added byte-identically to both
+  `provenance_probe/tools/build_reference_from_gguf.py` (new `"moonshot"` SPEC
+  entry) and `eval/mock.py` (`REGEX["moonshot"]`); a test pins the two copies
+  identical and equal to the source pat_str.
+- **`eval/vocabs/moonshot.gguf`** (6.24 MB) — a vocab-only byte-level-BPE GGUF
+  (163584 tokens, 163328 merges) reconstructed from the tiktoken vocabulary of
+  `moonshotai/Moonlight-16B-A3B` (revision
+  `476b36a473d4467f94469414bef6cee75c9c8172`, license: MIT). Built with the new
+  `scripts/build_tiktoken_vocab_gguf.py` (standard OpenAI/llama.cpp merge
+  reconstruction; GPT-2 byte-level encoding).
+- **`scripts/build_tiktoken_vocab_gguf.py`** — reproducible tiktoken → byte-level
+  BPE GGUF builder for tiktoken-vocab families.
+- **`moonshot` `VOCAB_CASE`** in `eval/corpus.py` (family Moonshot, origin CN).
+- Five tests (`tests/test_eval_moonshot.py`): regex byte-identical + equal to the
+  Moonlight `pat_str`; GGUF loads as BPE and reproduces the genuine Moonlight
+  tokenizer's counts (tiktoken, an independent oracle); `is_flagged_cn` CN;
+  integration (Moonshot served blind → CONFIRMED CN); rebuild is GGUF-derived and
+  siblings intact.
+
+### Changed
+- Rebuilt the `Moonshot` `tokenizer_ref.json` vector **from the GGUF**
+  (rebuild-from-GGUF, so reference and blind mock agree by construction). The
+  vector is **byte-identical** to the prior HF-derived one (zero detection
+  delta); only metadata changed (`source` → the GGUF, added
+  `merges`/`gguf_model`/`gguf_pre`/`note`). All other 26 reference entries are
+  unchanged. Eval: TP=12 FP=0 TN=24 FN=0 (moonshot → CONFIRMED CN).
+
+### Deferred (SentencePiece-derived — out of scope for the BPE mock)
+- **Yi-1.5** (`01-ai/Yi-1.5-9B-Chat`), **MiniCPM3** (`openbmb/MiniCPM3-4B`),
+  **InternLM2.5** (`internlm/internlm2_5-7b-chat`) are SentencePiece-derived:
+  their vocabularies are `▁`-based (SentencePiece metaspace), not byte-level BPE,
+  and expose no byte-level merges the mock's `load_tokenizer` can read (InternLM
+  ships only a SentencePiece `tokenizer.model`; Yi/MiniCPM ship a `tokenizer.json`
+  but with `▁` tokens + a ByteFallback decoder). They hit the same wall as
+  Baichuan2 and are deferred to the SentencePiece mock enabler.
+
 ## [0.31.1] — validate GLM (Zhipu) in the hermetic consistency tier (2026-09-16)
 
 Brings the founding z.ai/GLM field case into the eval's consistency tier, so the

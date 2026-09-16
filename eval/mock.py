@@ -47,6 +47,25 @@ RE_FALCON = (r"[\p{P}\$\+<=>\^~\|]+|'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+"
 RE_GLM4 = (r"(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])"
            r"|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*"
            r"|\s*[\r\n]+|\s+(?!\S)|\s+")
+# Moonshot (Moonlight/Kimi). This family ships a *tiktoken* tokenizer, not an HF
+# tokenizer.json; the authoritative pre-tokenizer split is the model's own
+# `pat_str` (moonshotai/Moonlight-16B-A3B `tokenization_moonshot.py`, revision
+# 476b36a4). llama.cpp's matching pre-type LLAMA_VOCAB_PRE_TYPE_KIMI_K2 (commit
+# 7ceed8737fdb4eb09b4760e77bd12d38012de5a8) does NOT carry a single-regex
+# transcription — it triggers on `\p{Han}+` and delegates the split to a custom
+# handler in unicode.cpp — so the model's own pat_str is the faithful source.
+# Kept byte-identical to build_reference_from_gguf.py (pinned by a test). Because
+# `[\p{Han}]+` is the first alternative, Han is consumed before the `&&[^\p{Han}]`
+# class intersections, which Oniguruma (the tokenizers Regex engine) supports.
+RE_MOONSHOT = (
+    r"[\p{Han}]+"
+    r"|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?"
+    r"|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?"
+    r"|\p{N}{1,3}"
+    r"| ?[^\s\p{L}\p{N}]+[\r\n]*"
+    r"|\s*[\r\n]+"
+    r"|\s+(?!\S)"
+    r"|\s+")
 
 # vocab key -> pre-tokenizer regex. Mirrors SPEC in build_reference_from_gguf.py.
 REGEX = {
@@ -54,7 +73,7 @@ REGEX = {
     "deepseek-llm": RE_DEEPSEEK_LLM, "deepseek-coder": RE_DEEPSEEK_CODER,
     "gpt-2": RE_GPT2, "command-r": RE_GPT2, "starcoder": RE_GPT2,
     "mpt": RE_GPT2, "gpt-neox": RE_GPT2, "refact": RE_GPT2,
-    "falcon": RE_FALCON, "glm-4": RE_GLM4,
+    "falcon": RE_FALCON, "glm-4": RE_GLM4, "moonshot": RE_MOONSHOT,
 }
 
 # Chat-template / accounting overhead a real endpoint adds on top of the raw

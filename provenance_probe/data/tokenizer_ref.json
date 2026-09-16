@@ -596,7 +596,11 @@
       "family": "Moonshot",
       "origin": "CN",
       "vocab_size": 163584,
-      "source": "moonshotai/Moonlight-16B-A3B",
+      "merges": 163328,
+      "gguf_model": "gpt2",
+      "gguf_pre": "kimi-k2",
+      "note": "",
+      "source": "eval/vocabs/moonshot.gguf (built from moonshotai/Moonlight-16B-A3B@476b36a473d4467f94469414bef6cee75c9c8172, tiktoken vocab reconstructed to byte-level BPE; pre-tokenizer RE_MOONSHOT)",
       "vector": {
         "cjk_dense": 60,
         "cjk_mixed": 33,
