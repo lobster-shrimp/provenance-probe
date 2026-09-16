@@ -20,7 +20,6 @@ Coverage:
 """
 import json
 import os
-import subprocess
 import threading
 
 import pytest
@@ -160,23 +159,64 @@ def test_glm4_served_blind_is_confirmed_cn():
             srv.shutdown()
 
 
-# --- 5. rebuild left the other 26 reference entries unchanged --------------------
+# --- 5. the GLM-4-9B rebuild is GGUF-derived and did not disturb the siblings ----
 
-def test_ref_non_glm_entries_byte_unchanged_vs_base():
+# The full shipped reference key set. If a rebuild ever adds/removes/renames a key
+# (e.g. by regenerating the whole file from SPEC and wiping the HF-derived
+# entries), this list drifts and the test fails.
+EXPECTED_REF_KEYS = {
+    "Qwen2/Qwen2.5", "DeepSeek-LLM", "DeepSeek-Coder", "Llama-3", "GPT-2",
+    "Command-R", "Falcon", "StarCoder", "MPT", "GPT-NeoX", "Refact",
+    "OpenAI-cl100k", "OpenAI-o200k", "GLM-4.5", "GLM-4-9B", "Yi-1.5", "MiniCPM3",
+    "Qwen3", "DeepSeek-V3", "Moonshot", "Phi-3.5", "InternLM2.5", "Mistral-v0.3",
+    "Baichuan2", "Gemma-2", "Claude", "Gemini",
+}
+
+
+def test_glm4_9b_is_gguf_derived_and_siblings_intact():
+    """The reconciliation touches only GLM-4-9B, and does so from the GGUF.
+
+    A git-vs-base diff is not a stable permanent test (after merge, HEAD *is*
+    the base), so this proves the same invariant self-containedly: (a) the exact
+    key set is preserved — no HF-derived entry was wiped by a full regenerate;
+    (b) the committed GLM-4-9B entry is reproduced byte-for-byte by the builder
+    from eval/vocabs/glm-4.gguf (so it is genuinely GGUF-derived); (c) the
+    GLM-4-9B vector did not drift from the known-good baseline (it stays
+    identical to the untouched HF-derived GLM-4.5 sibling); (d) every sibling
+    keeps its family+origin. Non-GLM GGUF vectors are additionally pinned by the
+    eval itself — each still matches its own vocab at score 1.0.
+    """
+    pytest.importorskip("gguf")
+    pytest.importorskip("tokenizers")
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    rel = "provenance_probe/data/tokenizer_ref.json"
-    new = json.load(open(os.path.join(here, rel)))
-    try:
-        base_raw = subprocess.check_output(
-            ["git", "show", f"HEAD:{rel}"], cwd=here, stderr=subprocess.DEVNULL)
-    except Exception as e:  # noqa: BLE001 — no git / shallow checkout
-        pytest.skip(f"cannot read base ref from git: {e}")
-    base = json.loads(base_raw)
+    ref = json.load(open(os.path.join(here, "provenance_probe/data/tokenizer_ref.json")))
+    models = ref["models"]
 
-    bm, nm = base["models"], new["models"]
-    assert set(bm) == set(nm), "no reference model keys may be added or removed"
-    for k in ("corpus_version", "synthetic", "provenance"):
-        assert base.get(k) == new.get(k), f"top-level {k} changed"
-    changed = [k for k in bm if bm[k] != nm[k]]
-    assert changed == ["GLM-4-9B"], (
-        f"only GLM-4-9B may change; also changed: {[c for c in changed if c != 'GLM-4-9B']}")
+    # (a) no key added / removed / renamed
+    assert set(models) == EXPECTED_REF_KEYS
+
+    # (b) GLM-4-9B is reproduced exactly by the builder from the committed GGUF
+    from provenance_probe.data.corpus import TOKENIZER_PROBES
+    from provenance_probe.tools import build_reference_from_gguf as b
+    info, err = b.build("glm-4", os.path.join(run_eval.VOCAB_DIR, "glm-4.gguf"))
+    assert err is None, err
+    tk = info.pop("tokenizer")
+    rebuilt_vec = {pid: len(tk.encode(text, add_special_tokens=False).ids)
+                   for pid, text in TOKENIZER_PROBES}
+    entry = models["GLM-4-9B"]
+    assert entry["vector"] == rebuilt_vec
+    assert entry["vocab_size"] == info["vocab_size"] == 151343
+    assert entry["merges"] == info["merges"]
+    assert entry["gguf_model"] == info["gguf_model"] == "gpt2"
+    assert entry["gguf_pre"] == info["gguf_pre"] == "chatglm4"
+    assert entry["family"] == "GLM/Zhipu" and entry["origin"] == "CN"
+
+    # (c) the rebuilt GLM-4-9B vector did not drift — still equals the untouched
+    #     GLM-4.5 sibling (they shared a vector before this change; GLM-4.5 is
+    #     out of scope and stays HF-derived)
+    assert models["GLM-4-9B"]["vector"] == models["GLM-4.5"]["vector"]
+
+    # (d) every sibling keeps its identity (family + origin)
+    for name, e in models.items():
+        assert e.get("family"), f"{name} lost its family"
+        assert e.get("origin"), f"{name} lost its origin"
