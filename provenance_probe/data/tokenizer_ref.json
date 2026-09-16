@@ -479,8 +479,11 @@
       "label": "Yi-1.5",
       "family": "Yi/01.AI",
       "origin": "CN",
-      "vocab_size": 63992,
+      "vocab_size": 64000,
+      "merges": 110029,
       "source": "01-ai/Yi-1.5-9B-Chat",
+      "gguf_model": "llama",
+      "gguf_pre": "yi",
       "vector": {
         "cjk_dense": 65,
         "cjk_mixed": 35,
@@ -502,14 +505,18 @@
         "md_table": 126,
         "mixed_script_cjk_code": 120,
         "newline_storm": 122
-      }
+      },
+      "note": ""
     },
     "MiniCPM3": {
       "label": "MiniCPM3",
       "family": "MiniCPM",
       "origin": "CN",
-      "vocab_size": 73440,
+      "vocab_size": 73448,
+      "merges": 104297,
       "source": "openbmb/MiniCPM3-4B",
+      "gguf_model": "llama",
+      "gguf_pre": "minicpm",
       "vector": {
         "cjk_dense": 67,
         "cjk_mixed": 34,
@@ -531,7 +538,8 @@
         "md_table": 132,
         "mixed_script_cjk_code": 120,
         "newline_storm": 122
-      }
+      },
+      "note": ""
     },
     "Qwen3": {
       "label": "Qwen3",
@@ -657,8 +665,11 @@
       "label": "InternLM2.5",
       "family": "InternLM",
       "origin": "CN",
-      "vocab_size": 92544,
+      "vocab_size": 92550,
+      "merges": 165112,
       "source": "internlm/internlm2_5-7b-chat",
+      "gguf_model": "llama",
+      "gguf_pre": "internlm",
       "vector": {
         "cjk_dense": 66,
         "cjk_mixed": 35,
@@ -680,7 +691,8 @@
         "md_table": 114,
         "mixed_script_cjk_code": 105,
         "newline_storm": 9
-      }
+      },
+      "note": ""
     },
     "Mistral-v0.3": {
       "label": "Mistral-v0.3",
@@ -715,8 +727,9 @@
       "label": "Baichuan2",
       "family": "Baichuan",
       "origin": "CN",
-      "vocab_size": 125696,
       "source": "baichuan-inc/Baichuan2-7B-Chat",
+      "gguf_model": "sentencepiece",
+      "gguf_pre": null,
       "vector": {
         "cjk_dense": 62,
         "cjk_mixed": 34,
@@ -728,17 +741,18 @@
         "punct_repeat": 164,
         "emoji_zwj": 192,
         "rare_unicode": 224,
-        "diacritics": 148,
+        "diacritics": 150,
         "arabic_hebrew": 102,
-        "cyrillic": 59,
+        "cyrillic": 60,
         "code_json": 173,
         "code_regex": 304,
         "url_paths": 221,
-        "base64ish": 256,
+        "base64ish": 192,
         "md_table": 126,
         "mixed_script_cjk_code": 123,
-        "newline_storm": 122
-      }
+        "newline_storm": 121
+      },
+      "note": "raw .model (Approach B)"
     },
     "Gemma-2": {
       "label": "Gemma-2",

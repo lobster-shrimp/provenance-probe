@@ -115,7 +115,7 @@ def run_vocab_cases():
                        "no tokenizer reference vectors shipped")]
     results = []
     for i, case in enumerate(VOCAB_CASES):
-        gguf = os.path.join(VOCAB_DIR, case["key"] + ".gguf")
+        gguf = mock.vocab_path(VOCAB_DIR, case["key"])
         if not os.path.exists(gguf):
             results.append(Result(case["key"], "vocab", case["expect_flagged"],
                                   False, None, False, f"missing vocab {gguf}"))
