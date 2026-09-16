@@ -12,13 +12,16 @@ Two case families:
 `is_flagged_cn()`, so the corpus and the runner agree on what a positive is.
 
 COVERAGE (honest accounting — see eval/README.md):
-  The shipped reference scores against 25 model families. Only the 12 with a
+  The shipped reference scores against 25 model families. Only the 13 with a
   GGUF vocab AND a transcribed pre-tokenizer regex can be exercised end-to-end
-  here (the 11 llama.cpp-bundled vocabs plus GLM-4, whose vocab-only GGUF is
-  built from THUDM/glm-4-9b-chat-hf — see eval/vocabs/glm-4.gguf). The other 13
-  (GLM-4.5, Yi, MiniCPM3, Qwen3, DeepSeek-V3, Moonshot, InternLM2.5, Baichuan2,
-  Phi-3.5, Mistral-v0.3, Gemma-2, OpenAI cl100k/o200k) are reference-only and
-  UNVALIDATED by this harness — most were built via the HF/tiktoken path, not
+  here (the 11 llama.cpp-bundled vocabs plus GLM-4 and Moonshot, whose vocab-only
+  GGUFs are built from THUDM/glm-4-9b-chat-hf and moonshotai/Moonlight-16B-A3B —
+  see eval/vocabs/glm-4.gguf, eval/vocabs/moonshot.gguf). The other 12 (GLM-4.5,
+  Yi, MiniCPM3, Qwen3, DeepSeek-V3, InternLM2.5, Baichuan2, Phi-3.5,
+  Mistral-v0.3, Gemma-2, OpenAI cl100k/o200k) are reference-only and UNVALIDATED
+  by this harness — Yi, MiniCPM3, InternLM2.5 and Baichuan2 are SentencePiece-
+  derived (▁-based vocab, no byte-level BPE merges the mock can read), deferred to
+  the SentencePiece enabler; the rest were built via the HF/tiktoken path, not
   GGUF. Do not read a green eval as coverage of those families.
 """
 from __future__ import annotations
@@ -34,6 +37,7 @@ VOCAB_CASES = [
     {"key": "deepseek-llm",   "family": "DeepSeek",     "origin": "CN", "expect_flagged": True},
     {"key": "deepseek-coder", "family": "DeepSeek",     "origin": "CN", "expect_flagged": True},
     {"key": "glm-4",          "family": "GLM/Zhipu",    "origin": "CN", "expect_flagged": True},
+    {"key": "moonshot",       "family": "Moonshot",     "origin": "CN", "expect_flagged": True},
     # --- non-CN negatives: must NOT be flagged (false-positive gate) -------
     {"key": "llama-bpe",      "family": "Llama-3",      "origin": "US", "expect_flagged": False},
     {"key": "gpt-2",          "family": "GPT-2/OpenAI", "origin": "US", "expect_flagged": False},

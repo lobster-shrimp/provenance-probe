@@ -90,21 +90,28 @@ score from a non-CN source never reads as a Chinese flag.
 
 ## Coverage — honest accounting
 
-The shipped reference scores against **25** model families. Only the **12** with
+The shipped reference scores against **25** model families. Only the **13** with
 a GGUF vocab AND a transcribed pre-tokenizer regex are exercised end-to-end here:
 
-- **CN (4):** Qwen2, DeepSeek-LLM, DeepSeek-Coder, GLM-4
+- **CN (5):** Qwen2, DeepSeek-LLM, DeepSeek-Coder, GLM-4, Moonshot
 - **non-CN (8):** Llama-3, GPT-2, Command-R, Falcon, StarCoder, MPT, GPT-NeoX, Refact
 
-Eleven vocabs are llama.cpp's bundled `models/ggml-vocab-*.gguf`; **GLM-4** is a
+Eleven vocabs are llama.cpp's bundled `models/ggml-vocab-*.gguf`. **GLM-4** is a
 vocab-only GGUF built from `THUDM/glm-4-9b-chat-hf` (see `eval/vocabs/glm-4.gguf`)
-because llama.cpp ships no bundled GLM vocab. Its pre-tokenizer regex `RE_GLM4`
-is transcribed from llama.cpp `LLAMA_VOCAB_PRE_TYPE_CHATGLM4`, and a test pins
-the GGUF+regex path to the genuine GLM-4 tokenizer (HF AutoTokenizer) counts.
+because llama.cpp ships no bundled GLM vocab; its pre-tokenizer regex `RE_GLM4`
+is transcribed from llama.cpp `LLAMA_VOCAB_PRE_TYPE_CHATGLM4`. **Moonshot** is a
+vocab-only GGUF (`eval/vocabs/moonshot.gguf`) reconstructed to byte-level BPE from
+the tiktoken vocabulary of `moonshotai/Moonlight-16B-A3B`; its regex `RE_MOONSHOT`
+is the model's own tiktoken `pat_str` (llama.cpp's matching `KIMI_K2` pre-type
+delegates the split to a custom `unicode.cpp` handler, so there is no single
+regex to lift from `llama-vocab.cpp`). For each, a test pins the GGUF+regex path
+to the genuine tokenizer's counts (HF `AutoTokenizer` / tiktoken oracle).
 
-**Unvalidated by this harness (13):** GLM-4.5, Yi, MiniCPM3, Qwen3, DeepSeek-V3,
-Moonshot, InternLM2.5, Baichuan2, Phi-3.5, Mistral-v0.3, Gemma-2, OpenAI
-cl100k/o200k. Most were built via the HF/tiktoken path, not GGUF, so no blind
+**Unvalidated by this harness (12):** GLM-4.5, Yi, MiniCPM3, Qwen3, DeepSeek-V3,
+InternLM2.5, Baichuan2, Phi-3.5, Mistral-v0.3, Gemma-2, OpenAI cl100k/o200k. Yi,
+MiniCPM3, InternLM2.5 and Baichuan2 are SentencePiece-derived (▁-based vocab, no
+byte-level BPE merges the mock can read) and are deferred to the SentencePiece
+enabler; the rest were built via the HF/tiktoken path, not GGUF, so no blind
 vocab mock exists. A green eval is **not** coverage of these families.
 
 ## Adding a case
