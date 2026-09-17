@@ -1,8 +1,8 @@
 # Install the provenance-probe capture extension
 
-Chrome hasn't published this to the Web Store yet, so you install the **developer-mode
-build**: download one zip and load it. Takes about a minute. (Store publication is the
-owner's manual step — once it's live this page will point there instead.)
+The easiest install is one click from the **[Chrome Web Store](https://chromewebstore.google.com/detail/bapnflcbpphjcooabomhlodifapiopen)** (auto-updates).
+This page is the alternative: a **developer-mode build** for inspecting the source or running
+an unreleased change — download one zip and load it. Takes about a minute.
 
 ## 1. Download the build
 
