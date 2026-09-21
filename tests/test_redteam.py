@@ -72,6 +72,64 @@ def test_self_id_backfills_when_first_response_has_no_selfid():
     assert any(f["signal"] == "self_id" for f in out["self_id_flags"])
 
 
+# --- WS1 (#113): fingerprint-based HARD switch. A router can hold a CONSTANT fake
+# model_id while swapping the backend (the z.ai shape); the backend fingerprint
+# (monitor.fingerprint over the response envelope) still moves.
+
+class _FpResp(_Resp):
+    """Response that also carries the fields monitor.fingerprint consumes: a
+    usable usage.prompt_tokens count (the tokenizer-usability gate) plus header
+    keys + body schema (the prompt-invariant envelope shape)."""
+    def __init__(self, model, content, status=200, ptoks=11, headers=None, body=None):
+        super().__init__(model, content, status)
+        self._ptoks = ptoks
+        self.headers = headers if headers is not None else {"content-type": "application/json"}
+        self.body = body if body is not None else {"choices": [{"message": {}}], "usage": {}}
+    def usage_prompt_tokens(self):
+        return self._ptoks
+
+
+class _FpClient:
+    def __init__(self, script):
+        self.script = list(script); self.i = -1
+    def chat(self, prompt, **kw):
+        self.i += 1
+        return self.script[min(self.i, len(self.script) - 1)]
+
+
+def test_fingerprint_switch_fires_on_constant_model_id():
+    # model_id is the CONSTANT fake "gemini" throughout; the backend envelope
+    # changes on scenario 3 (different provider response shape) -> HARD switch.
+    stable = _FpResp("gemini", "I am Gemini.", headers={"content-type": "application/json"},
+                     body={"choices": [{"message": {}}], "usage": {}})
+    swapped = _FpResp("gemini", "I am Gemini.",
+                      headers={"content-type": "application/json", "x-glm-backend": "1"},
+                      body={"choices": [{"message": {}}], "usage": {}, "system_fingerprint": "glm"})
+    script = [stable, stable, swapped, swapped] + [swapped] * 4
+    out = redteam.run(_FpClient(script), cap=8)
+    assert out["fingerprint_switch"] is True
+    assert out["fingerprint_switches"]                       # scenario id(s) listed
+    assert out["switch_detected"] is True                    # folded into the hard signal
+    # the echoed model id never changed -> model_id switches empty
+    assert out["switches"] == []
+
+
+def test_fingerprint_stable_backend_no_switch():
+    stable = _FpResp("gemini", "I am Gemini.")
+    out = redteam.run(_FpClient([stable] * 8), cap=8)
+    assert out["fingerprint_switch"] is False
+    assert out["switch_detected"] is False
+
+
+def test_fingerprint_skips_unusable_tokenizer():
+    # usage suppressed (ptoks None) -> tokenizer unusable -> scenario skipped for
+    # fingerprint comparison (advisory, never a switch).
+    a = _FpResp("m", "x", ptoks=None)
+    b = _FpResp("m", "x", ptoks=None, headers={"content-type": "text/plain"})
+    out = redteam.run(_FpClient([a, b] * 4), cap=8)
+    assert out["fingerprint_switch"] is False
+
+
 def test_one_scenario_error_does_not_abort():
     class _Boom(_Client):
         def chat(self, prompt, **kw):

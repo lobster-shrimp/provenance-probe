@@ -53,7 +53,12 @@ def test_scoring_reads_the_deception_bundle():
     out = scoring.score({"deception": r["deception"]})
     sigs = {s["signal"] for s in out["signals"]}
     assert "false_jurisdiction_assurance" in sigs
-    assert out["jurisdictional_risk"]["verdict"] in ("LIKELY", "CONFIRMED")
+    # WS1 (#113): false_jurisdiction_assurance is a SOFT, model-mouth signal — a
+    # false compliance assurance is inculpatory context but cannot by itself
+    # CONFIRM/LIKELY the operator's jurisdiction without a hard network/wire/client
+    # signal. The hard-evidence ceiling caps it at INDETERMINATE (criterion 2).
+    assert out["jurisdictional_risk"]["verdict"] == "INDETERMINATE"
+    assert "self-report" in out["jurisdictional_risk"]["note"]
 
 
 def test_clean_transcript_has_no_switch():

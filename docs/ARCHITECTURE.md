@@ -151,6 +151,55 @@ reverse-proxy flight recorder that tees an agent's calls and fingerprints them
 live (trace-only provenance honestly floors at INDETERMINATE — only an active
 backend probe reaches CONFIRMED).
 
+### 4.1 Hard-evidence floor + ceiling (why a confession can't confirm)
+
+The z.ai field case is the design requirement: an app served a Google-Gemini
+persona over a GLM (Zhipu) backend and only admitted the switch after repeated
+confrontation. **A model's self-report is not evidence of what its weights are —
+it can be instructed to claim any identity, in either direction.** So `score()`
+partitions provenance/jurisdiction signals into *hard* (measured / artifact —
+tokenizer fingerprint, config/cache/gguf artifacts, client-source endpoints) and
+*soft* (the model's own words: behavioral self-ID, informative concession, held
+persona, persona-management in the trace, false compliance assurance; plus
+lower-durability claims). Two guards then bound each axis and both converge on
+INDETERMINATE:
+
+- **Floor (raises):** a *clean* verdict (UNLIKELY / NO EVIDENCE) is only earned if
+  a provenance-detecting layer actually returned data. If the tokenizer fingerprint,
+  artifacts, and client-source all produced nothing, the verdict floors *up* to
+  INDETERMINATE — "we did not look", not "probably not Chinese".
+- **Ceiling (lowers):** CONFIRMED / LIKELY on an axis require ≥1 hard signal. If
+  only soft/self-report signals fired, the verdict is capped *down* to INDETERMINATE
+  with a deterministic note naming the soft signals. Deception is therefore
+  **inculpatory, never exculpatory**: a soft signal only ever ADDS log-odds and a
+  false persona can never downgrade a hard-signal-driven verdict.
+
+`persona_mismatch` is artifact-derived (the app misrepresents its model) but is a
+deception *corroborator*, not a CN-provenance anchor — a Western persona can sit
+over a US model too — so it is deliberately excluded from the hard provenance set.
+
+### 4.2 Capture robustness — what static replay catches, and what it can't
+
+The automated capture + monitor path fingerprints a **recorded** request/response
+and re-scores it. Be honest about the boundary: **signed or stateful apps defeat
+static replay.** A per-request-signed API (an HMAC/nonce/timestamp over the body,
+a rotating CSRF or anti-replay token, a bound session — the z.ai shape) will reject
+a replayed capture, so the capture path cannot re-drive it. Robustness here means
+**detection quality *given* a capture**, not the ability to capture everything:
+
+- **Caught given a capture:** a tokenizer-family change (overhead-invariant shape),
+  a wire/error-schema change, a header/vendor change, and any hard artifact present
+  in the captured client source. The redteam driver adds a fingerprint-based HARD
+  switch (`fingerprint_switch`) so a router that swaps the backend while echoing a
+  **constant** `model_id` still trips on the backend-envelope change.
+- **Missed / out of scope:** anything that requires *live, signed, multi-turn*
+  interaction the replay cannot reproduce; a swap hidden entirely behind an
+  identical response envelope with no tokenizer signal (usage suppressed) — the
+  degraded path, which `monitor.diff` already reports as *not a clean bill*; and
+  provenance from a chat claim alone, which the §4.1 ceiling caps at INDETERMINATE
+  by design. No over-claim: a green capture is evidence about the captured exchange,
+  not a guarantee about every future live request.
+
 ---
 
 ## 5. The add-a-target wizard (one door)

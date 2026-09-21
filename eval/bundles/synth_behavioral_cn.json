@@ -1,5 +1,5 @@
 {
-  "_label": "SYNTHETIC. Behavioral-only CN evidence (no tokenizer). alignment asymmetry + self-ID + CJK leakage. Verifies behavioral signals reach an adverse tier without a tokenizer match, and that the INDETERMINATE floor does NOT wrongly apply above the clean band. Expect provenance CONFIRMED/LIKELY, flagged CN.",
+  "_label": "SYNTHETIC. Behavioral-only signals (no hard measurement): alignment asymmetry + self-ID + CJK leakage, with NO tokenizer match / artifact / wire signal. Per WS1 (#113) these are SOFT for anchoring — behavioral deflection and a chat self-ID can be prompt-induced and are not evidence of weight origin — so the hard-evidence ceiling caps provenance at INDETERMINATE (matching the reviewer invariant 'provenance floors at INDETERMINATE for trace-only'). Expect provenance INDETERMINATE, NOT flagged; note present.",
   "target": {"name": "synthetic-behavioral-cn", "model": "blind-2"},
   "network": {"addresses": [], "jurisdiction": "", "findings": []},
   "headers": {"status": 200, "vendor_headers": []},

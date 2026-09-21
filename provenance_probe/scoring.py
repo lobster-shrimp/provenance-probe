@@ -33,6 +33,26 @@ WEIGHTS = {
 }
 
 
+# Hard-evidence sets (WS1, #113). A signal is HARD only if it is MEASURED (wire /
+# network / tokenizer fingerprint) or an ARTIFACT (config/cache/gguf/client source)
+# — evidence that is hard to fake and does NOT depend on the model's own words.
+# Everything else contributing to an axis is SOFT for anchoring: it may ADD log-odds
+# but cannot by itself carry a verdict above INDETERMINATE. A model's self-report is
+# not evidence of what its weights are; it can be instructed to claim any identity.
+#
+# NOTE: `persona_mismatch` is artifact-derived (the app misrepresents its model) but
+# is a deception CORROBORATOR, NOT a CN-provenance anchor — a Western persona can sit
+# over a US model too — so it is deliberately EXCLUDED from HARD_PROVENANCE.
+HARD_PROVENANCE = frozenset({
+    "tokenizer_match_cn", "cn_architecture", "cn_vocab_size", "gguf_cn_metadata",
+    "hf_cache_path", "client_prc_model_id", "client_prc_endpoint",
+})
+HARD_JURISDICTION = frozenset({
+    "prc_endpoint", "prc_ip_geo", "client_prc_endpoint", "cn_tld",
+    "prc_asn_hint", "prc_vendor_header",
+})
+
+
 def _sigmoid(x: float) -> float:
     return 1 / (1 + math.exp(-x))
 
@@ -52,6 +72,7 @@ def score(bundle: dict) -> dict:
                if WEIGHTS.get(s["signal"], (0, ""))[1] == "provenance")
     jl, pl = _sigmoid(jur - 1.5), _sigmoid(prov - 1.5)
     coverage = _coverage(bundle)
+    fired = {s["signal"] for s in signals}
 
     # A "clean" provenance verdict (UNLIKELY / NO EVIDENCE) is only earned if a
     # layer that can actually DETECT provenance returned data. If the tokenizer
@@ -61,26 +82,71 @@ def score(bundle: dict) -> dict:
     prov_detector = (bool(bundle.get("tokenizer_match"))
                      or bool((bundle.get("artifacts") or {}).get("findings"))
                      or bool((bundle.get("client_source") or {}).get("files_scanned")))
-    prov_verdict = _verdict(pl)
     prov = {"likelihood": round(pl, 3), "logodds": round(prov, 2),
-            "verdict": prov_verdict,
+            "verdict": _verdict(pl),
             "meaning": "Model weights are Chinese-origin regardless of where served "
                        "(bias/integrity/procurement-policy exposure)."}
-    if not prov_detector and prov_verdict in ("UNLIKELY", "NO EVIDENCE"):
+    if not prov_detector and prov["verdict"] in ("UNLIKELY", "NO EVIDENCE"):
         prov["verdict"] = "INDETERMINATE"
         prov["note"] = ("Primary provenance layer (tokenizer fingerprint) returned no data — "
                         "usage suppressed, requests failed, or model unfingerprinted. This is "
                         "NOT a clean bill; provenance was not actually measured.")
+    jurr = {"likelihood": round(jl, 3), "logodds": round(jur, 2),
+            "verdict": _verdict(jl),
+            "meaning": "Inference executed by a PRC-domiciled operator or on PRC soil "
+                       "(PIPL/DSL/CSL/NIL Art.7 exposure)."}
+
+    # Hard-evidence CEILING (#113). Apply AFTER the clean-verdict floor: the floor
+    # RAISES a clean verdict up to INDETERMINATE when no detector ran; this ceiling
+    # LOWERS a soft-inflated CONFIRMED/LIKELY down to INDETERMINATE when no hard
+    # signal fired. Both converge on INDETERMINATE; neither moves a verdict toward a
+    # positive call. Deception thus stays inculpatory-only: soft signals ADD weight
+    # but can never anchor a verdict, and never downgrade a hard-driven one.
+    _apply_hard_ceiling(prov, signals, fired, HARD_PROVENANCE, "provenance")
+    _apply_hard_ceiling(jurr, signals, fired, HARD_JURISDICTION, "jurisdiction")
+
     return {
         "signals": signals,
-        "jurisdictional_risk": {"likelihood": round(jl, 3), "logodds": round(jur, 2),
-                                "verdict": _verdict(jl),
-                                "meaning": "Inference executed by a PRC-domiciled operator or on PRC soil "
-                                           "(PIPL/DSL/CSL/NIL Art.7 exposure)."},
+        "jurisdictional_risk": jurr,
         "provenance_risk": prov,
         "evidence_coverage": coverage,
         "confidence": _conf(coverage, signals),
     }
+
+
+# worst-first ordering for combining per-step agent verdicts (also used by the
+# hard-evidence ceiling below).
+_TIER_ORDER = ["NO EVIDENCE", "UNLIKELY", "INDETERMINATE", "LIKELY", "CONFIRMED"]
+
+
+def _apply_hard_ceiling(risk: dict, signals: list, fired: set,
+                        hard_set: frozenset, axis: str) -> None:
+    """Cap an axis verdict at INDETERMINATE unless a HARD signal for THIS axis fired.
+
+    CONFIRMED/LIKELY require at least one measured/artifact signal that actually
+    contributes to THIS axis's log-odds. The anchor test is axis-scoped: a hard
+    signal only anchors an axis if `WEIGHTS[sig][1] == axis`. This matters because
+    `client_prc_endpoint` is listed in BOTH hard sets (a client-source PRC endpoint
+    is hard evidence on both axes) yet carries a jurisdiction-only weight — without
+    axis-scoping its mere presence would unlock a soft-inflated provenance verdict
+    even though it adds ZERO provenance log-odds (a cross-axis self-report leak).
+    Pure self-report (or any soft-only combination) yields at most INDETERMINATE.
+    Mutates `risk` in place, setting a deterministic `note` naming the soft signals."""
+    axis_hard = {s for s in hard_set if WEIGHTS.get(s, (0, ""))[1] == axis}
+    if fired & axis_hard:
+        return                                       # a hard signal anchors THIS axis
+    if _TIER_ORDER.index(risk["verdict"]) <= _TIER_ORDER.index("INDETERMINATE"):
+        return                                       # already at/below the cap (floor/clean)
+    soft = sorted({s["signal"] for s in signals
+                   if WEIGHTS.get(s["signal"], (0, ""))[1] == axis
+                   and WEIGHTS.get(s["signal"], (0, ""))[0] > 0
+                   and s["signal"] not in axis_hard})
+    risk["verdict"] = "INDETERMINATE"
+    risk["note"] = (
+        f"Capped at INDETERMINATE: no hard (measured or artifact) {axis} signal fired — "
+        f"only self-report / soft signal(s) present ({', '.join(soft)}). A model's "
+        f"self-report is not evidence of its weights' origin or the operator's "
+        f"jurisdiction; {axis} was not measurement-confirmed.")
 
 
 def _verdict(p: float) -> str:
@@ -89,10 +155,6 @@ def _verdict(p: float) -> str:
     if p >= 0.35: return "INDETERMINATE"
     if p >= 0.15: return "UNLIKELY"
     return "NO EVIDENCE"
-
-
-# worst-first ordering for combining per-step agent verdicts
-_TIER_ORDER = ["NO EVIDENCE", "UNLIKELY", "INDETERMINATE", "LIKELY", "CONFIRMED"]
 
 
 def _worst(tiers: list[str]) -> str:

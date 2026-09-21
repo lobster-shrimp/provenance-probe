@@ -7,7 +7,7 @@
 Vendors can silently swap models, reroute your requests, or resell a Chinese model under a Western name. `provenance-probe` catches it with black-box measurements — **no vendor cooperation, no API key for the demo, runs 100% on your machine.**
 
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
-![version](https://img.shields.io/badge/version-0.32.0-informational)
+![version](https://img.shields.io/badge/version-0.33.0-informational)
 ![tests](https://img.shields.io/badge/tests-729%20passing-brightgreen)
 ![tokenizer families](https://img.shields.io/badge/reference%20families-27-blueviolet)
 ![local](https://img.shields.io/badge/runs-100%25%20local-success)
