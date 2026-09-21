@@ -178,6 +178,11 @@ ol.steps>li::before{content:counter(step);position:absolute;left:0;top:0;width:3
  display:flex;align-items:center;justify-content:center}
 ol.steps>li b{display:block;margin-bottom:2px}
 ol.steps>li .sub{margin:3px 0 0;font-size:13px}
+/* the how-it-works flow reuses ol.steps; its per-check / per-question detail is a
+   plain nested list (visible text, never color/icon alone) */
+ol.flow>li ul.flow-detail{list-style:disc;margin:8px 0 0;padding-left:18px;font-size:13px}
+ol.flow>li ul.flow-detail li{margin:.3rem 0;display:list-item}
+ol.flow>li ul.flow-detail li b{display:inline}
 /* embeddable demo-GIF slot with graceful caption fallback when the file is absent */
 figure.demo{margin:0 0 20px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface)}
 figure.demo img{display:block;width:100%;height:auto}

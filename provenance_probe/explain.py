@@ -261,6 +261,128 @@ FAQ: "tuple[tuple[str, str], ...]" = (
 )
 
 
+class Stage(NamedTuple):
+    """One step of the 'how it works' flow, in plain language.
+
+    ``detail`` is a pointer, never a copy: "layers" enumerates :data:`LAYERS` and
+    "axes" enumerates :data:`VERDICTS` — so :func:`flow_html` and :func:`flow_text`
+    both read the per-check / per-question wording from the SAME single source.
+    """
+    title: str
+    body: str
+    detail: str = ""          # "" | "layers" | "axes"
+
+
+# The pipeline as four plain-English steps — the SINGLE source for both the visual
+# :func:`flow_html` (landing + /help) and the plain-text :func:`flow_text`
+# (``explain --flow``). Step 2 enumerates the LAYERS; step 3 the two VERDICT axes;
+# neither copies their wording (it is pulled from LAYERS / VERDICTS at render time).
+FLOW_STAGES: "tuple[Stage, ...]" = (
+    Stage("You point it at an AI app",
+          "Give it an AI endpoint's address — plus a model id, key or login if the "
+          "app needs one — and confirm you're authorized to test it."),
+    Stage("It measures hard-to-fake signals",
+          "A full run tries up to eight independent checks. Each reads something "
+          "the operator can't easily rewrite:", "layers"),
+    Stage("It answers two independent questions",
+          "The evidence rolls up into two separate reads — a model can score high "
+          "on one and low on the other:", "axes"),
+    Stage("You get a verdict, a confidence, and what it means",
+          "Each question gets one of five plain verdicts and a confidence level, "
+          "led by a single plain-English sentence telling you what it means for you."),
+)
+
+
+# ------------------------------------------------------- plain-English answer ---
+# Confidence buckets -> one adverb each (the string _conf() returns; we take the
+# first token, so the long low-bucket note normalises to "low"). The low phrasing
+# is a sentence-leading qualifier, applied inline per positive clause.
+_CONF_ADVERB = {"high": "clearly", "moderate": "likely",
+                "low": "a preliminary read suggests"}
+
+_CLEAN_TIERS = frozenset({"UNLIKELY", "NO EVIDENCE"})
+
+# Both-clean collapses to one reassuring sentence (no per-axis clauses).
+_BOTH_CLEAN = ("This app looks like it's serving the kind of model it claims, "
+               "run where it claims.")
+
+
+def _conf_bucket(confidence: str) -> str:
+    """Normalise whatever ``_conf()`` returned to one of high/moderate/low."""
+    tok = (confidence or "").strip().split()
+    head = tok[0].lower() if tok else "low"
+    return head if head in _CONF_ADVERB else "low"
+
+
+def _severity_rank(verdict: str) -> int:
+    """0 = most severe. Severity order is _TIER_ORDER reversed (single source)."""
+    from .scoring import _TIER_ORDER
+    order = list(reversed(_TIER_ORDER))       # CONFIRMED > … > NO EVIDENCE
+    try:
+        return order.index(verdict)
+    except ValueError:
+        return len(order)                      # unknown -> least severe
+
+
+def _indeterminate_clause(noun: str) -> str:
+    return (f"not enough hard evidence yet to call {noun} — "
+            "not a clean bill, not an accusation")
+
+
+def _provenance_clause(verdict: str, bucket: str) -> str:
+    if verdict in ("CONFIRMED", "LIKELY"):
+        if bucket == "low":
+            return "a preliminary read suggests this app is serving a Chinese-origin model"
+        return f"this app is {_CONF_ADVERB[bucket]} serving a Chinese-origin model"
+    if verdict == "INDETERMINATE":
+        return _indeterminate_clause("its model")
+    return "no sign of a Chinese-origin model"
+
+
+def _jurisdiction_clause(verdict: str, bucket: str) -> str:
+    tail = "produced under PRC jurisdiction (Chinese data law can apply)"
+    if verdict in ("CONFIRMED", "LIKELY"):
+        if bucket == "low":
+            return f"a preliminary read suggests this app's answers are {tail}"
+        return f"this app's answers are {_CONF_ADVERB[bucket]} {tail}"
+    if verdict == "INDETERMINATE":
+        return _indeterminate_clause("where it runs")
+    return "no sign of PRC-jurisdiction operation"
+
+
+def plain_answer(provenance_verdict: str, jurisdiction_verdict: str,
+                 confidence: str) -> str:
+    """One deterministic, plain-English sentence for a (provenance, jurisdiction,
+    confidence) tuple — the lead line on every assess result surface.
+
+    A PURE function of its inputs so the serve UI and the CLI cannot drift (mirrors
+    the serve.py monitor invariant). ``confidence`` is whatever ``scoring._conf()``
+    returned ("high"/"moderate"/"low…"); it is normalised to one adverb bucket.
+
+    Honest by construction: the tuple supports only origin + jurisdiction claims,
+    never misrepresentation — so positive provenance reads "serving a Chinese-origin
+    model", never "not what it claims" (that needs a persona-mismatch signal the
+    tuple doesn't carry). An INDETERMINATE axis always says it is neither a clean
+    bill nor an accusation.
+    """
+    bucket = _conf_bucket(confidence)
+
+    # Both axes clean -> a single reassuring sentence.
+    if provenance_verdict in _CLEAN_TIERS and jurisdiction_verdict in _CLEAN_TIERS:
+        return _BOTH_CLEAN
+
+    prov = ("provenance", _provenance_clause(provenance_verdict, bucket),
+            _severity_rank(provenance_verdict))
+    jur = ("jurisdiction", _jurisdiction_clause(jurisdiction_verdict, bucket),
+           _severity_rank(jurisdiction_verdict))
+
+    # Lead with the more-severe axis; tie-break = provenance first (its rank is
+    # listed first, and Python's sort is stable, so an equal rank keeps prov ahead).
+    ordered = sorted((prov, jur), key=lambda c: c[2])
+    sentence = "; ".join(clause for _, clause, _ in ordered)
+    return sentence[:1].upper() + sentence[1:] + "."
+
+
 # --------------------------------------------------------------- /help render ---
 def _layers_table() -> str:
     e = html.escape
@@ -297,6 +419,55 @@ def _verdict_block(axis: Axis) -> str:
             f'{rows}</table></div>')
 
 
+def _flow_detail_pairs(detail: str) -> "tuple[tuple[str, str], ...]":
+    """Resolve a stage's ``detail`` pointer to (label, blurb) pairs — pulled LIVE
+    from LAYERS / VERDICTS so the flow never carries its own copy of that wording."""
+    if detail == "layers":
+        return tuple((info.title, info.measures) for info in LAYERS.values())
+    if detail == "axes":
+        return tuple((axis.title, axis.question) for axis in VERDICTS.values())
+    return ()
+
+
+def flow_html() -> str:
+    """The 'how it works' flow as accessible static HTML — no ``<script>`` (works
+    with JS disabled), never color/icon-only (every stage carries a visible text
+    label), a semantic ordered list with an aria-label on the container and on each
+    stage. Rendered from FLOW_STAGES + LAYERS / VERDICTS (the single source).
+    """
+    e = html.escape
+    items = []
+    for i, stage in enumerate(FLOW_STAGES, start=1):
+        # The step NUMBER is drawn by the shared ol.steps CSS counter (a visible,
+        # non-color label); the aria-label restates it for assistive tech.
+        label = f"Step {i}: {stage.title}"
+        detail = ""
+        pairs = _flow_detail_pairs(stage.detail)
+        if pairs:
+            detail = ('<ul class="flow-detail">' + "".join(
+                f'<li><b>{e(lbl)}</b> — {e(blurb)}</li>' for lbl, blurb in pairs)
+                + "</ul>")
+        items.append(
+            f'<li class="flow-step" aria-label="{e(label)}">'
+            f'<b class="flow-title">{e(stage.title)}</b>'
+            f'<p class="sub">{e(stage.body)}</p>{detail}</li>')
+    return ('<ol class="flow steps" aria-label="How provenance-probe works, step by step">'
+            + "".join(items) + "</ol>")
+
+
+def flow_text() -> str:
+    """Plain-text twin of :func:`flow_html`, from the SAME FLOW_STAGES + LAYERS /
+    VERDICTS source — printed by ``provenance-probe explain --flow``."""
+    lines = ["How provenance-probe works", "=" * 26, ""]
+    for i, stage in enumerate(FLOW_STAGES, start=1):
+        lines.append(f"{i}. {stage.title}")
+        lines.append(f"   {stage.body}")
+        for lbl, blurb in _flow_detail_pairs(stage.detail):
+            lines.append(f"     - {lbl}: {blurb}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def help_html() -> str:
     """The full ``/help`` page body, rendered from LAYERS / VERDICTS / FLOWS / FAQ.
 
@@ -318,7 +489,12 @@ def help_html() -> str:
         'endpoint and tells you two things in plain language: whose model is really '
         'answering, and who is running it. Here is what every part does — no jargon.</p>'
 
-        # The plain-language mission first: the silent-swap threat and how to watch
+        # The visual pipeline first: four plain-English steps (single source:
+        # FLOW_STAGES + LAYERS / VERDICTS), so a newcomer sees the shape before the prose.
+        '<h2 style="margin-top:26px">How it works, step by step</h2>'
+        + flow_html()
+
+        # The plain-language mission next: the silent-swap threat and how to watch
         # for it. Both sections are sourced from the single-source constants above.
         + _prose_section("Why this matters", WHY_THIS_MATTERS, top=26)
         + _prose_section("Watching for model swaps", WATCHING_PRIMER) +
