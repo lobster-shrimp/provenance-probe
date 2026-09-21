@@ -4,6 +4,36 @@
 > versions **independently** (released via `ext-v*` tags) — its history lives in
 > [`extension/CHANGELOG.md`](extension/CHANGELOG.md).
 
+## [0.34.1] — Plain-language layer labels in the how-it-works flow (2026-09-21)
+
+**WS2 follow-up (legibility LOW finding).** The how-it-works flow's step 2 listed
+the probe's evidence layers by their TECHNICAL names — a newcomer on the landing
+page and in `provenance-probe explain --flow` saw bold headings like "Tokenizer
+fingerprint" and "Wire fingerprint". WS2's whole point is non-technical legibility,
+so the flow now shows plain, jargon-free layer labels instead. `/help` is a
+technical reference page and is UNCHANGED — it still shows the technical `LAYERS`
+titles + tooltips. **No scoring/detection change; `plain_answer` and the verdict
+logic are untouched; eval-gated.**
+
+### Changed (content / rendering only)
+- **`explain.Layer` gains `flow_label` (+ optional `flow_blurb`)** — a plain,
+  jargon-free heading (and optional blurb) per layer, kept in `explain.py` so the
+  flow stays single-source. `flow_html()` / `flow_text()` step 2 now render
+  `flow_label`/`flow_blurb`; `_layers_table()` (/help) still renders the technical
+  `title`/`measures`. Plain labels chosen: network → "Where the servers really are
+  (and who runs them)"; wire → "The delivery envelope around each reply (like a
+  letterhead)"; tokenizer → "How it breaks text into pieces (like handwriting)";
+  logprob → "Whether it answers the same way twice"; behavioral → "How it answers
+  telltale questions"; deception → "Whether its own story matches the evidence";
+  latency → "How fast and steady the replies come back"; artifacts → "Clues left
+  in its files and app code".
+
+### Tests
+- The flow asserts the plain labels appear and that banned technical jargon
+  (`tokenizer`, `fingerprint`, `wire`, …) never appears in `flow_text()` /
+  `flow_html()`; `/help`'s `_layers_table()` still asserts the technical titles;
+  the single-source guard now also forbids the plain flow labels in serve/cli.
+
 ## [0.34.0] — Plain-English result + a visual how-it-works flow (2026-09-21)
 
 **WS2 of `docs/next-iteration-plan.md` — the shared-core legibility item.** The
