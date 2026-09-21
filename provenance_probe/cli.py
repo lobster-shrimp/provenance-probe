@@ -369,6 +369,9 @@ def cmd_redteam(a):
             print("\n  SWITCH UNDER STRESS:")
             for s in result["switches"]:
                 print(f"    [{s['scenario']}] {s['signal']}: {s['from']} -> {s['to']}")
+            for s in result.get("fingerprint_switches", []):
+                print(f"    [{s['scenario']}] backend fingerprint: {s['from']} -> {s['to']} "
+                      f"(echoed model id held constant)")
             rc = 2
         print(f"\n  {result['note']} ({result['scenarios_run']} scenarios)")
         if a.out:

@@ -64,8 +64,19 @@ BUNDLE_CASES = [
      "expect_provenance": {"NO EVIDENCE", "UNLIKELY"}},
     {"file": "synth_cn_tokenizer.json",          "expect_flagged": True,
      "expect_provenance": {"CONFIRMED", "LIKELY"}},
-    {"file": "synth_behavioral_cn.json",         "expect_flagged": True,
-     "expect_provenance": {"CONFIRMED", "LIKELY"}},
+    # z.ai positive (#113): hard multi-signal CN evidence + a DENYING self-ID ->
+    # CONFIRMED-CN driven by measurement; the denial is context, not a downgrade.
+    {"file": "synth_zai_denies_switch.json",     "expect_flagged": True,
+     "expect_provenance": {"CONFIRMED"}},
+    # WS1 (#113): behavioral / self-report signals are SOFT for anchoring. Without
+    # a hard measured/artifact signal the ceiling caps provenance at INDETERMINATE.
+    {"file": "synth_behavioral_cn.json",         "expect_flagged": False,
+     "expect_provenance": {"INDETERMINATE"}},
+    # z.ai negative (#113): a non-CN model FALSELY self-IDs as CN (soft only) — the
+    # ceiling MUST cap at INDETERMINATE (zero-FP protection; a chat claim cannot
+    # confirm weight origin).
+    {"file": "synth_false_cn_selfid.json",       "expect_flagged": False,
+     "expect_provenance": {"INDETERMINATE"}},
     {"file": "synth_noncn_tokenizer.json",       "expect_flagged": False,
      "expect_provenance": {"NO EVIDENCE", "UNLIKELY"}},
     {"file": "suppressed_usage_indeterminate.json", "expect_flagged": False,

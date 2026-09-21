@@ -1,0 +1,23 @@
+{
+  "_label": "SYNTHETIC z.ai shape (#113, no real operator named): a CN GLM backend served under a DENYING self-ID (persona claims a non-CN western model). Hard measured/artifact evidence — a GLM tokenizer match PLUS cn_architecture + cn_vocab_size — drives provenance CONFIRMED-CN. The model's denial (held_false_persona) is DECEPTION CONTEXT that only ADDS to the score, never downgrades it: measurement confirms weight origin even when the model denies it. Expect provenance CONFIRMED, flagged CN.",
+  "target": {"name": "synthetic-zai-denies-switch", "model": "gemini-1.5-pro"},
+  "network": {"addresses": [], "jurisdiction": "", "findings": []},
+  "headers": {"status": 200, "vendor_headers": []},
+  "catalog": {"prc_origin_models": []},
+  "tokenizer": {"usable": true, "variant_seed": 0, "vector": {"cjk_dense": 64, "digits_long": 188}},
+  "tokenizer_match": [
+    {"model": "GLM-4-9B-Chat", "family": "GLM/Zhipu", "origin": "CN", "score": 0.97,
+     "exact_matches": 19, "shared_probes": 20, "han_tok_per_char_obs": 0.55}
+  ],
+  "artifacts": {"findings": [
+    {"type": "cn_architecture", "severity": "critical",
+     "detail": "config.json architectures=[\"ChatGLMModel\"] — a GLM/Zhipu (PRC) architecture."},
+    {"type": "cn_vocab_size", "severity": "high",
+     "detail": "vocab_size 151552 matches the GLM-4 tokenizer vocabulary."}
+  ]},
+  "deception": {
+    "confrontation": {"true_backend": "Zhipu GLM", "false_backend": "Mistral AI",
+                      "true_held": true, "true_conceded": false,
+                      "informative_concession": false}
+  }
+}

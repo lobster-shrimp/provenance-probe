@@ -4,6 +4,67 @@
 > versions **independently** (released via `ext-v*` tags) — its history lives in
 > [`extension/CHANGELOG.md`](extension/CHANGELOG.md).
 
+## [0.33.0] — Hard-evidence ceiling: a model's self-report can't confirm its weights (2026-09-21)
+
+**WS1 of `docs/next-iteration-plan.md` — the z.ai "don't trust the confession"
+fix.** A model's self-report is not evidence of what its weights are: it can be
+instructed to claim any identity, in either direction. Before this change,
+model-self-report signals alone could reach a positive verdict with **zero
+measurement** (`informative_concession` + `selfid_cn` cleared CONFIRMED;
+`false_jurisdiction_assurance` alone cleared jurisdiction LIKELY). This closes
+that soft-signal false-positive path.
+
+### Security / accuracy (behavior change)
+- **Hard-evidence ceiling in `scoring.py`.** New `HARD_PROVENANCE` /
+  `HARD_JURISDICTION` signal sets partition *measured / artifact* signals (tokenizer
+  fingerprint, config/cache/gguf artifacts, client-source endpoints; wire/network
+  jurisdiction signals) from *soft / self-report* signals (behavioral self-ID,
+  informative concession, held persona, persona-management-in-trace, false
+  compliance assurance, and lower-durability **claims** — the echoed model-id
+  `model_name_cn`, `catalog_cn`, `cjk_compression`, and behavioral
+  `alignment_asymmetry` / `cjk_leakage`). `score()` now caps an axis at
+  **INDETERMINATE** unless ≥1 hard signal fired for that axis. CONFIRMED / LIKELY
+  require measurement. The cap sets a deterministic `note` naming the soft signals
+  present. This complements the existing clean-verdict **floor** (floor raises a
+  clean verdict up to INDETERMINATE; ceiling lowers a soft-inflated one down to it;
+  applied floor-then-ceiling, both converge on INDETERMINATE).
+- **Deception is inculpatory, never exculpatory.** Soft signals only ever ADD
+  log-odds; a false persona can never downgrade a hard-signal-driven verdict.
+  `persona_mismatch` stays a corroborator, **not** a CN-provenance anchor.
+- **Consequence (behavior change):** provenance/jurisdiction driven ONLY by a claim
+  (a chat self-ID, an echoed CN model id, an advertised CN catalog) or by behavioral
+  signals now reads **INDETERMINATE**, not LIKELY/CONFIRMED — matching the
+  documented design that **trace-only provenance floors at INDETERMINATE** and
+  CONFIRMED is reachable only through an active tokenizer probe. Passive-trace
+  analysis (`agent.py` / `sentinel.py`) no longer alerts on an echoed CN model id
+  alone; it alerts on a hard signal (active probe) or a model-identity/fingerprint
+  switch.
+
+### Added
+- **Fingerprint-based HARD switch in `redteam.run()`** — `fingerprint_switch` bool
+  + `fingerprint_switches` list, computed via `monitor.fingerprint` over each
+  scenario's response envelope vs a backfilled baseline (first usable scenario;
+  scenarios with a suppressed usage/tokenizer are skipped as advisory). Folded into
+  `switch_detected`, so a router that swaps the backend while echoing a **constant**
+  `model_id` (the z.ai shape) still trips. Existing `model_id` / `self_id` handling
+  is unchanged; `monitor.diff` / `monitor.fingerprint` switch logic is untouched.
+- **Eval cases (synthetic, per public-repo policy):** a POSITIVE z.ai case
+  (`synth_zai_denies_switch.json` — GLM tokenizer match + `cn_architecture` +
+  `cn_vocab_size` → CONFIRMED-CN while the model denies it; denial is context, not a
+  downgrade) and a NEGATIVE case (`synth_false_cn_selfid.json` — a non-CN model that
+  falsely self-IDs as CN, soft only → capped INDETERMINATE, zero-FP protection). The
+  behavioral-only case is retuned to INDETERMINATE (soft-only under the ceiling).
+- **Docs:** `docs/ARCHITECTURE.md` §4.1 (floor + ceiling) and §4.2 (honest
+  capture-robustness note — signed/stateful apps defeat static replay; robustness is
+  *detection given a capture*, with known limits).
+
+### Tests
+- `tests/test_scoring_provenance.py`: +6 ceiling / inculpatory-only cases.
+- `tests/test_redteam.py`: +3 fingerprint-switch cases (fires on constant
+  `model_id`; stable backend no-switch; skips unusable tokenizer).
+- `tests/test_agent.py`, `tests/test_transcript.py`: updated to the hard-evidence
+  policy (a hard signal now required to reach a positive tier).
+
 ## [0.32.0] — SentencePiece enabler: validate the last CN families (2026-09-16)
 
 Closes the CN portion of Goal 3 (reference coverage). Adds a **SentencePiece

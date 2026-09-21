@@ -103,9 +103,15 @@ def test_trace_only_never_confirms_provenance():
 
 def test_combine_agent_worst_step_and_mixed_label():
     clean = scoring.score({})                       # INDETERMINATE provenance
-    cn = scoring.score({"headers": {"echoed_model": "glm-4.6"}})  # LIKELY provenance
+    # WS1 (#113): an echoed model id is a soft CLAIM that the ceiling caps at
+    # INDETERMINATE; a genuine CN provenance tier requires a HARD (measured/artifact)
+    # signal. Use a CN tokenizer match so the CN step legitimately reaches LIKELY.
+    cn = scoring.score({"tokenizer_match": [
+        {"model": "GLM-4", "family": "GLM/Zhipu", "origin": "CN", "score": 0.98,
+         "exact_matches": 19, "shared_probes": 20}]})   # LIKELY provenance (hard-anchored)
+    assert cn["provenance_risk"]["verdict"] in ("LIKELY", "CONFIRMED")
     combined = scoring.combine_agent([clean, cn])
-    assert combined["provenance_verdict"] == "LIKELY"   # worst wins
+    assert combined["provenance_verdict"] in ("LIKELY", "CONFIRMED")  # worst wins
     assert combined["label"] == "MIXED"                 # steps differ
 
 
@@ -219,11 +225,28 @@ def test_self_id_concession_now_scores_provenance():
 
 
 def test_alert_on_worst_verdict_without_switch():
-    # single CN-echoed step: no switch, but LIKELY provenance -> alert True (exit 2)
+    # WS1 (#113): trace-only provenance floors at INDETERMINATE (an echoed model id
+    # is a soft claim); a worst-step alert without a switch requires a HARD signal.
+    # An active-probe tokenizer match grafted onto the step (step_overrides) is that
+    # hard signal -> LIKELY/CONFIRMED -> alert True, with no identity switch.
+    steps = agent.parse_trace({"steps": [{"model": "glm-4.6", "text": "hi"}]})
+    idx = steps[0].index
+    out = agent.analyze(steps, step_overrides={idx: {"tokenizer_match": [
+        {"model": "GLM-4", "family": "GLM/Zhipu", "origin": "CN", "score": 0.98,
+         "exact_matches": 19, "shared_probes": 20}]}})
+    assert out["verdict"]["switch_detected"] is False
+    assert out["verdict"]["alert"] is True
+
+
+def test_trace_only_echoed_cn_model_does_not_alert():
+    # WS1 (#113) zero-FP corollary: a passive trace whose ONLY provenance signal is
+    # an echoed CN model id (soft claim, no measurement) must NOT alert on provenance
+    # alone — it floors at INDETERMINATE, matching agent.py's documented design.
     steps = agent.parse_trace({"steps": [{"model": "glm-4.6", "text": "hi"}]})
     out = agent.analyze(steps)
     assert out["verdict"]["switch_detected"] is False
-    assert out["verdict"]["alert"] is True
+    assert out["verdict"]["provenance_verdict"] == "INDETERMINATE"
+    assert out["verdict"]["alert"] is False
 
 
 def test_switch_reasons_are_namespaced():

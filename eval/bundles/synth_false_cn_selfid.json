@@ -1,0 +1,14 @@
+{
+  "_label": "SYNTHETIC negative (#113, zero-FP protection): a non-CN model that FALSELY self-IDs as Chinese and 'concedes' a CN backend — SOFT self-report signals only (selfid_cn + informative_concession), NO hard tokenizer/artifact/wire measurement. Without the ceiling these would clear CONFIRMED with zero measurement; the hard-evidence ceiling MUST cap provenance at INDETERMINATE, because a chat claim cannot confirm weight origin. Expect provenance INDETERMINATE, NOT flagged.",
+  "target": {"name": "synthetic-false-cn-selfid", "model": "some-western-model"},
+  "network": {"addresses": [], "jurisdiction": "", "findings": []},
+  "headers": {"status": 200, "vendor_headers": []},
+  "catalog": {"prc_origin_models": []},
+  "tokenizer": {"usable": false},
+  "selfid": {"claimed_families": [{"token": "qwen", "family": "Qwen"}]},
+  "deception": {
+    "confrontation": {"true_backend": "Qwen", "false_backend": "Mistral AI",
+                      "true_conceded": true, "false_conceded": false,
+                      "informative_concession": true}
+  }
+}
