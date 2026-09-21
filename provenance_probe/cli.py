@@ -11,7 +11,7 @@ import uuid
 from .config import load_targets, write_example, Target
 from .client import Client
 from .probes import (network, tokenizer, artifact, clientsrc, transcript, session)
-from . import scoring, report, reference, userwarn, monitor, sentinel, assess, watch
+from . import scoring, report, reference, userwarn, monitor, sentinel, assess, watch, explain
 
 BANNER = """provenance-probe — GenAI model provenance & jurisdiction assurance
 Use only against systems you are authorized in writing to test."""
@@ -47,6 +47,12 @@ def cmd_assess(a):
             progress=lambda label, pct: print(f"  {label} ..."),
             note=print)
         bundles.append(b)
+        # Lead the RESULT block with the plain-English answer (single source in
+        # explain; the serve UI leads with the SAME call, so the two cannot drift).
+        sc = b["score"]
+        print("\n" + explain.plain_answer(
+            sc["provenance_risk"]["verdict"], sc["jurisdictional_risk"]["verdict"],
+            sc["confidence"]))
         print("\n" + report.console(b))
         if b.get("deception", {}).get("correlation", {}).get("finding"):
             print("  DECEPTION: " + b["deception"]["correlation"]["finding"])
@@ -60,6 +66,14 @@ def cmd_assess(a):
         report.to_html(b, base + ".html")
         userwarn.to_html(b["user_warning"], base + "_USER-WARNING.html")
         print(f"\n[+] {base}.json\n[+] {base}.html\n[+] {base}_USER-WARNING.html")
+
+
+def cmd_explain(a):
+    """Print the plain-language 'how it works' flow (single source: explain.py)."""
+    if a.flow:
+        print(explain.flow_text())
+    else:
+        print("Run `provenance-probe explain --flow` to print the how-it-works flow.")
 
 
 def cmd_monitor(a):
@@ -1255,6 +1269,12 @@ def main(argv=None):
     s.add_argument("--interval", default="12h",
                    help="schedule interval for --print launchd/systemd/cron (default 12h)")
     s.set_defaults(func=cmd_fleet_scan)
+
+    s = sub.add_parser("explain",
+                       help="print the plain-language how-it-works flow (no network)")
+    s.add_argument("--flow", action="store_true",
+                   help="print the four-step how-it-works flow as plain text")
+    s.set_defaults(func=cmd_explain)
 
     a = p.parse_args(argv)
     return a.func(a)

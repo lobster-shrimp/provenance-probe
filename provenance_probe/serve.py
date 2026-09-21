@@ -215,9 +215,17 @@ def api_run(rid):
         return jsonify({"error": "unknown run"}), 404
     out = {k: v for k, v in st.items() if k not in ("bundle",)}
     if st.get("state") == "done":
+        from . import explain
         b = st["bundle"]
         out["user_warning"] = b["user_warning"]
         out["score"] = b["score"]
+        # Lead the result with the plain-English answer (single source in explain;
+        # the CLI leads with the SAME call, so the two surfaces cannot drift).
+        sc = b.get("score") or {}
+        pv = (sc.get("provenance_risk") or {}).get("verdict")
+        jv = (sc.get("jurisdictional_risk") or {}).get("verdict")
+        if pv is not None or jv is not None:
+            out["plain_answer"] = explain.plain_answer(pv, jv, sc.get("confidence"))
         # Backend fingerprint (same value /api/history exposes) so the client-side
         # watch can display the pinned baseline id without a second round-trip.
         out["fingerprint_id"] = b.get("fingerprint_id", "")
@@ -262,11 +270,20 @@ def api_monitor():
     except (KeyError, FileNotFoundError):
         return jsonify({"error": "pick a baseline and a current run"}), 400
     result = monitor.diff(base, cur)
+    # Lead the comparison with the plain-English read of the CURRENT run's state
+    # (same single-source call as the live probe + CLI, so no drift).
+    from . import explain
+    cur_score = cur.get("score") or {}
+    plain = explain.plain_answer(
+        (cur_score.get("provenance_risk") or {}).get("verdict"),
+        (cur_score.get("jurisdictional_risk") or {}).get("verdict"),
+        cur_score.get("confidence"))
     return jsonify({
         "drift_detected": result["drift_detected"],
         "changes": result["changes"],
         "confidence": result["confidence"],
         "confidence_note": result.get("confidence_note", ""),
+        "plain_answer": plain,
         "baseline": {"fingerprint_id": base.get("fingerprint_id", ""), "ts": base.get("timestamp")},
         "current": {"fingerprint_id": cur.get("fingerprint_id", ""), "ts": cur.get("timestamp")},
     })
@@ -512,6 +529,7 @@ def index():
     doc = (_doc("provenance-probe", PAGE, right=nav)
            .replace("__MISSION_HEADLINE__", html.escape(explain.MISSION_HEADLINE))
            .replace("__MISSION_BODY__", html.escape(explain.MISSION_BODY))
+           .replace("__FLOW__", explain.flow_html())
            .replace("__OBSERVATORY_URL__", html.escape(obs_url)))
     return Response(doc, mimetype="text/html")
 
@@ -1754,6 +1772,13 @@ PAGE = r"""<section style="margin-bottom:24px">
  &mdash; the mission running continuously, on endpoints you already recognise.</p>
 </a>
 
+<!-- How it works: the four-step flow, rendered from explain.FLOW_STAGES (single
+     source, no script, accessible). Injected server-side at __FLOW__. -->
+<section aria-label="How it works">
+<p class="seclabel" style="margin:0 0 6px">How it works</p>
+__FLOW__
+</section>
+
 <figure class="demo">
 <img src="/media/probe-demo.gif" alt="Screen recording: entering an endpoint, pressing Run, and watching the plain-language verdict appear"
  onerror="this.style.display='none';this.closest('figure').classList.add('noimg')">
@@ -1918,6 +1943,9 @@ function render(d,rid){
  const w=d.user_warning||{},s=d.score||{};
  let h='<div class="row" style="margin:0 0 12px"><button type="button" onclick="watchThis()">'+
   'Watch this target for a swap &rarr;</button></div>';
+ // Lead with the plain-English answer (server-computed in explain.plain_answer;
+ // never assembled client-side, so the UI cannot drift from the CLI wording).
+ if(d.plain_answer){h+='<p class="lead" aria-label="Plain-English answer" style="margin:0 0 14px">'+esc(d.plain_answer)+'</p>'}
  h+='<div class="ban '+w.level+'"><div class=lvl>'+esc(w.level_label)+'</div>'+
   '<h2>'+esc(w.headline)+'</h2><ul>'+(w.facts||[]).map(f=>'<li>'+esc(f)+'</li>').join('')+
   '</ul></div>';
@@ -1976,7 +2004,10 @@ function compare(){
    $('cmp').disabled=false;
    if(d.error){$('mon_out').innerHTML='<span class=sev critical>error</span> '+esc(d.error);return}
    const drift=d.drift_detected;
-   let h='<div class="ban '+(drift?'red':'green')+'" style="margin:0 0 12px">'+
+   let h='';
+   // Lead with the plain-English read of the current run (server-computed).
+   if(d.plain_answer){h+='<p class="lead" aria-label="Plain-English answer" style="margin:0 0 12px">'+esc(d.plain_answer)+'</p>'}
+   h+='<div class="ban '+(drift?'red':'green')+'" style="margin:0 0 12px">'+
     '<div class=lvl>'+(drift?'DRIFT DETECTED':'NO DRIFT')+'</div><h2>'+
     (drift?(d.changes.length+' change'+(d.changes.length>1?'s':'')+' since baseline'):'Backend is stable')+'</h2>'+
     '<div class=stat style="color:inherit">baseline '+esc((d.baseline.fingerprint_id||'—').slice(0,12))+

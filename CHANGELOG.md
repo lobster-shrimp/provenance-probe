@@ -4,6 +4,40 @@
 > versions **independently** (released via `ext-v*` tags) — its history lives in
 > [`extension/CHANGELOG.md`](extension/CHANGELOG.md).
 
+## [0.34.0] — Plain-English result + a visual how-it-works flow (2026-09-21)
+
+**WS2 of `docs/next-iteration-plan.md` — the shared-core legibility item.** The
+text explainers were thorough but assumed a technical reader: a result led with
+verdict *words* ("provenance: INDETERMINATE") and a wall of layer prose. Post-WS1,
+INDETERMINATE is common (self-report caps there), so a plain-English "what this
+means" matters more than ever. This adds a single plain-English lead sentence and
+a visual pipeline — both sourced ONLY from `explain.py` so the serve UI and the
+CLI cannot drift. **No scoring/detection change (WS1 untouched); eval-gated.**
+
+### Added (content / rendering only)
+- **`explain.plain_answer(provenance, jurisdiction, confidence)`** — one
+  deterministic, single-sentence, plain-English answer, a PURE function of the
+  verdict tuple (mirrors the serve monitor no-drift invariant). Leads with the
+  more-severe axis (severity = `_TIER_ORDER` reversed; tie-break provenance-first);
+  confidence adverb per bucket (high→"clearly", moderate→"likely",
+  low→"a preliminary read suggests"); both-clean collapses to one reassuring
+  sentence; an INDETERMINATE axis always says it is "not a clean bill" and "not an
+  accusation" (teaches the WS1 nuance). Honest by construction — asserts origin /
+  jurisdiction only, never misrepresentation. Every output ≤200 chars, no engine
+  jargon.
+- **`explain.FLOW_STAGES` + `explain.flow_html()` / `explain.flow_text()`** — the
+  four-step "how it works" flow, both rendered from `FLOW_STAGES` + `LAYERS` /
+  `VERDICTS` (single source, no duplicated copy). `flow_html()` is accessible
+  static markup: no `<script>` (works with JS disabled), a semantic `<ol>`/`<li>`
+  never color/icon-only (every stage has a visible text label), aria-labels on the
+  container and each stage, all content escaped.
+- **`provenance-probe explain --flow`** — prints `flow_text()` (no network).
+
+### Changed
+- The **serve** result surface (`/api/run`, `/api/monitor`) and the **CLI** `assess`
+  result block now **lead with the identical `plain_answer` string**; the flow
+  renders on the landing page and `/help`.
+
 ## [0.33.0] — Hard-evidence ceiling: a model's self-report can't confirm its weights (2026-09-21)
 
 **WS1 of `docs/next-iteration-plan.md` — the z.ai "don't trust the confession"
