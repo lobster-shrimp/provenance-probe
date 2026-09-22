@@ -11,7 +11,7 @@ import uuid
 from .config import load_targets, write_example, Target
 from .client import Client
 from .probes import (network, tokenizer, artifact, clientsrc, transcript, session)
-from . import scoring, report, reference, userwarn, monitor, sentinel, assess, watch, explain
+from . import scoring, report, reference, userwarn, monitor, sentinel, assess, watch, explain, soak
 
 BANNER = """provenance-probe — GenAI model provenance & jurisdiction assurance
 Use only against systems you are authorized in writing to test."""
@@ -259,6 +259,53 @@ def cmd_watch(a):
     jitter = 0.0 if a.no_jitter else a.jitter
     sys.exit(watch.run_loop(targets, opts, interval=interval, jitter_frac=jitter,
                             webhook=a.webhook, only=only, stop_event=stop))
+
+
+def cmd_soak(a):
+    """Duration-bounded continuous model-switch soak test (#124). Poll each
+    target's model card (ADVISORY) + tokenizer fingerprint (the CONFIRMED
+    authority) for a set window and emit a per-target switch timeline.
+
+    Reuses `assess`/`monitor`/`watch` — no new detection logic. The fingerprint
+    is the switch authority: a `monitor.diff` critical is a CONFIRMED switch even
+    when the echoed model id never changes (the founding z.ai shape)."""
+    if a.print_example:
+        print(soak.print_example())
+        return
+
+    targets = load_targets(a.config)
+    for t in targets:
+        _assert_scope(t, a.i_am_authorized)          # same active-probe gate as `assess`
+    opts = soak.light_opts()
+    duration = soak.parse_duration(a.duration)
+    interval = soak.parse_duration(a.interval)
+    card_interval = soak.parse_duration(a.card_interval) if a.card_interval else interval
+
+    import signal, threading
+    stop = threading.Event()
+
+    def _handler(signum, _frame):
+        print(f"\n[soak] signal {signum} received; finishing the in-flight poll, "
+              f"then writing the report…", file=sys.stderr)
+        stop.set()
+
+    for _sig in (signal.SIGINT, getattr(signal, "SIGTERM", None)):
+        if _sig is None:
+            continue
+        try:
+            signal.signal(_sig, _handler)
+        except (ValueError, AttributeError, OSError):
+            pass
+
+    print(f"[soak] {len(targets)} target(s), duration {duration}s, "
+          f"fingerprint every {interval}s / card every {card_interval}s")
+    rep = soak.run_soak(targets, opts, duration=duration, interval=interval,
+                        card_interval=card_interval, out_dir=a.out, stop_event=stop,
+                        log=lambda m: print(m, file=sys.stderr))
+    print("\n" + soak.summarize(rep))
+    print(f"\n[+] {rep['report_path']}")
+    if a.json:
+        print(json.dumps(rep, indent=2))
 
 
 def _print_agent_board(result: dict, title: str):
@@ -1237,6 +1284,27 @@ def main(argv=None):
     s.add_argument("--i-am-authorized", action="store_true",
                    help="attest written authorization to actively probe these targets")
     s.set_defaults(func=cmd_watch)
+
+    s = sub.add_parser("soak",
+                       help="duration-bounded continuous model-switch soak test: poll each "
+                            "target's model card (ADVISORY) + tokenizer fingerprint (CONFIRMED) "
+                            "for a set window and report a switch timeline (catches the z.ai "
+                            "shape: fingerprint moves while the model id stays constant)")
+    s.add_argument("--config", default="targets.json", help="same target config as `assess`")
+    s.add_argument("--duration", default="30m",
+                   help="total soak window as 30m / 2m / 45s / 1h (or bare seconds); default 30m")
+    s.add_argument("--interval", default="2m",
+                   help="fingerprint poll cadence (the CONFIRMED authority); default 2m")
+    s.add_argument("--card-interval", dest="card_interval", default=None,
+                   help="cheap model-card poll cadence (ADVISORY); defaults to --interval")
+    s.add_argument("--out", default="soak-reports",
+                   help="directory for the stamped soak-<stamp>.json report; default ./soak-reports")
+    s.add_argument("--json", action="store_true", help="also print the machine-readable report JSON")
+    s.add_argument("--print-example", dest="print_example", action="store_true",
+                   help="print a copy-pasteable recipe framing the z.ai seed case, then exit")
+    s.add_argument("--i-am-authorized", dest="i_am_authorized", action="store_true",
+                   help="attest written authorization to actively probe these targets")
+    s.set_defaults(func=cmd_soak)
 
     s = sub.add_parser("session",
                        help="fingerprint an endpoint at session start + end; "
