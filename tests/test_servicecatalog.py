@@ -156,6 +156,26 @@ def test_no_egress_in_generator_source():
         assert forbidden not in src, f"generator references network primitive: {forbidden}"
 
 
+def test_kind_for_host_heuristic():
+    # API base hosts (prefix / cloud suffix)
+    assert sc._kind_for_host("api.deepseek.com") == "api-service"
+    assert sc._kind_for_host("dashscope.aliyuncs.com") == "api-service"
+    # a bare non-hostname relay token (no dot) is a relay/proxy, not a consumer site
+    assert sc._kind_for_host("openai-proxy") == "api-service"
+    # consumer sites
+    assert sc._kind_for_host("z.ai") == "web-app"
+    assert sc._kind_for_host("chatgpt.com") == "web-app"
+
+
+def test_openai_proxy_relay_not_web_app():
+    """corpus's bare-token 'openai-proxy' key is a generic relay — it must not be
+    mislabeled a consumer web-app, and it resolves to jurisdiction 'unresolved'."""
+    by = _by_host(_doc())
+    assert "openai-proxy" in by
+    assert by["openai-proxy"]["kind"] == "api-service"
+    assert by["openai-proxy"]["jurisdiction"] == "unresolved"
+
+
 def test_no_egress_module_has_no_fetch():
     # unlike catalog.py (which has fetch_models_dev), the service catalog has NO
     # fetch/egress entry point at all.
@@ -172,6 +192,25 @@ def test_cli_build_service_catalog_out(tmp_path):
     doc = json.loads(out.read_text())
     assert doc["service_count"] == len(doc["services"])
     assert all(s["measured"] is False for s in doc["services"])
+
+
+def test_cli_out_and_json_writes_file_and_echoes(tmp_path, capsys):
+    """--out with --json writes the file AND echoes the JSON to stdout (the flag is
+    not a no-op)."""
+    from provenance_probe.cli import main
+    out = tmp_path / "svc.json"
+    assert main(["build-service-catalog", "--out", str(out), "--json"]) == 0
+    printed = capsys.readouterr().out
+    assert out.exists()
+    doc = json.loads(printed)                         # stdout is valid JSON too
+    assert doc["service_count"] == len(doc["services"])
+
+
+def test_cli_out_without_json_is_silent_on_stdout(tmp_path, capsys):
+    from provenance_probe.cli import main
+    out = tmp_path / "svc.json"
+    assert main(["build-service-catalog", "--out", str(out)]) == 0
+    assert capsys.readouterr().out == ""              # file-only, no stdout echo
 
 
 def test_cli_build_service_catalog_json_stdout(capsys):

@@ -41,8 +41,6 @@ CATALOG_VERSION = corpus.CORPUS_VERSION
 GENERATED_FROM = ("corpus PRC_ENDPOINTS/AGGREGATOR_ENDPOINTS + clientsrc findings "
                   "+ curated app list")
 
-_JUR_ENUM = ("PRC", "PRC-operator", "first-party", "aggregator", "unresolved")
-
 # Date of the shipped clientsrc live-scan findings (source note; NOT re-scanned).
 _CLIENTSRC_SCAN = "2026-06"
 
@@ -56,10 +54,12 @@ _API_SUFFIXES = ("aliyuncs.com", "tencentcloudapi.com", "myhuaweicloud.com",
 
 def _kind_for_host(host: str) -> str:
     """api-service vs web-app, by a small host-shape heuristic (aggregators are
-    tagged separately). API base hosts start with an api-ish label or sit under a
-    cloud API suffix; everything else is treated as a consumer web-app."""
+    tagged separately). API base hosts start with an api-ish label, sit under a
+    cloud API suffix, or are a bare non-hostname relay token (e.g. corpus's
+    'openai-proxy' — no dot; a relay/proxy, not a consumer site); everything else
+    is treated as a consumer web-app."""
     h = (host or "").lower()
-    if h.startswith(_API_PREFIXES) or h.endswith(_API_SUFFIXES):
+    if (h.startswith(_API_PREFIXES) or h.endswith(_API_SUFFIXES) or "." not in h):
         return "api-service"
     return "web-app"
 
@@ -73,8 +73,8 @@ def _norm_jur(value: str) -> str:
 
 
 def _row(*, name: str, url: str, host: str, kind: str, operator: str,
-         jurisdiction: str, fronts, evidence: str, source: str,
-         confidence) -> dict:
+         jurisdiction: str, fronts: list[str] | None, evidence: str, source: str,
+         confidence: float | None) -> dict:
     """One service row in the locked schema. `measured` is ALWAYS False."""
     return {
         "name": name,
@@ -117,7 +117,8 @@ def _corpus_rows() -> list[dict]:
 # These are the durable client-source findings the probe recorded previously:
 # an endpoint/model id recovered from shipped JS survives server-side evasion.
 def _clientsrc_rows() -> list[dict]:
-    ev = lambda detail: f"clientsrc scan ({_CLIENTSRC_SCAN}): {detail}"
+    def ev(detail: str) -> str:
+        return f"clientsrc scan ({_CLIENTSRC_SCAN}): {detail}"
     return [
         # z.ai: also in corpus (PRC-operator) — merges by host; contributes fronts.
         _row(name="z.ai (chat)", url="https://chat.z.ai", host="z.ai",
@@ -235,8 +236,13 @@ def _merge_by_host(rows: list[dict]) -> list[dict]:
         groups.setdefault(r["host"], []).append(r)
 
     merged: list[dict] = []
-    for host, grp in groups.items():
-        # highest confidence first (None sorts last); tie -> corpus, then clientsrc.
+    for grp in groups.values():
+        # Highest confidence first (None sorts last); tie -> corpus, then clientsrc.
+        # NB: a corpus AGGREGATOR row carries confidence=None (no signal), so if a
+        # future host collided between a corpus-aggregator entry and a confidence-
+        # carrying clientsrc/curated entry, the latter would win. No such collision
+        # exists today (only z.ai collides, both sides carry real confidences), so
+        # this is latent-by-design — the confidence signal, where present, leads.
         winner = sorted(
             grp,
             key=lambda r: (-(r["confidence"] if r["confidence"] is not None else -1.0),

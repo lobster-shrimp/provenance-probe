@@ -756,7 +756,9 @@ def cmd_build_service_catalog(a):
         breakdown = ", ".join(f"{k}:{v}" for k, v in sorted(jur.items()))
         print(f"wrote service catalog: {doc['service_count']} services "
               f"({breakdown}) -> {a.out}", file=_sys.stderr)
-    else:
+    # Emit JSON to stdout when there is no --out (the default), or when --json is
+    # passed alongside --out (write the file AND echo the JSON — pipeable).
+    if a.json or not a.out:
         _sys.stdout.write(out)
     return 0
 
@@ -1196,9 +1198,10 @@ def main(argv=None):
                             "clientsrc findings + a curated consumer-app list into a signed-ready "
                             "service/provider map (pure, deterministic, no egress). Sibling to "
                             "build-catalog (the observatory refreshes + signs it nightly)")
-    s.add_argument("--out", default="", help="write the service-catalog JSON here (default: stdout)")
+    s.add_argument("--out", help="write the service-catalog JSON here (default: stdout)")
     s.add_argument("--json", action="store_true",
-                   help="emit the full service-catalog JSON to stdout (default when no --out)")
+                   help="also emit the full JSON to stdout (default when no --out; "
+                        "with --out, write the file AND echo the JSON)")
     s.add_argument("--print", dest="print", choices=["service-catalog-sample"],
                    help="print a ready-to-render seed (the full deterministic catalog) to stdout")
     s.set_defaults(func=cmd_build_service_catalog)
