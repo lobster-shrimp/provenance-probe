@@ -4,6 +4,42 @@
 > versions **independently** (released via `ext-v*` tags) — its history lives in
 > [`extension/CHANGELOG.md`](extension/CHANGELOG.md).
 
+## [0.37.0] — `soak`: duration-bounded continuous model-switch soak test (2026-09-22)
+
+**A "soak test" for silent model swaps (#124).** The always-on `watch` daemon and the
+nightly observatory both detect model switches, but there was no *duration-bounded*
+harness you run for, say, 30 minutes across a set of services to get a switch **timeline**
+back. `soak` is that harness — the WS1 "don't trust the confession" idea applied
+continuously, seeded by the founding z.ai case (a Gemini persona over GLM, revealed only
+by repeated probing over time).
+
+- **New `provenance-probe soak`** (`provenance_probe/soak.py`). `soak --config targets.json
+  --duration 30m --interval 2m [--card-interval 30s] --out ./soak-reports [--json]
+  --i-am-authorized`. Reuses `assess` → `monitor.fingerprint` → `monitor.diff` + the
+  `watch` per-target store — **no new detection logic**.
+- **Two signals per poll (WS1 over time).** The model **card** (echoed `model` id +
+  `/models` list) is a cheap, frequent **ADVISORY** signal; the tokenizer **fingerprint**
+  is the **CONFIRMED** authority. A CONFIRMED switch is exactly a `monitor.diff` *critical*
+  change — so a fingerprint move is CONFIRMED **even when the echoed model id never
+  changes** (the z.ai shape a card-only harness would miss). A card change alone is
+  ADVISORY and also triggers an out-of-schedule fingerprint poll that can **upgrade** to
+  CONFIRMED. Non-critical wire noise is recorded, never alerted.
+- **Timeline + summary.** Ordered contiguous runs `{model_id, models_hash, fingerprint_id,
+  first_seen, last_seen, observations}` (a revisit = a new entry); each poll compares to the
+  *immediately-previous* state so `A→B→B→A` yields exactly two transitions. Per-target
+  summary (console + `--json`) + a stamped `soak-<stamp>.json`; switches also append to
+  `watch`'s `switches.jsonl`. `--print-example` prints a copy-pasteable recipe.
+- **Bounded + clean.** First poll at t0; targets polled sequentially; deadline checked
+  *before* each cycle; `SIGINT`/`SIGTERM` finishes the in-flight poll and still writes the
+  report. A failed/partial poll is a no-data **gap** (no switch, previous state frozen) —
+  the soak never crashes and exits `0`.
+- **Secret-safety** carried to every new sink: only the **scrubbed** model-id + the
+  `models_hash` (sha256 over the sorted unique id set) are stored — never the raw `/models`
+  response; the redactor scrubs both the composed header value and the **bare** token/cookie
+  an endpoint could echo back inside a model id or `/models` entry. The full assess bundle
+  is held in memory only. New `docs/soak.md` runbook frames the (synthetic, hermetic) z.ai
+  seed. **Eval-gated (GATE PASS, FP=0).**
+
 ## [0.36.1] — clientsrc: tighten over-broad `step-`/`seed-` CN model tokens (2026-09-22)
 
 **Accuracy fix for the client-source scan (#123).** `PRC_MODEL_TOKENS` mapped the

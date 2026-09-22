@@ -1,2 +1,2 @@
 """provenance-probe: black-box GenAI model provenance and jurisdiction assurance."""
-__version__ = "0.36.1"
+__version__ = "0.37.0"
