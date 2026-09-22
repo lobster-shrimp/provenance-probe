@@ -25,16 +25,19 @@ import subprocess
 import threading
 
 import pytest
+import requests
 
 from provenance_probe import watch, assess, serve
 from provenance_probe.config import Target
 
 
 # --------------------------------------------------------------------------- #
-# mock vendor: deterministic OpenAI-ish endpoint whose greedy completion (and
-# therefore its composite fingerprint) flips when `state["switched"]` is set.
-# Only the greedy text changes; tokenizer shape, wire/error/streaming stay put,
-# so a flip reads as a clean critical fingerprint drift.
+# mock vendor: deterministic OpenAI-ish endpoint that performs a REAL model switch
+# when `state["switched"]` is set — its per-probe token accounting changes from a
+# constant per-probe overhead to a length-scaled one, so the overhead-invariant
+# tokenizer SHAPE moves (a genuine tokenizer-family change). #127: only a
+# tokenizer-shape move is a CONFIRMED switch (drift); the greedy text also flips,
+# recorded as an advisory alongside. A greedy/wire-only change is NOT drift.
 # --------------------------------------------------------------------------- #
 def _vendor(state: dict):
     from flask import Flask, jsonify, request, Response
@@ -51,7 +54,9 @@ def _vendor(state: dict):
                                       "param": "max_tokens", "code": None}}), 400
         msgs = d.get("messages") or []
         prompt = " ".join(m.get("content", "") for m in msgs if isinstance(m.get("content"), str))
-        ptok = len(prompt) + 3                       # deterministic -> stable tokenizer shape
+        # A real switch changes the per-probe token STRUCTURE (not a constant
+        # offset), so the overhead-invariant tokenizer shape moves -> #127 critical.
+        ptok = (2 * len(prompt) + 3) if state.get("switched") else (len(prompt) + 3)
         tag = "GLM-after" if state.get("switched") else "safe-before"
         txt = f"[{tag}] deterministic reply for: {prompt[:40]}"
         if d.get("stream"):
@@ -229,7 +234,12 @@ def test_baseline_seed_then_load_then_drift(monkeypatch):
     """Seed vs load, using a canned bundle (no network): first check seeds and
     reports no drift; an unchanged re-check is clean; a changed fingerprint
     drifts and appends exactly one switches.jsonl record."""
-    bundle = {"fingerprint_id": "fp-AAAA", "tokenizer": {"usable": True, "vector": {}},
+    # #127: a CONFIRMED switch is a tokenizer-SHAPE move — carry a real usable
+    # vector and switch by moving the shape (not merely the composite fp string).
+    vec_a = {"p1": 10, "p2": 12, "p3": 15, "p4": 11, "p5": 13, "p6": 14}
+    vec_b = {"p1": 10, "p2": 22, "p3": 15, "p4": 30, "p5": 13, "p6": 14}
+    bundle = {"fingerprint_id": "fp-AAAA",
+              "tokenizer": {"usable": True, "vector": vec_a},
               "errors": {}, "headers": {}, "greedy": {}, "streaming": {}, "score": {}}
     monkeypatch.setattr("provenance_probe.assess.assess_target",
                         lambda t, o, **k: dict(bundle))
@@ -244,6 +254,7 @@ def test_baseline_seed_then_load_then_drift(monkeypatch):
     assert r2["status"] == "clean" and r2["drift"] is False
 
     bundle["fingerprint_id"] = "fp-BBBB"                  # the backend "switched"
+    bundle["tokenizer"] = {"usable": True, "vector": vec_b}   # tokenizer shape moved
     r3 = watch.check_target(tgt, opts)
     assert r3["status"] == "drift" and r3["drift"] is True
     recs = [json.loads(l) for l in
@@ -342,9 +353,18 @@ def test_webhook_receives_post_on_drift_and_failure_is_nonfatal(monkeypatch):
         class _Resp:
             status_code = 200
 
-        monkeypatch.setattr(
-            "requests.Session.post",
-            lambda self, url, json=None, timeout=None: posts.append(json) or _Resp())
+        # Capture ONLY the webhook POST; delegate the real assess chat posts to the
+        # mock so the drift is a genuine tokenizer-shape switch (#127), not a
+        # degraded bundle from a globally-broken transport.
+        _orig_post = requests.Session.post
+
+        def _capture(self, url, *args, **kwargs):
+            if "example.invalid" in url:
+                posts.append(kwargs.get("json"))
+                return _Resp()
+            return _orig_post(self, url, *args, **kwargs)
+
+        monkeypatch.setattr("requests.Session.post", _capture)
         rc = watch.run_once([tgt], opts, webhook="http://example.invalid/hook")
         assert rc == 2                                    # drift
         assert len(posts) == 1
@@ -354,8 +374,12 @@ def test_webhook_receives_post_on_drift_and_failure_is_nonfatal(monkeypatch):
         assert "sk-SECRET-hook-777" not in json.dumps(body)
 
         # A webhook that raises must NOT change the drift exit code or crash —
-        # and must not leak the URL path (a Slack/Discord token) into the log.
-        def _boom(self, url, json=None, timeout=None):
+        # and must not leak the URL path (a Slack/Discord token) into the log. Only
+        # the webhook POST raises; the real assess chat (to 127.0.0.1) is delegated
+        # so the genuine tokenizer-shape switch (#127) still drifts.
+        def _boom(self, url, *args, **kwargs):
+            if "127.0.0.1" in url:
+                return _orig_post(self, url, *args, **kwargs)
             raise TimeoutError("connect timed out to https://hooks.example/services/T00/B00/SECRETTOKEN")
 
         logged = []
