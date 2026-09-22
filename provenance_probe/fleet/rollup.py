@@ -481,6 +481,62 @@ def build_report(rollup: Rollup) -> dict:
     }
 
 
+FAIL_ON_MODES = ("none", "prc", "drift", "any")
+
+
+def exposure_counts(rollup: Rollup) -> dict:
+    """FINDING-level exposure tallies (NOT the endpoint-grouped rogue-upstream count).
+
+    * ``prc``        = findings whose attribution ``origin`` starts "PRC".
+    * ``drift``      = findings classified OFF_ALLOWLIST_ATTRIBUTED / _UNATTRIBUTED.
+    * ``unresolved`` = findings classified AGGREGATOR_UNRESOLVABLE / GATEWAY_UPSTREAM_UNRESOLVED.
+
+    A finding may count toward BOTH ``prc`` and ``drift`` (a PRC-origin off-allowlist
+    endpoint); the three buckets are not mutually exclusive. ``drift`` equals the sum
+    of the report's two off-allowlist classification totals by construction."""
+    prc = drift = unresolved = 0
+    for _m, f in _all_findings(rollup):
+        if _is_prc(f.origin):
+            prc += 1
+        if f.classification in _OFF_ALLOWLIST:
+            drift += 1
+        if f.classification in _UNRESOLVED:
+            unresolved += 1
+    return {"prc": prc, "drift": drift, "unresolved": unresolved}
+
+
+def exposure_summary(rollup: Rollup, fail_on: str = "none") -> dict:
+    """The deterministic exposure object an alert rule consumes:
+    ``{prc, drift, unresolved, fail_on, matched, exit_code}``.
+
+    Gate: ``prc`` matches iff prc>0; ``drift`` iff drift>0; ``any`` iff prc>0 or
+    drift>0; ``none`` never matches (makes no pass/fail judgment). A match maps to
+    exit code 3; no match to 0. UNRESOLVED is never exposure. Error (exit 2) is a
+    CLI-level concern that outranks this and is decided before this is computed."""
+    counts = exposure_counts(rollup)
+    prc, drift = counts["prc"], counts["drift"]
+    if fail_on == "prc":
+        matched = prc > 0
+    elif fail_on == "drift":
+        matched = drift > 0
+    elif fail_on == "any":
+        matched = prc > 0 or drift > 0
+    else:  # none (or any unknown mode) never gates
+        matched = False
+    return {"prc": prc, "drift": drift, "unresolved": counts["unresolved"],
+            "fail_on": fail_on, "matched": matched,
+            "exit_code": 3 if matched else 0}
+
+
+def _exposure_line(exp: dict) -> str:
+    """The stable, greppable summary string (shared by console + csv comment)."""
+    base = f"EXPOSURE: prc={exp['prc']} drift={exp['drift']}"
+    if exp["fail_on"] == "none":
+        return f"{base} (fail-on=none)"
+    verdict = "FAIL" if exp["matched"] else "ok"
+    return f"{base} (fail-on={exp['fail_on']} -> {verdict})"
+
+
 def _headline(machines_scanned: int | None, total: int, holding: int,
               prc_machines: int, totals: dict[str, int]) -> str:
     off_unattr = totals.get(OFF_ALLOWLIST_UNATTRIBUTED, 0)
@@ -499,8 +555,10 @@ def _headline(machines_scanned: int | None, total: int, holding: int,
 # Renderers (console / json / csv all live here to avoid render.py duplication)
 # --------------------------------------------------------------------------- #
 
-def to_json(rollup: Rollup) -> dict:
-    return build_report(rollup)
+def to_json(rollup: Rollup, fail_on: str = "none") -> dict:
+    rep = build_report(rollup)
+    rep["exposure"] = exposure_summary(rollup, fail_on)
+    return rep
 
 
 CSV_HEADER = [
@@ -509,10 +567,12 @@ CSV_HEADER = [
 ]
 
 
-def to_csv(rollup: Rollup) -> str:
+def to_csv(rollup: Rollup, fail_on: str = "none") -> str:
     """One flat row per (machine, finding); a zero-finding machine emits one row with
     empty finding columns so a clean machine still appears in the export. `source` is
-    redacted and `base_url` is sanitized (no creds/query) in every row."""
+    redacted and `base_url` is sanitized (no creds/query) in every row. A trailing
+    `# EXPOSURE: ...` comment line (leading `#` so comment-skipping parsers ignore it)
+    always carries the gate summary; the exit code is the primary machine signal."""
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(CSV_HEADER)
@@ -527,10 +587,10 @@ def to_csv(rollup: Rollup) -> str:
                 "" if f.confidence is None else f.confidence,
                 _redact_source(f.source),
             ])
-    return buf.getvalue()
+    return buf.getvalue() + "# " + _exposure_line(exposure_summary(rollup, fail_on)) + "\n"
 
 
-def render_console(rollup: Rollup) -> str:
+def render_console(rollup: Rollup, fail_on: str = "none") -> str:
     r = build_report(rollup)
     lines: list[str] = [r["headline"], ""]
 
@@ -597,12 +657,15 @@ def render_console(rollup: Rollup) -> str:
             lines.append(f"  {host}")
         lines.append("")
 
+    # Deterministic, greppable gate summary as the trailing final line.
+    lines.append("")
+    lines.append(_exposure_line(exposure_summary(rollup, fail_on)))
     return "\n".join(lines).rstrip() + "\n"
 
 
-def render(rollup: Rollup, fmt: str = "console") -> str:
+def render(rollup: Rollup, fmt: str = "console", fail_on: str = "none") -> str:
     if fmt == "json":
-        return json.dumps(to_json(rollup), indent=2)
+        return json.dumps(to_json(rollup, fail_on), indent=2)
     if fmt == "csv":
-        return to_csv(rollup)
-    return render_console(rollup)
+        return to_csv(rollup, fail_on)
+    return render_console(rollup, fail_on)

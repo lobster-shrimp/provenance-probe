@@ -113,9 +113,52 @@ JSON in a dashboard), so redaction holds in **every** format:
 
 ## Exit codes
 
-- `0` — any successful report, **including an empty (0-machine) one**.
-- `2` — a missing/unreadable path, a corrupt/unopenable SQLite DB, or a directory
-  whose only candidate files are all unusable.
+| Code | Meaning |
+|------|---------|
+| `0`  | Clean / no exposure matched — any successful report, **including an empty (0-machine) one**, or exposure present but not matched by `--fail-on`. |
+| `2`  | **Error** — a missing/unreadable path, a corrupt/unopenable SQLite DB, or a directory whose only candidate files are all unusable. Error **outranks** exposure: a corrupt DB with `--fail-on any` still exits `2`. |
+| `3`  | **Exposure matched** the `--fail-on` criterion (see below). The full report still prints; only the exit code changes. |
+
+With `--fail-on none` (the default) the exit code is always `0` (or `2` on error),
+exactly as before this flag existed.
+
+## Alerting / CI gate
+
+The rollup is a report **and** a gate. `--fail-on {prc|drift|any|none}` makes it exit
+`3` when the fleet shows exposure, so cron / a CI job / a SIEM rule can alert on the
+exit code instead of a human reading the report:
+
+- `prc` — at least one PRC-origin finding (`origin` starts `PRC`).
+- `drift` — at least one off-allowlist finding (attributed or unattributed).
+- `any` — `prc` OR `drift`. `--fail-on-exposure` is a convenience alias for `--fail-on any`
+  (an explicit `--fail-on` wins if both are given).
+- `none` — never gate (default, backward-compatible).
+
+UNRESOLVED endpoints (aggregator / gateway-unresolved) are **never** exposure — they
+need an active probe and never trip the gate. `--fail-on` applies only with `--rollup`.
+
+Every run (even `--fail-on none`) emits a deterministic, greppable summary as the
+trailing line: `EXPOSURE: prc=<n> drift=<n> (fail-on=<mode> -> FAIL|ok)` on the
+console (no `-> ok/FAIL` when `none`), an `exposure` object
+`{prc, drift, unresolved, fail_on, matched, exit_code}` in JSON, and a trailing
+`# EXPOSURE: ...` comment line in CSV.
+
+**Cron (nightly), alert on shadow-AI exposure:**
+
+```sh
+provenance-probe fleet-scan --rollup /siem/fleet-merged.db --fail-on any \
+  || mail -s "shadow-AI exposure in fleet" ciso@example.com < /dev/null
+```
+
+**CI gate (fail the pipeline on any fleet drift):**
+
+```sh
+# exits non-zero (3) on exposure -> the step fails and blocks the pipeline
+provenance-probe fleet-scan --rollup fleet-rollup/ --fail-on any
+```
+
+Distinguish "found shadow AI" (`3`) from "the scan itself broke" (`2`) — never treat
+them the same in an alert rule.
 
 ## Back-compat
 
