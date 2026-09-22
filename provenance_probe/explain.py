@@ -20,65 +20,89 @@ from typing import NamedTuple
 
 
 class Layer(NamedTuple):
-    """One evidence layer, in plain language."""
-    title: str        # short, non-technical name
-    measures: str     # 1-2 plain sentences: what it looks at
-    hit_means: str    # what it means when this check "fires"
+    """One evidence layer, in plain language.
+
+    ``title`` is the short, TECHNICAL name shown on ``/help`` (a technical
+    reference page). ``flow_label`` is the friendly, jargon-free heading the
+    "how it works" FLOW shows instead — WS2's whole point is non-technical
+    legibility, so the flow never surfaces words like "tokenizer" or "wire".
+    ``flow_blurb`` optionally overrides ``measures`` in the flow when the /help
+    wording carries jargon (it defaults to ``measures``). Both flow fields live
+    HERE so the flow keeps a single source and never hardcodes copy elsewhere.
+    """
+    title: str            # short, TECHNICAL name — shown on /help
+    measures: str         # 1-2 plain sentences: what it looks at (/help + tooltips)
+    hit_means: str        # what it means when this check "fires"
+    flow_label: str = ""  # plain, jargon-free heading for the how-it-works flow
+    flow_blurb: str = ""  # optional jargon-free flow blurb (falls back to measures)
 
 
 # The engine's evidence layers, in the order `assess` runs them. This mapping is
-# the ONE place layer copy lives; /help and the report tooltips both read it.
+# the ONE place layer copy lives; /help, the report tooltips AND the how-it-works
+# flow all read it. /help shows `title`/`measures` (technical); the flow shows the
+# plain `flow_label` (+ `flow_blurb` where the /help wording carries jargon).
 LAYERS: "dict[str, Layer]" = {
     "network": Layer(
         "Network & location",
         "Looks up where the endpoint's address actually lives on the internet, "
         "and which company runs that server.",
-        "The service is hosted by a Chinese company or on servers inside China."),
+        "The service is hosted by a Chinese company or on servers inside China.",
+        flow_label="Where the servers really are (and who runs them)"),
     "wire": Layer(
         "Wire fingerprint",
         "Reads the technical 'envelope' around each reply — the response headers, "
         "error messages and streaming style — the way you'd recognise a company "
         "by its letterhead.",
         "The envelope matches a known Chinese provider, or the service names a "
-        "Chinese model."),
+        "Chinese model.",
+        flow_label="The delivery envelope around each reply (like a letterhead)"),
     "tokenizer": Layer(
         "Tokenizer fingerprint",
         "Watches how the model chops text into pieces before it reads it. Every "
         "model family does this in a slightly different, hard-to-fake way — like "
         "handwriting.",
-        "The 'handwriting' matches a Chinese-origin model family."),
+        "The 'handwriting' matches a Chinese-origin model family.",
+        flow_label="How it breaks text into pieces (like handwriting)"),
     "logprob": Layer(
         "Determinism check",
         "Sends the same prompt more than once and measures how repeatable and "
         "confident the answers are — a fingerprint of the engine doing the work.",
         "Adds supporting detail about which kind of engine is answering; on its "
-        "own it doesn't decide the model's origin."),
+        "own it doesn't decide the model's origin.",
+        flow_label="Whether it answers the same way twice",
+        flow_blurb="Sends the same prompt more than once and measures how "
+                   "repeatable and confident the answers are — a tell-tale "
+                   "signature of the engine doing the work."),
     "behavioral": Layer(
         "Behaviour tests",
         "Asks the model who it is, compares how it answers matched pairs of "
         "sensitive questions, and watches for Chinese characters slipping into "
         "English answers.",
-        "The model identifies as — or behaves like — a Chinese-trained model."),
+        "The model identifies as — or behaves like — a Chinese-trained model.",
+        flow_label="How it answers telltale questions"),
     "deception": Layer(
         "Honesty check",
         "Asks the model directly about who made it and where it runs, then checks "
         "those claims against the hard evidence — including a deliberately false "
         "control question to catch a model that just agrees with anything.",
         "The model's own claims contradict the evidence — it is misrepresenting "
-        "its origin or who runs it."),
+        "its origin or who runs it.",
+        flow_label="Whether its own story matches the evidence"),
     "latency": Layer(
         "Timing profile",
         "Times how quickly replies come back and the rhythm of the stream, which "
         "can hint at where the servers are and what is running.",
         "The timing fits the suspected backend or region — a supporting clue, "
-        "not proof on its own."),
+        "not proof on its own.",
+        flow_label="How fast and steady the replies come back"),
     "artifacts": Layer(
         "Files & app source",
         "When you point it at model files on disk, or at the app's own shipped "
         "code, it reads them for names, file paths and settings that reveal the "
         "model's family or the company operating it.",
         "The files name a Chinese model family, or a Chinese operator baked into "
-        "the app."),
+        "the app.",
+        flow_label="Clues left in its files and app code"),
 }
 
 # Layer names as they appear on real signals (report + scoring) can differ from
@@ -421,9 +445,16 @@ def _verdict_block(axis: Axis) -> str:
 
 def _flow_detail_pairs(detail: str) -> "tuple[tuple[str, str], ...]":
     """Resolve a stage's ``detail`` pointer to (label, blurb) pairs — pulled LIVE
-    from LAYERS / VERDICTS so the flow never carries its own copy of that wording."""
+    from LAYERS / VERDICTS so the flow never carries its own copy of that wording.
+
+    For "layers" the flow shows each layer's PLAIN ``flow_label`` (not the technical
+    ``title`` /help uses) and its ``flow_blurb`` (falling back to ``measures``), so a
+    non-technical reader never meets jargon like "tokenizer" or "wire fingerprint".
+    """
     if detail == "layers":
-        return tuple((info.title, info.measures) for info in LAYERS.values())
+        return tuple((info.flow_label or info.title,
+                      info.flow_blurb or info.measures)
+                     for info in LAYERS.values())
     if detail == "axes":
         return tuple((axis.title, axis.question) for axis in VERDICTS.values())
     return ()

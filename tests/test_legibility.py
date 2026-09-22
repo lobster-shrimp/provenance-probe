@@ -153,12 +153,46 @@ def test_flow_text_renders_every_stage_and_is_sourced_from_layers_and_axes():
     # Every stage title from the single source appears.
     for stage in explain.FLOW_STAGES:
         assert stage.title in txt, stage.title
-    # Stage that enumerates the layers pulls every LAYER title from the source.
+    # Stage that enumerates the layers pulls every LAYER's PLAIN flow label from
+    # the source (the flow is non-technical; the technical title stays on /help).
     for info in explain.LAYERS.values():
-        assert info.title in txt, info.title
+        assert info.flow_label in txt, info.flow_label
     # Stage that enumerates the axes pulls both axis questions from VERDICTS.
     for axis in explain.VERDICTS.values():
         assert axis.question in txt, axis.question
+
+
+# The flow is the non-technical surface: step 2 must never show a layer's TECHNICAL
+# name or the engineering jargon a newcomer wouldn't know (mirrors BANNED_JARGON,
+# plus the layer-name jargon the reviewer flagged).
+FLOW_BANNED_JARGON = ("tokenizer", "fingerprint", "wire", "log-odds", "logprob",
+                      "sigmoid", "vector", "entropy")
+
+
+@pytest.mark.unit
+def test_flow_uses_plain_layer_labels_not_technical_titles():
+    import html as _html
+    txt = explain.flow_text()
+    h = explain.flow_html()
+    for info in explain.LAYERS.values():
+        # A non-empty plain label distinct from the technical /help title.
+        assert info.flow_label, info.title
+        assert info.flow_label != info.title, info.title
+        assert info.flow_label in txt, info.flow_label
+        assert _html.escape(info.flow_label) in h, info.flow_label
+    # The two technical layer titles the reviewer flagged must NOT leak into the flow.
+    for technical in ("Tokenizer fingerprint", "Wire fingerprint"):
+        assert technical not in txt, technical
+        assert technical not in h, technical
+
+
+@pytest.mark.unit
+def test_flow_has_no_banned_technical_jargon():
+    txt = explain.flow_text().lower()
+    h = explain.flow_html().lower()
+    for term in FLOW_BANNED_JARGON:
+        assert term not in txt, f"jargon '{term}' leaked into flow_text(): {txt}"
+        assert term not in h, f"jargon '{term}' leaked into flow_html()"
 
 
 @pytest.mark.unit
@@ -181,10 +215,24 @@ def test_flow_html_is_accessible_static_markup():
 def test_flow_html_enumerates_layers_and_axes_from_the_single_source():
     import html as _html
     h = explain.flow_html()
+    # Step 2 shows each layer's PLAIN flow label (the technical title stays on /help).
     for info in explain.LAYERS.values():
-        assert _html.escape(info.title) in h, info.title
+        assert _html.escape(info.flow_label) in h, info.flow_label
     for axis in explain.VERDICTS.values():
         assert _html.escape(axis.question) in h, axis.question
+
+
+@pytest.mark.unit
+def test_help_layers_table_keeps_the_technical_titles():
+    # The plain flow labels must NOT bleed into /help: _layers_table (the technical
+    # reference) still renders the technical LAYERS titles verbatim, unchanged.
+    import html as _html
+    table = explain._layers_table()
+    for info in explain.LAYERS.values():
+        assert _html.escape(info.title) in table, info.title
+    # And the two flagged technical names are present on the /help table specifically.
+    for technical in ("Tokenizer fingerprint", "Wire fingerprint"):
+        assert technical in table, technical
 
 
 @pytest.mark.unit
@@ -219,8 +267,9 @@ def test_no_plain_answer_or_flow_copy_is_hardcoded_in_serve_or_cli():
         "the kind of model it claims",
         "under PRC jurisdiction (Chinese data law can apply)",
     ]
-    # ...plus every FLOW_STAGES stage title.
+    # ...plus every FLOW_STAGES stage title and every plain layer flow label.
     forbidden += [stage.title for stage in explain.FLOW_STAGES]
+    forbidden += [info.flow_label for info in explain.LAYERS.values()]
 
     for src, name in ((serve_src, "serve.py"), (cli_src, "cli.py")):
         for frag in forbidden:
