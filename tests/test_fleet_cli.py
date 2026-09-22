@@ -103,6 +103,27 @@ def test_redaction_collapses_home_path():
 
 
 @pytest.mark.unit
+def test_redact_source_covers_windows_midstring_and_root():
+    from provenance_probe.fleet.render import _redact_source
+    # anchored POSIX (regression): unchanged behavior
+    assert _redact_source("/Users/alice/.codex/config.toml") == "~/.codex/config.toml"
+    assert _redact_source("/home/bob/.config/x") == "~/.config/x"
+    # mid-string POSIX home path is redacted, not passed through verbatim
+    assert "/Users/" not in _redact_source("loaded from /Users/bob/.aws/creds")
+    assert "carol" not in _redact_source("C:\\Users\\carol\\.config\\x.toml")
+    # Windows drive-letter + UNC + backslash home forms
+    assert "\\Users\\" not in _redact_source("C:\\Users\\carol\\.config\\x.toml")
+    assert "C:\\Users" not in _redact_source("c:\\Users\\dave\\file")   # case-insensitive
+    assert "\\Users\\" not in _redact_source("\\\\srv\\Users\\erin\\file")
+    assert "\\home\\" not in _redact_source("D:\\home\\frank\\app.env")
+    # /root home
+    assert "/root/" not in _redact_source("/root/.config/agent.toml")
+    # a non-home path is left alone (no false collapse)
+    assert _redact_source("/homer/simpson/x") == "/homer/simpson/x"
+    assert _redact_source("env:OPENAI_BASE_URL") == "env:OPENAI_BASE_URL"
+
+
+@pytest.mark.unit
 def test_attribution_renders_as_sub_confirmed():
     a = E.Attribution(operator="DeepSeek", origin="PRC", confidence=0.99)
     f = E.Finding(source="~/.codex/config.toml", base_url="https://api.deepseek.com/v1",

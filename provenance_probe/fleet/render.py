@@ -17,8 +17,19 @@ from .evidence import (
     ScanResult,
 )
 
-# Collapse an absolute home path to ~/ so a username never leaks into a SIEM.
-_HOME_PATH_RE = re.compile(r"^(/Users/[^/]+|/home/[^/]+|/root)(?=/|$)")
+# Collapse a home-directory prefix to ~ so a username never leaks into a SIEM / the
+# rollup CSV. Matches ANYWHERE in the string (not just column-start) and covers both
+# POSIX and Windows forms, since a `source` can be a Windows path or embedded mid-line:
+#   * POSIX:   /Users/<user>, /home/<user>, /root
+#   * Windows: C:\Users\<user>, \\srv\Users\<user> (UNC), D:\home\<user>, \home\<user>
+# Case-insensitive on the segment names + drive letter; the trailing relative path is
+# kept so the finding stays useful. The leading separator is consumed by the match and
+# replaced by "~", yielding e.g. "~/.codex/config.toml" / "~\.config\x.toml".
+_HOME_PATH_RE = re.compile(
+    r"(?:[A-Za-z]:)?[\\/](?:Users|home)[\\/][^\\/]+"   # (drive)\Users\<user> or /home/<user>
+    r"|[\\/]root(?=[\\/]|$)",                          # POSIX /root home
+    re.IGNORECASE,
+)
 
 
 def _redact_source(source: str) -> str:
@@ -46,8 +57,14 @@ def _finding_json(f: Finding, redact: bool) -> dict:
     return d
 
 
-def to_json(result: ScanResult, redact: bool = True) -> dict:
-    return {
+def to_json(result: ScanResult, redact: bool = True, *,
+            machine: str | None = None, scanned_at: str | None = None) -> dict:
+    """Render a ScanResult as JSON.
+
+    `machine` + `scanned_at` are optional passthroughs (WS3): when a per-host JSON
+    report is written with them, a directory-of-JSON fleet rollup can carry each
+    file's machine id + freshness. The per-host output is otherwise unchanged."""
+    out = {
         "headline": result.headline,
         "sanctioned": result.sanctioned,
         "drifted": result.drifted,
@@ -55,6 +72,11 @@ def to_json(result: ScanResult, redact: bool = True) -> dict:
         "redacted": redact,
         "findings": [_finding_json(f, redact) for f in result.findings],
     }
+    if machine is not None:
+        out["machine"] = machine
+    if scanned_at is not None:
+        out["scanned_at"] = scanned_at
+    return out
 
 
 def _attr_line(f: Finding) -> str:
