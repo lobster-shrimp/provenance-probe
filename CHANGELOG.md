@@ -4,6 +4,44 @@
 > versions **independently** (released via `ext-v*` tags) — its history lives in
 > [`extension/CHANGELOG.md`](extension/CHANGELOG.md).
 
+## [0.40.0] — `build-service-catalog`: a signed-ready map of AI apps/websites/services (#131) (2026-09-22)
+
+**A SERVICE/provider catalog, sibling to the model catalog (`build-catalog`).** The
+probe already ships `build-catalog` -> a signed `catalog.json` mapping inference *APIs*
+to model cards. There was no equivalent *service* map: the consumer-facing AI apps and
+websites (ChatGPT, z.ai, DeepSeek chat, Perplexity, replit, …) classified by WHO operates
+them, WHOSE jurisdiction, and WHICH backend model(s) they front. This release adds that
+DATA GENERATOR. The observatory service-catalog page + `catalog.html` cross-link are a
+separate follow-up that consumes this JSON.
+
+- **New `provenance_probe/servicecatalog.py`** — pure, deterministic, **NO egress** (it
+  composes LOCAL data only and NEVER contacts a service; there is deliberately no fetch
+  entry point, unlike `catalog.py`). It merges three local sources into the locked
+  `service-catalog.json` schema, de-duplicated by host (highest-confidence / most-specific
+  row wins; `fronts` unioned; corpus is the tie-break authority for jurisdiction):
+  1. **corpus** — every `PRC_ENDPOINTS` host -> a service row (operator/jurisdiction/
+     confidence from the corpus value; `kind` by a host-shape heuristic); every
+     `AGGREGATOR_ENDPOINTS` host -> an aggregator row (jurisdiction=`aggregator`).
+  2. **clientsrc** — KNOWN prior live-scan findings shipped as curated `fronts` data with
+     `source:"clientsrc"` + a scan-date evidence note (z.ai->GLM; replit->deepseek/moonshot/
+     glm; hix->qwen/qvq/minimax; kimi.com->Moonshot; lindy->a PRC-origin model id). **Not
+     re-scanned** by the generator.
+  3. **curated** — a maintained, clearly-sourced list of MAJOR consumer AI apps (ChatGPT,
+     Gemini, Claude.ai, Copilot, character.ai [US first-party]; Perplexity, Poe [US
+     aggregators]; DeepSeek chat, Doubao, Tongyi/Qwen, Ernie, Tencent Yuanbao [PRC]).
+- **INVARIANT: `measured:false` on EVERY row** — each row is a static attribution POINTER,
+  never a measured runtime verdict (mirrors `catalog.py`). Run `assess`/`soak` for a
+  measured verdict. No unverified accusation; a neutral aggregator whose backend varies
+  gets `fronts=[]` + a "varies" note rather than a guess.
+- **New `build-service-catalog` CLI** — `--out service-catalog.json` (+ stdout by default
+  / `--json`), plus `--print service-catalog-sample` (emits the full deterministic catalog
+  as a ready-to-render seed for the observatory follow-up). Services are sorted by
+  jurisdiction, then name, then host, so the artifact is byte-identical across runs and
+  signable — the same signing-ready shape as `build-catalog` (the observatory signs it
+  nightly; this generator just emits JSON).
+- **No detection / corpus / scoring change.** Additive new module + command only.
+  Rollback = revert the PR.
+
 ## [0.39.0] — hard `watch` alert on a jurisdiction flip TO PRC (a SEPARATE axis) (2026-09-22)
 
 **Alert when a vendor's endpoint starts running under PRC jurisdiction (#129).** After

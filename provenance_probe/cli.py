@@ -730,6 +730,37 @@ def cmd_build_catalog(a):
     return 0
 
 
+def cmd_build_service_catalog(a):
+    """Build the SERVICE catalog: compose corpus endpoints + known clientsrc
+    findings + a curated consumer-app list into a signed-ready service map. Pure,
+    deterministic, NO egress (composes local data only — never contacts a service).
+    The observatory refreshes + signs it nightly; this generator just emits JSON."""
+    import json as _json
+    import os as _os
+    import sys as _sys
+
+    from . import servicecatalog as _sc
+    doc = _sc.build_service_catalog()
+    out = _json.dumps(doc, indent=2, sort_keys=False) + "\n"
+    if getattr(a, "print", None) == "service-catalog-sample":
+        # A ready-to-render seed for the observatory follow-up: the full, deterministic
+        # catalog on stdout (it is entirely local, so the whole doc IS the sample).
+        _sys.stdout.write(out)
+        return 0
+    if a.out:
+        with open(_os.path.expanduser(a.out), "w", encoding="utf-8") as fh:
+            fh.write(out)
+        jur: dict = {}
+        for s in doc["services"]:
+            jur[s["jurisdiction"]] = jur.get(s["jurisdiction"], 0) + 1
+        breakdown = ", ".join(f"{k}:{v}" for k, v in sorted(jur.items()))
+        print(f"wrote service catalog: {doc['service_count']} services "
+              f"({breakdown}) -> {a.out}", file=_sys.stderr)
+    else:
+        _sys.stdout.write(out)
+    return 0
+
+
 def _catalog_table(rows: list, limit: int) -> str:
     """Compact fixed-width table of catalog rows for the terminal."""
     cols = [("JURISDICTION", 14), ("PROVIDER", 20), ("MODEL", 26),
@@ -1159,6 +1190,18 @@ def main(argv=None):
                    help="models.dev api.json URL (default: https://models.dev/api.json)")
     s.add_argument("--input", help="read a local models.dev api.json instead of fetching (offline)")
     s.set_defaults(func=cmd_build_catalog)
+
+    s = sub.add_parser("build-service-catalog",
+                       help="build the SERVICE catalog: compose corpus endpoints + known "
+                            "clientsrc findings + a curated consumer-app list into a signed-ready "
+                            "service/provider map (pure, deterministic, no egress). Sibling to "
+                            "build-catalog (the observatory refreshes + signs it nightly)")
+    s.add_argument("--out", default="", help="write the service-catalog JSON here (default: stdout)")
+    s.add_argument("--json", action="store_true",
+                   help="emit the full service-catalog JSON to stdout (default when no --out)")
+    s.add_argument("--print", dest="print", choices=["service-catalog-sample"],
+                   help="print a ready-to-render seed (the full deterministic catalog) to stdout")
+    s.set_defaults(func=cmd_build_service_catalog)
 
     s = sub.add_parser("catalog",
                        help="search the LLM-API catalog offline: api url, models, model-card facts, "
