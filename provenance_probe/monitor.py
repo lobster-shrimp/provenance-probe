@@ -77,6 +77,35 @@ def _tokenizer_comparable(base: dict, cur: dict) -> bool:
 _WIRE_NOTE = " — provider/wire change, NOT a confirmed model switch."
 
 
+# The jurisdiction verdicts that mean "inference is under PRC operator/soil". A
+# crossing INTO one of these (from a non-positive base) is a jurisdiction shift —
+# a SEPARATE axis from the tokenizer/model-switch grade. Per WS1 (#114) these
+# verdicts require a HARD network/wire/client signal, so the crossing is
+# measurement-anchored and non-noisy. Do NOT fold this into ``drift_detected``.
+_PRC_POSITIVE = ("LIKELY", "CONFIRMED")
+
+
+def _jurisdiction_verdict(b: dict):
+    """The ``score.jurisdictional_risk.verdict`` string, or None if absent."""
+    return ((b.get("score") or {}).get("jurisdictional_risk") or {}).get("verdict")
+
+
+def prc_jurisdiction_shift(base: dict, cur: dict) -> bool:
+    """True iff the jurisdiction verdict CROSSED INTO positive-PRC.
+
+    Crossing == base verdict NOT in {LIKELY, CONFIRMED} AND cur verdict in
+    {LIKELY, CONFIRMED}. This is the flip TO PRC ONLY: a stable PRC verdict, a
+    PRC->non-PRC change, and a non-PRC->non-PRC change all return False. If either
+    bundle lacks a usable jurisdiction verdict (degraded / no score), returns False
+    — a crossing cannot be asserted, and no spurious alert is raised.
+    """
+    bv = _jurisdiction_verdict(base)
+    cv = _jurisdiction_verdict(cur)
+    if not bv or not cv:
+        return False
+    return bv not in _PRC_POSITIVE and cv in _PRC_POSITIVE
+
+
 def diff(base: dict, cur: dict) -> dict:
     """Compare a current assessment against a baseline. Detects silent swaps.
 
@@ -158,10 +187,28 @@ def diff(base: dict, cur: dict) -> dict:
             changes.append({"severity": "medium", "field": "latency",
                             "detail": json.dumps(d["signals"])})
 
-    # drift_detected == (a critical tokenizer-shape change exists). Nothing else.
+    # (3) The jurisdiction-shift axis (#129) — SEPARATE from the model-switch axis
+    #     (do NOT reconflate them; that was the #128 bug). A verdict crossing INTO
+    #     PRC (LIKELY/CONFIRMED) is a distinct, measurement-anchored event carried
+    #     by ``prc_jurisdiction_shift`` + a DISTINCT labeled change. It does NOT set
+    #     ``drift_detected`` and the change is graded ``high`` (never ``critical``)
+    #     so it can never be mistaken for a tokenizer/model switch by any consumer.
+    prc_shift = prc_jurisdiction_shift(base, cur)
+    if prc_shift:
+        bv, cv = _jurisdiction_verdict(base), _jurisdiction_verdict(cur)
+        changes.append({
+            "severity": "high", "field": "prc_jurisdiction_shift",
+            "detail": (f"Jurisdiction shifted to PRC operator/soil ({bv} -> {cv}) — "
+                       "inference now under PRC jurisdiction (not a model-weights switch)."),
+            "implication": "The SAME endpoint's inference is now under PRC jurisdiction — "
+                           "a jurisdiction shift, SEPARATE from a model/stack switch."})
+
+    # drift_detected == (a critical tokenizer-shape change exists). Nothing else —
+    # the jurisdiction shift is a distinct axis and never sets it.
     drift = any(c["severity"] == "critical" for c in changes)
     degraded = not comparable
     out = {"changes": changes, "drift_detected": drift,
+           "prc_jurisdiction_shift": prc_shift,
            "confidence": "degraded" if degraded else "full"}
     if degraded:
         out["confidence_note"] = (

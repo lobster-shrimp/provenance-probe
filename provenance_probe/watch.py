@@ -177,6 +177,19 @@ def jitter_seconds(interval: int, frac: float) -> float:
 
 
 # ------------------------------------------------------------- secret-safe alert ---
+def _alert_labels(diff_result: dict) -> list:
+    """The alert axes a diff fired, as distinct human labels. Two INDEPENDENT axes
+    (#128/#129): a tokenizer/model switch (``drift_detected``) and a jurisdiction
+    flip TO PRC (``prc_jurisdiction_shift``). Both can fire at once — each is
+    labeled separately so a jurisdiction shift is never read as a model switch."""
+    labels = []
+    if diff_result.get("drift_detected"):
+        labels.append("MODEL SWITCH")
+    if diff_result.get("prc_jurisdiction_shift"):
+        labels.append("PRC JURISDICTION SHIFT")
+    return labels
+
+
 def _redact(target: Target, msg: str) -> str:
     """Route any transport/error string through the target's credential redactor.
 
@@ -203,6 +216,11 @@ def switch_record(name: str, baseline_fp: Optional[str], current_fp: Optional[st
         "current_fp": current_fp,
         "changes": diff_result.get("changes", []),
         "confidence": diff_result.get("confidence"),
+        # The two INDEPENDENT alert axes (#128/#129), booleans built from the diff
+        # only — never any credential material — plus the human labels for each.
+        "drift_detected": bool(diff_result.get("drift_detected")),
+        "prc_jurisdiction_shift": bool(diff_result.get("prc_jurisdiction_shift")),
+        "alert_kinds": _alert_labels(diff_result),
     }
     if diff_result.get("confidence_note"):
         rec["confidence_note"] = diff_result["confidence_note"]
@@ -211,11 +229,16 @@ def switch_record(name: str, baseline_fp: Optional[str], current_fp: Optional[st
 
 def render_banner(name: str, baseline_fp: Optional[str], current_fp: Optional[str],
                   diff_result: dict) -> str:
-    """The loud multi-line stderr banner. Fingerprints + diff table only."""
+    """The loud multi-line stderr banner. Fingerprints + diff table only.
+
+    The headline names each axis that fired ("MODEL SWITCH" and/or "PRC
+    JURISDICTION SHIFT") so a jurisdiction flip is never read as a model switch.
+    """
     bar = "=" * 68
+    headline = " + ".join(_alert_labels(diff_result) or ["MODEL SWITCH"])
     lines = [
         bar,
-        "  !!  MODEL SWITCH DETECTED  !!",
+        f"  !!  {headline} DETECTED  !!",
         bar,
         f"  target      : {name}",
         f"  fingerprint : {baseline_fp} -> {current_fp}",
@@ -324,12 +347,18 @@ def check_target(target: Target, opts: assess.AssessOpts, *, pin: bool = False,
         return {"target": name, "status": "error", "drift": False,
                 "error": _redact(target, str(e))}
 
-    if not result["drift_detected"]:
+    # Two INDEPENDENT alert axes (#128/#129): a tokenizer/model switch and a
+    # jurisdiction flip TO PRC. EITHER fires a hard alert; both can fire at once.
+    model_switch = bool(result.get("drift_detected"))
+    jur_shift = bool(result.get("prc_jurisdiction_shift"))
+    if not (model_switch or jur_shift):
         if not quiet:
             out(f"[watch] {name}: no drift ({cur_fp})")
-        return {**decided, "status": "clean", "drift": False}
+        return {**decided, "status": "clean", "drift": False,
+                "prc_jurisdiction_shift": False}
 
-    # --- drift: raise the loud, secret-free alert (every sink best-effort) ---
+    # --- alert: raise the loud, secret-free banner (every sink best-effort) ---
+    labels = _alert_labels(result)
     rec = switch_record(name, base_fp, cur_fp, result)
     try:
         append_switch(name, rec)
@@ -337,10 +366,11 @@ def check_target(target: Target, opts: assess.AssessOpts, *, pin: bool = False,
         out(f"[watch] {name}: could not append switches.jsonl (non-fatal): {_redact(target, str(e))}")
     print(render_banner(name, base_fp, cur_fp, result), file=sys.stderr)
     desktop_notify(f"provenance-probe: {name}",
-                   f"MODEL SWITCH {(base_fp or '')[:12]} -> {(cur_fp or '')[:12]}")
+                   f"{' + '.join(labels)} {(base_fp or '')[:12]} -> {(cur_fp or '')[:12]}")
     if webhook:
         post_webhook(webhook, rec, target, log=out)
-    return {**decided, "status": "drift", "drift": True}
+    return {**decided, "status": "drift", "drift": True,
+            "prc_jurisdiction_shift": jur_shift, "alert_kinds": labels}
 
 
 # ------------------------------------------------------------------ run modes ---

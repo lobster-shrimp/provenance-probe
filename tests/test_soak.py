@@ -349,3 +349,37 @@ def test_models_hash_is_order_and_dupe_invariant():
     a = soak.models_hash(["m-b", "m-a", "m-a"])
     b = soak.models_hash(["m-a", "m-b"])
     assert a == b
+
+
+# --------------------------------------------------------------------------- #
+# #129: a jurisdiction flip TO PRC is its OWN soak event category
+# (PRC-JURISDICTION-SHIFT) — SEPARATE from a CONFIRMED model switch.
+# --------------------------------------------------------------------------- #
+def _jur_full_poll(fp: str, verdict: str, *, model: str = "m", ts: str = "t"):
+    b = _bundle(fp, model=model)
+    b["score"]["jurisdictional_risk"]["verdict"] = verdict
+    return soak.Poll(ok=True, ts=ts, model_id=model,
+                     models_hash=soak.models_hash(b["catalog"]["ids"]),
+                     fingerprint_id=fp, bundle=b)
+
+
+def test_soak_surfaces_prc_jurisdiction_shift_category(home):
+    st = soak.TargetSoak("jur")
+    # tokenizer/fingerprint CONSTANT ("FP"); only the jurisdiction verdict crosses
+    # INTO PRC -> a PRC-JURISDICTION-SHIFT, NOT a CONFIRMED model switch.
+    st.apply_full(_jur_full_poll("FP", "INDETERMINATE", ts="t0"))
+    emitted = st.apply_full(_jur_full_poll("FP", "CONFIRMED", ts="t1"))
+
+    grades = [e["grade"] for e in emitted]
+    assert "PRC-JURISDICTION-SHIFT" in grades
+    assert "CONFIRMED" not in grades              # tokenizer unchanged -> not a switch
+    js = next(e for e in emitted if e["grade"] == "PRC-JURISDICTION-SHIFT")
+    assert js["ts"] == "t1"
+    assert js["signal"] == "jurisdiction"
+
+    rep = st.report()
+    assert rep["prc_jurisdiction_shifts"] == 1
+    assert rep["confirmed_switches"] == 0
+    text = soak.summarize({"duration_s": 60, "interval_s": 30,
+                           "card_interval_s": 30, "targets": [rep]})
+    assert "PRC-JURISDICTION-SHIFT" in text

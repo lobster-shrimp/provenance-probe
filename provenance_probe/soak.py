@@ -269,6 +269,19 @@ class TargetSoak:
                 "changes": [c for c in diff_result.get("changes", []) if c.get("severity") == "critical"],
                 "confidence": diff_result.get("confidence")}
 
+    def _jurisdiction_shift(self, ts: str, diff_result: dict) -> dict:
+        """A jurisdiction flip TO PRC — its OWN category (#129), SEPARATE from a
+        CONFIRMED model switch. Built from the diff's distinct jurisdiction-shift
+        change (verdict transition) only; carries no secret material."""
+        jur = [c for c in diff_result.get("changes", [])
+               if c.get("field") == "prc_jurisdiction_shift"]
+        return {"ts": ts, "target": self.name, "grade": "PRC-JURISDICTION-SHIFT",
+                "signal": "jurisdiction", "changes": jur,
+                "confidence": diff_result.get("confidence"),
+                "note": "jurisdiction verdict crossed into PRC (LIKELY/CONFIRMED) — the "
+                        "endpoint's inference is now under PRC jurisdiction; SEPARATE "
+                        "from a model/stack switch (not a confirmed model switch)."}
+
     # --- apply a poll ---
     def apply_full(self, poll: Poll) -> list[dict]:
         """Apply a HARD poll. Emits an ADVISORY on a card change and a CONFIRMED on
@@ -283,6 +296,8 @@ class TargetSoak:
             result = monitor.diff(self._prev_bundle, poll.bundle)
             if _has_critical(result):
                 emitted.append(self._confirmed(poll.ts, self._prev_fp, poll.fingerprint_id, result))
+            if result.get("prc_jurisdiction_shift"):     # separate axis (#129)
+                emitted.append(self._jurisdiction_shift(poll.ts, result))
         self._timeline_record(poll.ts, poll.model_id, poll.models_hash, poll.fingerprint_id)
         self._prev_card = card
         self._prev_bundle = poll.bundle
@@ -320,6 +335,8 @@ class TargetSoak:
             "observations": self.observations,
             "confirmed_switches": sum(1 for s in self.switches if s["grade"] == "CONFIRMED"),
             "advisory_switches": sum(1 for s in self.switches if s["grade"] == "ADVISORY"),
+            "prc_jurisdiction_shifts": sum(1 for s in self.switches
+                                           if s["grade"] == "PRC-JURISDICTION-SHIFT"),
             "timeline": list(self.timeline),
             "transitions": list(self.switches),
             "gaps": list(self.gaps),
@@ -464,12 +481,18 @@ def summarize(report: dict) -> str:
     ]
     for tr in report.get("targets", []):
         gap = f", {len(tr['gaps'])} gap(s)" if tr.get("gaps") else ""
+        prc = tr.get("prc_jurisdiction_shifts", 0)
+        prc_txt = f" / {prc} PRC-JURISDICTION-SHIFT" if prc else ""
         lines.append(
             f"  {tr['name']}: {tr['cycles']} cycles, "
-            f"{tr['confirmed_switches']} CONFIRMED / {tr['advisory_switches']} ADVISORY switch(es){gap}")
+            f"{tr['confirmed_switches']} CONFIRMED / {tr['advisory_switches']} ADVISORY"
+            f"{prc_txt} switch(es){gap}")
         for s in tr.get("transitions", []):
             if s["grade"] == "CONFIRMED":
                 lines.append(f"    [{s['ts']}] CONFIRMED  fingerprint {s['from']} -> {s['to']}")
+            elif s["grade"] == "PRC-JURISDICTION-SHIFT":
+                det = (s.get("changes") or [{}])[0].get("detail", "jurisdiction crossed into PRC")
+                lines.append(f"    [{s['ts']}] PRC-JURISDICTION-SHIFT  {det}")
             else:
                 lines.append(
                     f"    [{s['ts']}] ADVISORY   model-card "

@@ -264,6 +264,102 @@ def test_baseline_seed_then_load_then_drift(monkeypatch):
 
 
 # =========================================================================== #
+# #129: the PRC-jurisdiction-shift axis — a HARD alert, SEPARATE from a model
+# switch. A jurisdiction verdict crossing INTO {LIKELY, CONFIRMED} with the
+# tokenizer UNCHANGED must exit 2, be labeled "PRC JURISDICTION SHIFT" (not
+# "MODEL SWITCH"), and stay secret-safe in every sink.
+# =========================================================================== #
+def _jur_bundle(verdict: str) -> dict:
+    vec = {"p1": 10, "p2": 12, "p3": 15, "p4": 11, "p5": 13, "p6": 14}
+    return {"fingerprint_id": "fp-A", "tokenizer": {"usable": True, "vector": vec},
+            "errors": {}, "headers": {}, "greedy": {}, "streaming": {},
+            "score": {"jurisdictional_risk": {"verdict": verdict}}}
+
+
+@pytest.mark.unit
+def test_jurisdiction_shift_exits_2_and_is_labeled_and_secret_safe(monkeypatch, capsys):
+    secret = "sk-SECRET-jur-42"
+    bundle = _jur_bundle("INDETERMINATE")
+    monkeypatch.setattr("provenance_probe.assess.assess_target",
+                        lambda t, o, **k: json.loads(json.dumps(bundle)))
+    tgt = _target(0, secret=secret)                  # carries Authorization: Bearer <secret>
+    opts = assess.AssessOpts()
+
+    assert watch.run_once([tgt], opts) == 0          # seed (non-PRC baseline)
+    bundle["score"]["jurisdictional_risk"]["verdict"] = "CONFIRMED"   # flip TO PRC
+    assert watch.run_once([tgt], opts) == 2          # jurisdiction shift alerts (exit 2)
+
+    err = capsys.readouterr().err
+    assert "PRC JURISDICTION SHIFT" in err           # labeled distinctly in the banner
+    assert "MODEL SWITCH DETECTED" not in err        # NOT a model switch
+
+    sw = os.path.join(watch.target_dir("mock-vendor"), "switches.jsonl")
+    txt = open(sw).read()
+    assert secret not in txt                          # secret-safe in switches.jsonl
+    rec = [json.loads(l) for l in open(sw)][-1]
+    assert rec["prc_jurisdiction_shift"] is True
+    assert rec["drift_detected"] is False             # tokenizer axis untouched
+    assert "PRC JURISDICTION SHIFT" in rec["alert_kinds"]
+    assert "MODEL SWITCH" not in rec["alert_kinds"]
+    for forbidden in ("api_key", "authorization", "cookie", "headers", "token"):
+        assert forbidden not in json.dumps(rec).lower()
+
+
+@pytest.mark.unit
+def test_jurisdiction_shift_webhook_is_secret_safe(monkeypatch):
+    secret = "sk-SECRET-jur-hook-99"
+    bundle = _jur_bundle("UNLIKELY")
+    monkeypatch.setattr("provenance_probe.assess.assess_target",
+                        lambda t, o, **k: json.loads(json.dumps(bundle)))
+    tgt = _target(0, secret=secret)
+    opts = assess.AssessOpts()
+    assert watch.run_once([tgt], opts) == 0          # seed
+
+    posts = []
+
+    class _Resp:
+        status_code = 200
+
+    def _fake_post(self, url, json=None, timeout=None):
+        posts.append(json)
+        return _Resp()
+
+    monkeypatch.setattr("requests.Session.post", _fake_post)
+    bundle["score"]["jurisdictional_risk"]["verdict"] = "LIKELY"      # flip TO PRC
+    assert watch.run_once([tgt], opts, webhook="http://example.invalid/hook") == 2
+    assert len(posts) == 1
+    body = posts[0]
+    assert body["prc_jurisdiction_shift"] is True
+    assert "PRC JURISDICTION SHIFT" in body["alert_kinds"]
+    assert secret not in json.dumps(body)
+
+
+@pytest.mark.unit
+def test_both_axes_at_once_are_labeled_separately(monkeypatch, capsys):
+    vec_a = {"p1": 10, "p2": 12, "p3": 15, "p4": 11, "p5": 13, "p6": 14}
+    vec_b = dict(vec_a); vec_b["p3"] = 99            # a genuine tokenizer-shape move
+    bundle = {"fingerprint_id": "fp-A", "tokenizer": {"usable": True, "vector": vec_a},
+              "errors": {}, "headers": {}, "greedy": {}, "streaming": {},
+              "score": {"jurisdictional_risk": {"verdict": "UNLIKELY"}}}
+    monkeypatch.setattr("provenance_probe.assess.assess_target",
+                        lambda t, o, **k: json.loads(json.dumps(bundle)))
+    tgt = Target(name="both", base_url="http://x/v1", model="m", authorized=True)
+    opts = assess.AssessOpts()
+    assert watch.run_once([tgt], opts) == 0          # seed
+
+    bundle["tokenizer"]["vector"] = vec_b            # axis 1: model switch
+    bundle["score"]["jurisdictional_risk"]["verdict"] = "CONFIRMED"   # axis 2: jur shift
+    assert watch.run_once([tgt], opts) == 2
+
+    err = capsys.readouterr().err
+    assert "MODEL SWITCH" in err and "PRC JURISDICTION SHIFT" in err
+    sw = os.path.join(watch.target_dir("both"), "switches.jsonl")
+    rec = [json.loads(l) for l in open(sw)][-1]
+    assert rec["drift_detected"] is True and rec["prc_jurisdiction_shift"] is True
+    assert set(rec["alert_kinds"]) == {"MODEL SWITCH", "PRC JURISDICTION SHIFT"}
+
+
+# =========================================================================== #
 # INTEGRATION (mock vendor)
 # =========================================================================== #
 @pytest.mark.unit
