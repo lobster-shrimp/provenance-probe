@@ -458,7 +458,12 @@ def build_report(rollup: Rollup) -> dict:
         if f.classification in _UNRESOLVED and f.host})
 
     machines_scanned = rollup.machines_scanned
-    total_for_holding = machines_scanned if machines_scanned is not None else len(rollup.machines)
+    # The holding split iterates ALL rollup.machines (holding+drifted+unresolved ==
+    # len(machines)); on a partial merged DB a machine can have findings but no
+    # fleet_scans row, so len(machines) > machines_scanned. Use the larger as the
+    # denominator so the fraction never reads "3/2".
+    total_for_holding = max(len(rollup.machines),
+                            machines_scanned if machines_scanned is not None else 0)
     prc_machine_count = len({m.machine for m, f in _all_findings(rollup) if _is_prc(f.origin)})
 
     return {

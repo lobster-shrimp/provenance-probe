@@ -17,8 +17,19 @@ from .evidence import (
     ScanResult,
 )
 
-# Collapse an absolute home path to ~/ so a username never leaks into a SIEM.
-_HOME_PATH_RE = re.compile(r"^(/Users/[^/]+|/home/[^/]+|/root)(?=/|$)")
+# Collapse a home-directory prefix to ~ so a username never leaks into a SIEM / the
+# rollup CSV. Matches ANYWHERE in the string (not just column-start) and covers both
+# POSIX and Windows forms, since a `source` can be a Windows path or embedded mid-line:
+#   * POSIX:   /Users/<user>, /home/<user>, /root
+#   * Windows: C:\Users\<user>, \\srv\Users\<user> (UNC), D:\home\<user>, \home\<user>
+# Case-insensitive on the segment names + drive letter; the trailing relative path is
+# kept so the finding stays useful. The leading separator is consumed by the match and
+# replaced by "~", yielding e.g. "~/.codex/config.toml" / "~\.config\x.toml".
+_HOME_PATH_RE = re.compile(
+    r"(?:[A-Za-z]:)?[\\/](?:Users|home)[\\/][^\\/]+"   # (drive)\Users\<user> or /home/<user>
+    r"|[\\/]root(?=[\\/]|$)",                          # POSIX /root home
+    re.IGNORECASE,
+)
 
 
 def _redact_source(source: str) -> str:

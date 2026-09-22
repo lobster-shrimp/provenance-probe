@@ -53,6 +53,18 @@ two axes, always labeled distinctly.
   to `~/…` (no `/Users/`, `/home/`, `\\Users\\` substring), and `base_url` is
   sanitized (userinfo/credentials + query stripped, scheme+host+path kept), since the
   report leaves the security team's control.
+- **`_redact_source` broadened (privacy-review MEDIUM)** — it was start-anchored and
+  POSIX-only, so a Windows source (`C:\\Users\\carol\\…`), a UNC/backslash home path,
+  or a home path embedded mid-string (`loaded from /Users/bob/…`) passed through
+  verbatim into the CSV `source` column. It now redacts a home-directory prefix
+  ANYWHERE in the string, covering POSIX (`/Users/<u>`, `/home/<u>`, `/root`) and
+  Windows (`<drive>:\\Users\\<u>`, `\\Users\\<u>`, `\\home\\<u>`, case-insensitive)
+  forms. The redaction test no longer passes vacuously (adds Windows + mid-string +
+  `/root` cases across CSV/JSON/console).
+- **Holding-fraction denominator (privacy-review LOW)** — on a partial merged DB where
+  a machine has findings but no `fleet_scans` row, the headline could read
+  "holding on N/M" with M < the machines actually classified; the denominator is now
+  `max(len(machines), machines_scanned)` so the fraction never exceeds 1.
 
 ## [0.34.1] — Plain-language layer labels in the how-it-works flow (2026-09-21)
 

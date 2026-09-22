@@ -345,13 +345,28 @@ def test_rollup_redaction_no_home_path_or_creds_all_formats(tmp_path):
     # a machine DB whose source was NOT redacted at write time (worst case)
     write_sqlite(_result([_prc_drift()]), str(d / "m.db"), redact=False,
                  machine="m", scanned_at="2026-09-21T00:00:00+00:00")
-    # and a JSON report carrying an absolute home path + creds in base_url
+    # and a JSON report carrying an absolute home path + creds in base_url, PLUS a
+    # Windows-backslash source, a mid-string POSIX source, and a /root source — the
+    # cases a start-anchored POSIX-only redactor leaks verbatim into the CSV.
     (d / "n.json").write_text(json.dumps({
-        "findings": [{"source": "/Users/alice/.codex/config.toml",
-                      "base_url": "https://user:pw@api.deepseek.com/v1?k=1",
-                      "host": "api.deepseek.com", "evidence_tier": "configured",
-                      "classification": "off-allowlist-attributed",
-                      "attribution": {"operator": "DeepSeek", "origin": "PRC"}}],
+        "findings": [
+            {"source": "/Users/alice/.codex/config.toml",
+             "base_url": "https://user:pw@api.deepseek.com/v1?k=1",
+             "host": "api.deepseek.com", "evidence_tier": "configured",
+             "classification": "off-allowlist-attributed",
+             "attribution": {"operator": "DeepSeek", "origin": "PRC"}},
+            {"source": "C:\\Users\\carol\\.config\\agent.toml",
+             "base_url": "https://api.moonshot.cn/v1", "host": "api.moonshot.cn",
+             "evidence_tier": "configured",
+             "classification": "off-allowlist-unattributed"},
+            {"source": "loaded from /Users/bob/.aws/credentials",
+             "base_url": "https://api.deepseek.com/v1", "host": "api.deepseek.com",
+             "evidence_tier": "configured",
+             "classification": "off-allowlist-unattributed"},
+            {"source": "/root/.config/agent.toml",
+             "base_url": "https://weird.example.com/v1", "host": "weird.example.com",
+             "evidence_tier": "configured",
+             "classification": "off-allowlist-unattributed"}],
         "machine": "n", "scanned_at": "2026-09-21T00:00:00+00:00"}))
     roll = R.load_rollup(str(d))
     for fmt in ("console", "json", "csv"):
@@ -359,6 +374,9 @@ def test_rollup_redaction_no_home_path_or_creds_all_formats(tmp_path):
         assert "/Users/" not in out, fmt
         assert "/home/" not in out, fmt
         assert "\\Users\\" not in out, fmt
+        assert "C:\\Users" not in out and "c:\\users" not in out.lower(), fmt
+        assert "/root/" not in out, fmt
+        assert "carol" not in out and "/bob/" not in out, fmt
         assert "user:pw@" not in out and "user:secret@" not in out, fmt
         assert "k=1" not in out and "token=abc" not in out, fmt
 
@@ -427,6 +445,35 @@ def test_rollup_freshness_stale_detection(tmp_path):
     rep = R.build_report(roll)
     assert rep["freshness"]["available"] is True
     assert rep["freshness"]["stale_machines"] == ["stale"]
+
+
+@pytest.mark.unit
+def test_rollup_holding_fraction_never_exceeds_total(tmp_path):
+    """Partial merged DB: a machine has findings but no fleet_scans row. The holding
+    split iterates all machines, so the denominator must be >= the split sum (never
+    'holding on 2/1')."""
+    db = str(tmp_path / "partial.db")
+    con = sqlite3.connect(db)
+    con.execute(f"CREATE TABLE {TABLE} (machine TEXT, scanned_at TEXT, host TEXT, "
+                "base_url TEXT, classification TEXT, evidence_tier TEXT, via_gateway "
+                "TEXT, operator TEXT, origin TEXT, confidence REAL, source TEXT)")
+    con.execute(f"INSERT INTO {TABLE} VALUES ('m1','2026-09-21T00:00:00+00:00',"
+                "'api.openai.com','https://api.openai.com/v1','sanctioned','configured',"
+                "'','','',NULL,'env')")
+    con.execute(f"INSERT INTO {TABLE} VALUES ('m2','2026-09-21T00:00:00+00:00',"
+                "'api.deepseek.com','https://api.deepseek.com/v1',"
+                "'off-allowlist-attributed','configured','','DeepSeek','PRC',0.99,'env')")
+    con.execute(f"CREATE TABLE {SCANS_TABLE} (machine TEXT, scanned_at TEXT)")
+    # only m1 has a scans row; m2 appears in findings only
+    con.execute(f"INSERT INTO {SCANS_TABLE} VALUES ('m1','2026-09-21T00:00:00+00:00')")
+    con.commit()
+    con.close()
+    rep = R.build_report(R.load_rollup(db))
+    hold = rep["allowlist_holding"]
+    total = hold["holding"] + hold["drifted"] + hold["unresolved"]
+    assert total == 2                        # both machines classified
+    # headline denominator is at least the split sum -> no "1/1"/"x/1" understatement
+    assert "holding on 1/2" in rep["headline"]
 
 
 @pytest.mark.unit
