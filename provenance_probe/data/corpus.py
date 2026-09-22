@@ -192,17 +192,72 @@ FIRST_PARTY_ENDPOINTS = {
 }
 
 # Model-name substrings implying Chinese-origin weights.
+#
+# This dict is SHARED: clientsrc greps it against arbitrary web/JS source, but
+# transcript / behavioral / wire / deception / scoring also match it against a
+# model's own self-identification ("I am GLM", "developed by MiniMax"). So a bare
+# brand word is a *wanted* self-id signal there — narrowing e.g. "glm"->"glm-"
+# would silence a legit self-id (a new false negative). We therefore keep the
+# distinctive brand words bare and only enumerate the two tokens that were pure
+# noise everywhere — no model self-ids as "step-1" and no wire payload names a
+# model "seed-123" (#123: bare `step-`/`seed-` FP'd `step-1` UI wizards and
+# `seed-123` random seeds on Western services: gemini.google.com, base44.com).
+#
+# clientsrc matches each key as `["'/\s:=-]<key>[a-z0-9._-]*` (leading delimiter
+# then key as a literal prefix); the step-/seed- keys below are chosen so real
+# ids match but bare `step-1/2`, `step-by-step`, `stepper`, `seed-123`, `seed=42`
+# do not. Every other key keeps a one-line rationale for staying as-is.
 PRC_MODEL_TOKENS = {
-    "qwen": "Qwen (Alibaba)", "qwq": "QwQ (Alibaba)", "qvq": "QVQ (Alibaba)",
-    "deepseek": "DeepSeek", "glm": "GLM (Zhipu)", "chatglm": "ChatGLM (Zhipu)",
-    "codegeex": "CodeGeeX (Zhipu)", "yi-": "Yi (01.AI)", "internlm": "InternLM",
-    "internvl": "InternVL", "minimax": "MiniMax", "abab": "MiniMax abab",
-    "hunyuan": "Tencent Hunyuan", "baichuan": "Baichuan", "ernie": "Baidu Ernie",
-    "kimi": "Moonshot Kimi", "moonshot": "Moonshot", "doubao": "ByteDance Doubao",
-    "skywork": "Skywork", "telechat": "TeleChat", "step-": "StepFun",
-    "sensechat": "SenseTime", "wenxin": "Baidu Wenxin", "marco-o1": "Marco-o1 (Alibaba)",
-    "minicpm": "MiniCPM (OpenBMB)", "cogvlm": "CogVLM (Zhipu)", "pangu": "Huawei PanGu",
-    "seed-": "ByteDance Seed", "hailuo": "MiniMax Hailuo",
+    "qwen": "Qwen (Alibaba)",           # distinctive; also a bare self-id word
+    "qwq": "QwQ (Alibaba)",             # kept bare: real self-id token (kaomoji risk is
+    "qvq": "QVQ (Alibaba)",             #   clientsrc-only; narrowing loses self-id)
+    "deepseek": "DeepSeek",             # distinctive; bare self-id word
+    "glm": "GLM (Zhipu)",               # kept bare: "I am GLM" self-id (see test_transcript);
+    "chatglm": "ChatGLM (Zhipu)",       #   glMatrix clientsrc FP not worth a self-id FN
+    "codegeex": "CodeGeeX (Zhipu)",     # distinctive
+    "yi-": "Yi (01.AI)",                # hyphen-bounded; "yi-<alnum>" is not a common token
+    "internlm": "InternLM",             # distinctive
+    "internvl": "InternVL",             # distinctive
+    "minimax": "MiniMax",               # kept bare: "developed by MiniMax" self-id word
+    "abab": "MiniMax abab",             # kept bare: real self-id token for MiniMax abab
+    "hunyuan": "Tencent Hunyuan",       # distinctive
+    "baichuan": "Baichuan",             # distinctive
+    "ernie": "Baidu Ernie",             # kept bare: "I am ERNIE" self-id word
+    "kimi": "Moonshot Kimi",            # kept bare: "I am Kimi" self-id word
+    "moonshot": "Moonshot",             # kept bare: "Moonshot AI" self-id word
+    "doubao": "ByteDance Doubao",       # distinctive (pinyin; no English collision)
+    "skywork": "Skywork",               # distinctive
+    "telechat": "TeleChat",             # distinctive
+    # StepFun — enumerate the real family/version prefixes so wizard/CSS `step-1`,
+    # `step-2`, `step-3-of-5`, `step-by-step`, `stepper` do NOT match (#123).
+    "step-1v": "StepFun",               # step-1v-8k / step-1v-32k (vision)
+    "step-1x": "StepFun",               # step-1x-medium (image gen/edit)
+    "step-1o": "StepFun",               # step-1o-turbo-vision / step-1o-vision-32k
+    "step-1-8k": "StepFun",             # step-1 text sizes (enumerated, not bare `step-1-`,
+    "step-1-32k": "StepFun",            #   which would hit a `step-1-of-N` wizard)
+    "step-1-128k": "StepFun",
+    "step-1-256k": "StepFun",
+    "step-2-16k": "StepFun",            # step-2 text (not bare `step-2-` -> `step-2-of-N`)
+    "step-2-mini": "StepFun",
+    "step-2x": "StepFun",               # step-2x-large (image)
+    "step-3.": "StepFun",               # step-3.5-flash / step-3.7-flash (dot, not `step-3-of-5`)
+    "step-r1": "StepFun",               # step-r1-v-mini (reasoning)
+    "sensechat": "SenseTime",           # distinctive
+    "wenxin": "Baidu Wenxin",           # distinctive
+    "marco-o1": "Marco-o1 (Alibaba)",   # distinctive
+    "minicpm": "MiniCPM (OpenBMB)",     # distinctive
+    "cogvlm": "CogVLM (Zhipu)",         # distinctive
+    "pangu": "Huawei PanGu",            # distinctive (rare word; no common web collision)
+    # ByteDance Seed — enumerate real families so `seed-123`, `seed=42`,
+    # `seed-value`, `seed-data`, `seed-42-abc` (random seeds) do NOT match (#123).
+    "seed-oss": "ByteDance Seed",       # seed-oss-36b-{base,instruct}
+    "seed-coder": "ByteDance Seed",     # seed-coder-{base,instruct,reasoning}
+    "seed-thinking": "ByteDance Seed",  # seed-thinking
+    "seed-1.": "ByteDance Seed",        # seed-1.5 / seed-1.6 (dot, not `seed-1` -> seed-123)
+    # note: bare "seed-x" is intentionally omitted — it collides with common
+    # strings like "seed-xml"/"seed-example"; the niche Seed-X translation model
+    # is an accepted, documented gap to keep the FP rate at zero.
+    "hailuo": "MiniMax Hailuo",         # distinctive
 }
 
 # Candidate reference models for local tokenizer fingerprinting.
@@ -246,7 +301,7 @@ SOURCE_GREP_PATTERNS = [
     r"volces\.com|moonshot\.(?:cn|ai)|minimaxi?\.(?:com|chat)|siliconflow\.(?:cn|com)|"
     r"baidubce\.com|tencentcloudapi\.com|lingyiwanwu\.com|stepfun\.com)[^\s\"\']*",
     r"\b(?:glm|chatglm|qwen|deepseek|yi-|internlm|baichuan|hunyuan|ernie|kimi|"
-    r"moonshot|doubao|minimax|abab|step-1)[a-z0-9._-]*\b",
+    r"moonshot|doubao|minimax|abab|stepfun)[a-z0-9._-]*\b",
     r"[\"\']model[\"\']\s*:\s*[\"\'][^\"\']+[\"\']",
     r"[\"\'](?:base_?url|api_?base|endpoint|baseURL)[\"\']\s*:\s*[\"\'][^\"\']+[\"\']",
     r"(?:sk-|Bearer\s+)[A-Za-z0-9_.-]{16,}",

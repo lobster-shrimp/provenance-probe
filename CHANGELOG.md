@@ -4,6 +4,36 @@
 > versions **independently** (released via `ext-v*` tags) — its history lives in
 > [`extension/CHANGELOG.md`](extension/CHANGELOG.md).
 
+## [0.36.1] — clientsrc: tighten over-broad `step-`/`seed-` CN model tokens (2026-09-22)
+
+**Accuracy fix for the client-source scan (#123).** `PRC_MODEL_TOKENS` mapped the
+bare prefixes `step-` -> StepFun and `seed-` -> ByteDance Seed. The `clientsrc`
+grep (`["'/\s:=-]<tok>[a-z0-9._-]*`) then fired `client_prc_model_id` HIGH findings
+on ubiquitous Western web/JS: `step-1`/`step-2` (UI wizards, steppers, CSS classes)
+and `seed-123`/`seed=42`/`seed-value` (random seeds). Proven live on
+`gemini.google.com` and `base44.com`, which were falsely read as "uses a StepFun /
+ByteDance-Seed (CN) model."
+
+- **Enumerated the real StepFun families** in place of bare `step-`: `step-1v`,
+  `step-1x`, `step-1o`, `step-1-{8k,32k,128k,256k}`, `step-2-16k`, `step-2-mini`,
+  `step-2x`, `step-3.` (matches `step-3.5-flash`/`step-3.7-flash`; not `step-3-of-5`),
+  `step-r1`. Real ids (`step-1v-8k`, `step-2-16k`, `step-1x-medium`, `step-r1-v-mini`)
+  still flag; `step-1`, `step-2`, `step-3-of-5`, `step-by-step`, `stepper` do not.
+- **Enumerated the real ByteDance-Seed families** in place of bare `seed-`:
+  `seed-oss`, `seed-coder`, `seed-thinking`, `seed-1.` (matches `seed-1.5`/`seed-1.6`;
+  not `seed-123`). `seed-42`, `seed-value`, `seed-data`, `seed-42-abc` no longer flag.
+  Bare `seed-x` intentionally omitted (collides with `seed-xml`/`seed-example`).
+- **`SOURCE_GREP_PATTERNS`:** the info-severity `client_string` grep now keys on the
+  distinctive vendor name `stepfun` instead of `step-1` (no misleading `step-1` echo).
+- **Audit note:** `PRC_MODEL_TOKENS` is shared with the transcript / behavioral / wire
+  self-id probes, where a *bare* brand word (`glm`, `minimax`, `kimi`, ...) is the wanted
+  self-identification signal. Those are deliberately kept bare (narrowing them would be a
+  new false negative); each carries a one-line rationale. Only `step-`/`seed-` — which no
+  model self-ids as — were enumerated. No scoring or detection-surface change otherwise.
+- **Tests:** +5 (`tests/test_clientsrc_prc_tokens.py`) covering the FP strings, real ids,
+  every pre-existing CN token, a stepper-heavy HTML blob, and the live gemini `step-1`
+  case. `pytest` green; hermetic eval GATE PASS (FP=0, FN=0).
+
 ## [0.36.0] — Fleet rollup exit gate: `--fail-on` / `--fail-on-exposure` (2026-09-22)
 
 **Pilot hardening for WS3 (#120).** The `fleet-scan --rollup` report (WS3, #119) only
