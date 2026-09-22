@@ -740,6 +740,41 @@ def cmd_init(a):
     print(f"Wrote example config -> {a.path}")
 
 
+_ROLLUP_QUICKSTART = """\
+# provenance-probe fleet-scan --rollup — one-command CISO posture report.
+#
+# You already deliver a per-machine scan (see `--print launchd|systemd|schtasks|
+# intune|tanium` and `--print osquery-atc`). Each scheduled scan writes a local
+# SQLite DB (--sqlite) carrying this machine's id + scan time. The rollup turns
+# those already-collected files into ONE report. It is pure and NO-EGRESS: it
+# only reads local files, never scans and never writes.
+#
+# 1) Per machine (already shipped) — schedule a scan that writes its DB:
+#      provenance-probe fleet-scan --allowlist allow.txt \\
+#          --sqlite ~/.provenance-probe/fleet/fleet.db
+#    (a clean machine still writes a `fleet_scans` row, so it is counted.)
+#
+# 2) Gather one file per machine into a directory (via your MDM/EDR pull, a
+#    SIEM export, or scp), naming each file for its machine:
+#      fleet-rollup/
+#        laptop-01.db
+#        laptop-02.db
+#        vdi-07.json        # a `fleet-scan --json --out ...` report also works
+#
+# 3) Roll it all up:
+#      provenance-probe fleet-scan --rollup fleet-rollup/            # console
+#      provenance-probe fleet-scan --rollup fleet-rollup/ --format csv > fleet.csv
+#      provenance-probe fleet-scan --rollup fleet-rollup/ --format json
+#
+#    Or point it at a single collector-merged DB (rows carry `machine`):
+#      provenance-probe fleet-scan --rollup /siem/fleet-merged.db
+#
+# Freshness threshold: --stale-days N (default 7). Exit 0 on any report incl.
+# empty; exit 2 on a missing/unreadable path, a corrupt DB, or a directory with
+# no usable files. See docs/fleet-rollup.md.
+"""
+
+
 def cmd_fleet_scan(a):
     """Read-only, no-egress fleet scan: find where local agent CLIs are pointed,
     resolve localhost gateways to their real upstream, classify against an
@@ -770,6 +805,9 @@ def cmd_fleet_scan(a):
                 print(f"fleet-scan: {e}", file=_sys.stderr)
                 return 3
             return 0
+        if a.print == "rollup-quickstart":
+            print(_ROLLUP_QUICKSTART, end="")
+            return 0
         from .fleet import schedule
         allow_abs = _os.path.abspath(_os.path.expanduser(a.allowlist)) if a.allowlist else ""
         sqlite_abs = _os.path.abspath(_os.path.expanduser(a.sqlite or schedule.DEFAULT_DB))
@@ -788,6 +826,20 @@ def cmd_fleet_scan(a):
                "intune": schedule.intune_script,
                "tanium": schedule.tanium_recipe}[a.print]
         print(gen(allow_abs, sqlite_abs, interval=interval))
+        return 0
+
+    # Fleet rollup: a pure, no-egress CISO posture report across many machines.
+    # Reads an already-collected SQLite DB / JSON report / directory; never scans,
+    # never writes, never touches the network.
+    if getattr(a, "rollup", None):
+        from .fleet import rollup as _rollup
+        fmt = a.format or ("json" if a.json else "console")
+        try:
+            roll = _rollup.load_rollup(a.rollup, stale_days=a.stale_days)
+        except _rollup.RollupError as e:
+            print(f"fleet-scan --rollup: {e}", file=_sys.stderr)
+            return 2
+        print(_rollup.render(roll, fmt))
         return 0
 
     if getattr(a, "rdap", False) and not getattr(a, "egress", False):
@@ -924,8 +976,18 @@ def cmd_fleet_scan(a):
     result = run_scan(allowlist_text, home="~")
     redact = not a.no_redact
 
+    # Stamp the report with this machine's id + scan time so a directory-of-JSON
+    # rollup can carry machine identity + freshness (WS3). Reuse one timestamp so
+    # the JSON report and the SQLite sink agree.
+    import socket as _socket
+
+    from .fleet.store import _now_iso
+    scan_machine = getattr(a, "machine_id", None) or _socket.gethostname()
+    scan_at = _now_iso()
+
     if a.json:
-        print(_json.dumps(to_json(result, redact=redact), indent=2))
+        print(_json.dumps(to_json(result, redact=redact, machine=scan_machine,
+                                  scanned_at=scan_at), indent=2))
     else:
         print(render_console(result, redact=redact))
 
@@ -935,7 +997,8 @@ def cmd_fleet_scan(a):
 
         from .fleet.store import write_sqlite
         try:
-            db = write_sqlite(result, a.sqlite, redact=redact)
+            db = write_sqlite(result, a.sqlite, redact=redact,
+                              machine=scan_machine, scanned_at=scan_at)
         except (OSError, _sqlite3.Error) as e:
             print(f"fleet-scan: could not write SQLite DB {a.sqlite}: {e}", file=_sys.stderr)
             return 1
@@ -948,7 +1011,8 @@ def cmd_fleet_scan(a):
         flags = _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC | getattr(_os, "O_NOFOLLOW", 0)
         fd = _os.open(out_path, flags, 0o600)
         with _os.fdopen(fd, "w", encoding="utf-8") as fh:
-            _json.dump(to_json(result, redact=redact), fh, indent=2)
+            _json.dump(to_json(result, redact=redact, machine=scan_machine,
+                               scanned_at=scan_at), fh, indent=2)
 
     if a.exit_code and result.drifted > 0:
         return 2
@@ -1226,7 +1290,20 @@ def main(argv=None):
                             "gateways to their real upstream, and report allowlist drift")
     s.add_argument("--allowlist", help="path to the operator allowlist (one host per line; "
                                        "# comments ok). Without it, everything reads as drift.")
-    s.add_argument("--json", action="store_true", help="emit the report as JSON")
+    s.add_argument("--json", action="store_true",
+                   help="emit the report as JSON (for --rollup, an alias for "
+                        "--format json)")
+    s.add_argument("--rollup", metavar="PATH",
+                   help="aggregate already-collected fleet data (a SQLite DB, a JSON "
+                        "report, or a directory of per-machine *.db/*.json files) into "
+                        "ONE CISO posture report. Pure, no-egress, never writes.")
+    s.add_argument("--format", choices=["console", "json", "csv"], default=None,
+                   help="output format for --rollup (default console)")
+    s.add_argument("--machine-id",
+                   help="override this machine's identifier written to the SQLite DB / "
+                        "JSON report (default: socket.gethostname())")
+    s.add_argument("--stale-days", type=int, default=7,
+                   help="freshness threshold for --rollup in days (default 7)")
     s.add_argument("--out", help="also write the JSON report to this path")
     s.add_argument("--no-redact", action="store_true",
                    help="keep full local detail (default redacts home paths / usernames for "
@@ -1237,11 +1314,13 @@ def main(argv=None):
                                     "(the table osquery reads via ATC)")
     s.add_argument("--print",
                    choices=["launchd", "systemd", "cron", "schtasks", "osquery-atc",
-                            "intune", "tanium", "allowlist-template", "ca-baseline"],
+                            "intune", "tanium", "allowlist-template", "ca-baseline",
+                            "rollup-quickstart"],
                    help="emit a config and exit: a scheduled-scan unit "
                         "(launchd/systemd/cron/schtasks), the osquery ATC config, an "
                         "Intune PowerShell deploy script, a Tanium recipe, a starter "
-                        "egress allowlist, or this host's trusted-root CA baseline")
+                        "egress allowlist, this host's trusted-root CA baseline, or the "
+                        "fleet-rollup quickstart runbook")
     s.add_argument("--trust-store", action="store_true",
                    help="B-phase: watch the system trust store for non-baseline root CAs "
                         "(a MITM gateway must install one). Needs --i-am-authorized.")

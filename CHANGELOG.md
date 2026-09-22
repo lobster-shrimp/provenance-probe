@@ -4,6 +4,56 @@
 > versions **independently** (released via `ext-v*` tags) — its history lives in
 > [`extension/CHANGELOG.md`](extension/CHANGELOG.md).
 
+## [0.35.0] — Fleet rollup: one CISO shadow-AI / PRC-exposure posture report (2026-09-21)
+
+**WS3, the enterprise pilot deliverable.** The fleet stack scanned and reported ONE
+machine at a time; a security team piloting this needs ONE report across the whole
+fleet — "of my N machines, which are reaching unsanctioned or PRC-origin AI
+endpoints, and which ones." `fleet-scan --rollup <path>` produces that report from
+already-collected data. It is **pure and no-egress**: it only reads local files
+(a SQLite DB, a JSON report, or a directory of per-machine `*.db`/`*.json` files),
+never scans, never writes, never touches the network. **No scoring/detection change;
+eval-gated (GATE PASS, FP=0).**
+
+Terminology is locked to resolve the endpoint-vs-machine ambiguity: **machine** = a
+scanned COMPUTER (what a CISO counts); **endpoint host** = the upstream AI hostname a
+machine reaches. The rollup COUNTS machines and GROUPS exposure by endpoint host —
+two axes, always labeled distinctly.
+
+### Added
+- **`provenance_probe/fleet/rollup.py` (NEW)** — pure aggregation + all three
+  renderers (console/json/csv). Produces the CISO headline; machine count; finding
+  classification totals AND the per-machine holding split (both labeled); PRC-origin
+  exposure (endpoint → named machines); a rogue-upstream table grouped by endpoint
+  host (rogue = ≥1 off-allowlist finding; aggregator/gateway-unresolved endpoints are
+  a separate UNRESOLVED line, never counted clean or drift); and freshness via
+  `scanned_at` (default stale threshold 7d, `--stale-days`). The `fleet_scans` table
+  is authoritative for the machine count + freshness; findings for exposures.
+- **`fleet-scan --rollup <path>`** with `--format console|json|csv` (default console;
+  `--json` is an alias for `--format json` on the rollup path), `--machine-id`, and
+  `--stale-days`. Exit 0 on any successful report (incl. empty); exit 2 on a
+  missing/unreadable path, a corrupt SQLite DB, or a directory with zero usable files.
+- **`fleet-scan --print rollup-quickstart`** — the one-command runbook; full docs in
+  **`docs/fleet-rollup.md` (NEW)**.
+
+### Changed (store, additive + back-compat)
+- **`fleet/store.py`** — `write_sqlite` now writes a `machine` + `scanned_at` (UTC
+  ISO) column per finding and a `fleet_scans(machine, scanned_at)` metadata table on
+  EVERY scan, **including a zero-finding scan**, so a clean machine is still counted.
+  `machine` defaults to `socket.gethostname()` (overridable via `--machine-id`). The
+  rollup reader introspects old DBs with `PRAGMA table_info` and degrades (machine
+  count "unknown", "freshness unavailable") rather than crashing. `write_sqlite` stays
+  per-machine-local; two machines never write the same DB.
+- **`fleet/render.py`** — `to_json()` gains optional `machine` + `scanned_at`
+  passthroughs so a directory-of-JSON rollup carries each file's machine id +
+  freshness; the per-host output is otherwise unchanged.
+
+### Privacy
+- Redaction holds in **every** rollup format (asserted): `source` home paths collapse
+  to `~/…` (no `/Users/`, `/home/`, `\\Users\\` substring), and `base_url` is
+  sanitized (userinfo/credentials + query stripped, scheme+host+path kept), since the
+  report leaves the security team's control.
+
 ## [0.34.1] — Plain-language layer labels in the how-it-works flow (2026-09-21)
 
 **WS2 follow-up (legibility LOW finding).** The how-it-works flow's step 2 listed

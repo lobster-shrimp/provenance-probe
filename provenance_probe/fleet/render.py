@@ -46,8 +46,14 @@ def _finding_json(f: Finding, redact: bool) -> dict:
     return d
 
 
-def to_json(result: ScanResult, redact: bool = True) -> dict:
-    return {
+def to_json(result: ScanResult, redact: bool = True, *,
+            machine: str | None = None, scanned_at: str | None = None) -> dict:
+    """Render a ScanResult as JSON.
+
+    `machine` + `scanned_at` are optional passthroughs (WS3): when a per-host JSON
+    report is written with them, a directory-of-JSON fleet rollup can carry each
+    file's machine id + freshness. The per-host output is otherwise unchanged."""
+    out = {
         "headline": result.headline,
         "sanctioned": result.sanctioned,
         "drifted": result.drifted,
@@ -55,6 +61,11 @@ def to_json(result: ScanResult, redact: bool = True) -> dict:
         "redacted": redact,
         "findings": [_finding_json(f, redact) for f in result.findings],
     }
+    if machine is not None:
+        out["machine"] = machine
+    if scanned_at is not None:
+        out["scanned_at"] = scanned_at
+    return out
 
 
 def _attr_line(f: Finding) -> str:
