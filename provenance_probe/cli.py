@@ -786,6 +786,16 @@ def cmd_fleet_scan(a):
     from .fleet import run_scan
     from .fleet.render import render_console, to_json
 
+    # --fail-on / --fail-on-exposure gate the rollup ONLY; using either without
+    # --rollup (e.g. with --print) is an argparse error (exit 2). Resolve the effective
+    # mode: an explicit --fail-on always wins; --fail-on-exposure is an alias for `any`.
+    _fail_on_explicit = getattr(a, "fail_on", None)
+    _fail_on_exposure = getattr(a, "fail_on_exposure", False)
+    if (_fail_on_explicit is not None or _fail_on_exposure) and not getattr(a, "rollup", None):
+        a._parser.error("--fail-on / --fail-on-exposure apply only with --rollup")
+    fail_on = _fail_on_explicit if _fail_on_explicit is not None else (
+        "any" if _fail_on_exposure else "none")
+
     # Delivery generators (emit a config and exit; no scan).
     if getattr(a, "print", None):
         if a.print == "allowlist-template":
@@ -835,12 +845,16 @@ def cmd_fleet_scan(a):
         from .fleet import rollup as _rollup
         fmt = a.format or ("json" if a.json else "console")
         try:
+            # Error (exit 2) OUTRANKS exposure: a load failure returns before any gate.
             roll = _rollup.load_rollup(a.rollup, stale_days=a.stale_days)
         except _rollup.RollupError as e:
             print(f"fleet-scan --rollup: {e}", file=_sys.stderr)
             return 2
-        print(_rollup.render(roll, fmt))
-        return 0
+        exp = _rollup.exposure_summary(roll, fail_on)
+        # The report body always prints in full — it is a report AND a gate; only the
+        # process exit code changes (3 = exposure matched, 0 = clean/no-match).
+        print(_rollup.render(roll, fmt, fail_on=fail_on))
+        return exp["exit_code"]
 
     if getattr(a, "rdap", False) and not getattr(a, "egress", False):
         print("fleet-scan: --rdap only applies with --egress (it resolves the upstream "
@@ -1304,6 +1318,15 @@ def main(argv=None):
                         "JSON report (default: socket.gethostname())")
     s.add_argument("--stale-days", type=int, default=7,
                    help="freshness threshold for --rollup in days (default 7)")
+    s.add_argument("--fail-on", choices=["prc", "drift", "any", "none"], default=None,
+                   help="with --rollup: exit 3 when the fleet shows exposure so cron/CI/"
+                        "SIEM can alert. prc = any PRC-origin finding; drift = any "
+                        "off-allowlist finding; any = prc OR drift; none = never gate "
+                        "(default, backward-compatible). Unresolved is never exposure; "
+                        "an error still exits 2 (outranks). Report body still prints.")
+    s.add_argument("--fail-on-exposure", action="store_true",
+                   help="convenience alias for --fail-on any (an explicit --fail-on "
+                        "wins if both are given)")
     s.add_argument("--out", help="also write the JSON report to this path")
     s.add_argument("--no-redact", action="store_true",
                    help="keep full local detail (default redacts home paths / usernames for "
@@ -1347,7 +1370,7 @@ def main(argv=None):
                    help="attest documented policy / privacy-review to read the trust store")
     s.add_argument("--interval", default="12h",
                    help="schedule interval for --print launchd/systemd/cron (default 12h)")
-    s.set_defaults(func=cmd_fleet_scan)
+    s.set_defaults(func=cmd_fleet_scan, _parser=s)
 
     s = sub.add_parser("explain",
                        help="print the plain-language how-it-works flow (no network)")

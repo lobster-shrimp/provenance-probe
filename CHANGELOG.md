@@ -4,6 +4,31 @@
 > versions **independently** (released via `ext-v*` tags) — its history lives in
 > [`extension/CHANGELOG.md`](extension/CHANGELOG.md).
 
+## [0.36.0] — Fleet rollup exit gate: `--fail-on` / `--fail-on-exposure` (2026-09-22)
+
+**Pilot hardening for WS3 (#120).** The `fleet-scan --rollup` report (WS3, #119) only
+printed a posture a human had to read. A security team piloting it asked for the
+actionable version: wire the rollup into cron / a CI gate / a SIEM rule so it **exits
+non-zero** when the fleet has shadow-AI exposure.
+
+- **`--fail-on {prc|drift|any|none}`** (default `none`, fully backward-compatible). `prc`
+  gates on any PRC-origin finding; `drift` on any off-allowlist finding; `any` on either;
+  `none` never gates. `--fail-on-exposure` is a convenience alias for `--fail-on any` (an
+  explicit `--fail-on` wins if both are given). Both apply only with `--rollup` (an
+  argparse error otherwise).
+- **Exit `3` = exposure matched** (new). `0` = clean / no-match and `2` = error are
+  unchanged; **error outranks exposure** (a corrupt DB with `--fail-on any` still exits
+  `2`), so cron/SIEM can tell "found shadow AI" from "the scan broke". The full report
+  still prints on exit `3`.
+- **Deterministic `EXPOSURE:` summary line**, always emitted (additive, even at `none`):
+  a trailing console line `EXPOSURE: prc=<n> drift=<n> (fail-on=<mode> -> FAIL|ok)`, a
+  JSON `exposure` object `{prc, drift, unresolved, fail_on, matched, exit_code}`, and a
+  trailing `# EXPOSURE: ...` CSV comment.
+- Counts are FINDING-level (a PRC-origin off-allowlist finding counts toward both `prc`
+  and `drift`); UNRESOLVED is never exposure. `docs/fleet-rollup.md` gains an
+  "Alerting / CI gate" section with the exit-code table, a cron example, and a CI-gate
+  example. **No scoring/detection change; eval-gated (GATE PASS, FP=0).**
+
 ## [0.35.0] — Fleet rollup: one CISO shadow-AI / PRC-exposure posture report (2026-09-21)
 
 **WS3, the enterprise pilot deliverable.** The fleet stack scanned and reported ONE
