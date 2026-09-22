@@ -3,6 +3,8 @@
 These lock the drift-detection contract the CLI, the web UI Monitor tab, and
 the observatory runner all depend on.
 """
+import pytest
+
 from provenance_probe import monitor
 
 
@@ -179,3 +181,83 @@ def test_degraded_reports_wire_change_but_does_not_confirm_drift():
 def test_degraded_if_only_one_side_suppressed():
     out = monitor.diff(_bundle(VEC), _no_tok(fp="fp-a"))
     assert out["confidence"] == "degraded"
+
+
+# --- #129 jurisdiction-shift axis: a flip TO PRC — SEPARATE from the -----------
+#     tokenizer/model-switch axis (do NOT reconflate; that was the #128 bug). ----
+
+def _jur(out):
+    return [c for c in out["changes"] if c["field"] == "prc_jurisdiction_shift"]
+
+
+@pytest.mark.parametrize("base_v,cur_v", [
+    ("INDETERMINATE", "CONFIRMED"),   # the edge the issue flags: SHOULD alert
+    ("INDETERMINATE", "LIKELY"),
+    ("UNLIKELY", "LIKELY"),
+    ("NO EVIDENCE", "CONFIRMED"),
+])
+def test_crossing_into_prc_sets_shift(base_v, cur_v):
+    # base NOT in {LIKELY, CONFIRMED} and cur IN {LIKELY, CONFIRMED} -> True, and a
+    # DISTINCT labeled change; the tokenizer/model-switch grade is UNTOUCHED.
+    out = monitor.diff(_bundle(VEC, jur=base_v), _bundle(VEC, jur=cur_v))
+    assert out["prc_jurisdiction_shift"] is True
+    j = _jur(out)
+    assert j, "a distinct prc_jurisdiction_shift change entry must be present"
+    assert "PRC" in j[0]["detail"].upper()
+    assert "not a model-weights switch" in j[0]["detail"].lower()
+    assert out["drift_detected"] is False          # jurisdiction axis != model-switch
+
+
+@pytest.mark.parametrize("base_v,cur_v", [
+    ("CONFIRMED", "CONFIRMED"),     # stable PRC
+    ("LIKELY", "LIKELY"),           # stable PRC
+    ("CONFIRMED", "UNLIKELY"),      # PRC -> non-PRC (cleared): NOT this alert
+    ("LIKELY", "NO EVIDENCE"),      # PRC -> non-PRC
+    ("UNLIKELY", "INDETERMINATE"),  # non-PRC -> non-PRC
+    ("NO EVIDENCE", "UNLIKELY"),    # non-PRC -> non-PRC
+])
+def test_non_crossing_does_not_set_shift(base_v, cur_v):
+    out = monitor.diff(_bundle(VEC, jur=base_v), _bundle(VEC, jur=cur_v))
+    assert out["prc_jurisdiction_shift"] is False
+    assert _jur(out) == []
+
+
+def test_degraded_or_missing_verdict_never_sets_shift():
+    # cur has no score -> can't assert a crossing.
+    base = _bundle(VEC, jur="UNLIKELY")
+    cur = _bundle(VEC, jur="CONFIRMED"); cur["score"] = {}
+    assert monitor.diff(base, cur)["prc_jurisdiction_shift"] is False
+    # base has no score -> can't assert a crossing.
+    base2 = _bundle(VEC); base2["score"] = {}
+    cur2 = _bundle(VEC, jur="CONFIRMED")
+    assert monitor.diff(base2, cur2)["prc_jurisdiction_shift"] is False
+
+
+def test_pure_model_switch_does_not_set_jurisdiction_shift():
+    # tokenizer moves, jurisdiction UNCHANGED -> drift True, shift False (axes stay
+    # separate; no #128-style reconflation).
+    shifted = dict(VEC); shifted["c"] = 99
+    out = monitor.diff(_bundle(VEC, jur="UNLIKELY"),
+                       _bundle(shifted, jur="UNLIKELY", fp="fp-b"))
+    assert out["drift_detected"] is True
+    assert out["prc_jurisdiction_shift"] is False
+
+
+def test_pure_jurisdiction_shift_does_not_set_drift():
+    # jurisdiction crosses into PRC, tokenizer UNCHANGED -> shift True, drift False.
+    out = monitor.diff(_bundle(VEC, jur="INDETERMINATE"), _bundle(VEC, jur="CONFIRMED"))
+    assert out["prc_jurisdiction_shift"] is True
+    assert out["drift_detected"] is False
+
+
+def test_both_axes_at_once_are_set_independently():
+    shifted = dict(VEC); shifted["c"] = 99
+    out = monitor.diff(_bundle(VEC, jur="UNLIKELY"),
+                       _bundle(shifted, jur="CONFIRMED", fp="fp-b"))
+    assert out["drift_detected"] is True
+    assert out["prc_jurisdiction_shift"] is True
+
+
+def test_identical_runs_have_shift_false():
+    out = monitor.diff(_bundle(VEC), dict(_bundle(VEC)))
+    assert out["prc_jurisdiction_shift"] is False

@@ -4,6 +4,43 @@
 > versions **independently** (released via `ext-v*` tags) — its history lives in
 > [`extension/CHANGELOG.md`](extension/CHANGELOG.md).
 
+## [0.39.0] — hard `watch` alert on a jurisdiction flip TO PRC (a SEPARATE axis) (2026-09-22)
+
+**Alert when a vendor's endpoint starts running under PRC jurisdiction (#129).** After
+#128 correctly scoped a CONFIRMED **model switch** to a tokenizer-shape change (and
+`drift_detected` fires only on that), a real gap remained: the SAME endpoint's inference
+moving under a PRC operator / PRC soil — its `jurisdictional_risk` verdict crossing into
+LIKELY/CONFIRMED with the tokenizer unchanged — was only a silent advisory in `watch`.
+That is an alert-worthy event. This release adds a hard alert for it as a **SEPARATE axis**
+from the model-switch axis (the two are never reconflated — that reconflation was the #128
+bug).
+
+- **`monitor.diff` emits a new additive `prc_jurisdiction_shift: bool`.** True iff the
+  jurisdiction verdict CROSSED INTO positive-PRC: base verdict **not** in {LIKELY,
+  CONFIRMED} **and** cur verdict in {LIKELY, CONFIRMED}. A stable PRC verdict, a
+  PRC→non-PRC change, and a non-PRC→non-PRC change all stay `False`; a missing/degraded
+  verdict on either side stays `False` (a crossing cannot be asserted — no spurious alert).
+  The INDETERMINATE→CONFIRMED case **does** alert. Verdicts are read from
+  `score.jurisdictional_risk.verdict`; per WS1 (#114) a LIKELY/CONFIRMED-PRC verdict
+  requires a HARD network/wire/client signal, so the crossing is measurement-anchored.
+- **A DISTINCT labeled `changes[]` entry** ("Jurisdiction shifted to PRC operator/soil …
+  not a model-weights switch") is added, graded `high` — **never** `critical` — so it can
+  never be mistaken for a tokenizer/model switch by any consumer. **`drift_detected` and
+  the tokenizer/model-switch grade are untouched** (still tokenizer-only).
+- **`watch` fires a HARD alert on `prc_jurisdiction_shift`** in addition to
+  `drift_detected`: exit-2 in `--once`, banner + `switches.jsonl` record + desktop notify +
+  webhook, **labeled distinctly** ("PRC JURISDICTION SHIFT" vs "MODEL SWITCH"). Both axes
+  at once → alert on both, labeled separately. The record carries `drift_detected`,
+  `prc_jurisdiction_shift`, and `alert_kinds`, built from the diff + verdicts ONLY — it
+  **carries `watch`'s no-secret-in-any-sink invariant** (no auth/cookie in any sink).
+- **`soak` surfaces a jurisdiction shift as its own timeline/summary category**
+  (`PRC-JURISDICTION-SHIFT`, alongside CONFIRMED/ADVISORY), reusing `prc_jurisdiction_shift`.
+- **Observatory: no change.** It consumes the unchanged `monitor.diff` output shape plus
+  the additive field; promoting a jurisdiction-shift advisory is a future follow-up.
+- **Additive & reversible.** `prc_jurisdiction_shift` is additive to `monitor.diff`'s
+  output (callers ignoring it are unaffected); no change to `drift_detected` /
+  model-switch behavior or the scoring/verdict path (WS1 untouched).
+
 ## [0.38.0] — grade a switch by the tokenizer shape, not the composite fingerprint (2026-09-22)
 
 **Stop false CONFIRMED switches on wire/error noise (#127).** The `soak` harness, the
