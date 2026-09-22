@@ -54,7 +54,9 @@ def test_shape_vector_empty():
 
 def _backend(vector: dict, error_sig: str = "sig-A") -> dict:
     return {
-        "tokenizer": {"vector": vector},
+        # a real measured tokenizer with a shape is usable — #127 gates the
+        # tokenizer (the switch authority) on the usable flag + a non-empty shape.
+        "tokenizer": {"vector": vector, "usable": True},
         "errors": {"error_signature": error_sig},
         "headers": {"header_shape_hash": "h1"},
         "greedy": {"signature": "g1"},

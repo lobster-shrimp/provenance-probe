@@ -6,17 +6,25 @@ the observatory runner all depend on.
 from provenance_probe import monitor
 
 
-def _bundle(vec, *, fp="fp-a", err="sig-1", jur="UNLIKELY", prov="NO EVIDENCE"):
+def _bundle(vec, *, fp="fp-a", err="sig-1", jur="UNLIKELY", prov="NO EVIDENCE",
+            header="h1", greedy="g1", streaming=("choices", "delta")):
     return {
         "fingerprint_id": fp,
         "tokenizer": {"vector": vec, "usable": True},
         "errors": {"error_signature": err},
+        "headers": {"header_shape_hash": header},
+        "greedy": {"signature": greedy},
+        "streaming": {"chunk_fields": list(streaming)},
         "score": {"jurisdictional_risk": {"verdict": jur},
                   "provenance_risk": {"verdict": prov}},
     }
 
 
 VEC = {"a": 10, "b": 12, "c": 15, "d": 11, "e": 13, "f": 14}
+
+
+def _has_critical(out):
+    return any(c["severity"] == "critical" for c in out["changes"])
 
 
 def test_identical_runs_no_drift():
@@ -26,11 +34,73 @@ def test_identical_runs_no_drift():
     assert out["changes"] == []
 
 
-def test_fingerprint_change_is_critical():
+def test_composite_fingerprint_change_alone_is_not_critical():
+    # #127: the composite fingerprint_id string moved but every real component
+    # (tokenizer shape, error, header, greedy, streaming) is identical. This must
+    # NOT be graded critical and must NOT set drift — the composite is only a pin.
     out = monitor.diff(_bundle(VEC, fp="fp-a"), _bundle(VEC, fp="fp-b"))
+    assert _has_critical(out) is False
+    assert out["drift_detected"] is False
+    assert out["changes"] == []
+
+
+# --- #127 grading matrix: only a tokenizer-shape move is a CONFIRMED switch ----
+
+def test_ollama_error_signature_only_is_not_confirmed():
+    # THE LIVE OLLAMA CASE: two probes of the same stable gemma4 — IDENTICAL
+    # tokenizer shape, DIFFERING error_signature (wire noise). Must NOT be a
+    # confirmed switch (was a false CONFIRMED before #127).
+    out = monitor.diff(_bundle(VEC, err="sig-1"), _bundle(VEC, err="sig-2", fp="fp-b"))
+    assert _has_critical(out) is False
+    assert out["drift_detected"] is False
+    err = [c for c in out["changes"] if c["field"] == "error_signature"]
+    assert err and err[0]["severity"] != "critical"
+    assert "not a confirmed model switch" in err[0]["detail"].lower()
+
+
+def test_header_shape_only_is_advisory_no_drift():
+    out = monitor.diff(_bundle(VEC, header="h1"), _bundle(VEC, header="h2", fp="fp-b"))
+    assert _has_critical(out) is False
+    assert out["drift_detected"] is False
+    assert any(c["field"] == "header_shape" and c["severity"] != "critical"
+               for c in out["changes"])
+
+
+def test_streaming_only_is_advisory_no_drift():
+    out = monitor.diff(_bundle(VEC, streaming=("choices", "delta")),
+                       _bundle(VEC, streaming=("choices",), fp="fp-b"))
+    assert _has_critical(out) is False
+    assert out["drift_detected"] is False
+    assert any(c["field"] == "streaming" and c["severity"] != "critical"
+               for c in out["changes"])
+
+
+def test_greedy_only_is_advisory_no_drift():
+    out = monitor.diff(_bundle(VEC, greedy="g1"), _bundle(VEC, greedy="g2", fp="fp-b"))
+    assert _has_critical(out) is False
+    assert out["drift_detected"] is False
+    gr = [c for c in out["changes"] if c["field"] == "greedy"]
+    assert gr and gr[0]["severity"] != "critical"
+    assert "same-tokenizer" in gr[0]["detail"].lower()
+
+
+def test_real_tokenizer_move_is_confirmed_even_when_error_also_moves():
+    # A genuine tokenizer-shape change -> critical + drift. Non-tokenizer
+    # advisories are STILL listed alongside (combined case).
+    shifted = dict(VEC); shifted["c"] = 99
+    out = monitor.diff(_bundle(VEC, err="sig-1"), _bundle(shifted, err="sig-2", fp="fp-b"))
     assert out["drift_detected"] is True
-    crit = [c for c in out["changes"] if c["field"] == "fingerprint_id"]
-    assert crit and crit[0]["severity"] == "critical"
+    tok = [c for c in out["changes"] if c["field"] == "tokenizer_vector"]
+    assert tok and tok[0]["severity"] == "critical"
+    assert any(c["field"] == "error_signature" for c in out["changes"])  # listed too
+
+
+def test_degraded_tokenizer_never_yields_critical():
+    # tokenizer unusable in one run + a wire change -> advisory, degraded, NO drift.
+    out = monitor.diff(_no_tok(err="s1"), _no_tok(err="s2", fp="fp-b"))
+    assert _has_critical(out) is False
+    assert out["drift_detected"] is False
+    assert out["confidence"] == "degraded"
 
 
 def test_tokenizer_shape_change_is_critical():
@@ -60,6 +130,8 @@ def test_error_schema_change_is_high():
     out = monitor.diff(_bundle(VEC, err="sig-1"), _bundle(VEC, err="sig-2"))
     assert any(c["field"] == "error_signature" and c["severity"] == "high"
                for c in out["changes"])
+    # #127: an error-schema move alone is a provider/wire change, not a switch.
+    assert out["drift_detected"] is False
 
 
 def test_fingerprint_stable_and_overhead_invariant():
@@ -94,11 +166,14 @@ def test_confidence_degraded_when_usage_suppressed():
     assert "not a clean bill" in out["confidence_note"]
 
 
-def test_degraded_still_detects_wire_drift():
-    # tokenizer gone, but error schema changed -> drift still flagged, degraded
+def test_degraded_reports_wire_change_but_does_not_confirm_drift():
+    # #127: tokenizer gone (not comparable) + error schema changed -> the change is
+    # REPORTED as an advisory and confidence is degraded, but a switch cannot be
+    # CONFIRMED from wire noise alone, so drift_detected stays False.
     out = monitor.diff(_no_tok(err="s1"), _no_tok(err="s2", fp="fp-b"))
-    assert out["drift_detected"] is True
+    assert out["drift_detected"] is False
     assert out["confidence"] == "degraded"
+    assert any(c["field"] == "error_signature" for c in out["changes"])
 
 
 def test_degraded_if_only_one_side_suppressed():

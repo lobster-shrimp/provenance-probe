@@ -17,6 +17,7 @@ Locks the contracts the issue's Testing Plan + "Locked semantics" call out:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -29,13 +30,20 @@ from provenance_probe.config import Target
 
 # --------------------------------------------------------------------------- #
 # helpers: build minimal assess-style bundles that monitor.diff understands.
-# fingerprint_id drives the CRITICAL (CONFIRMED) grade; echoed_model + catalog
-# drive the ADVISORY (card) grade.
+# #127: the CONFIRMED (critical) grade is driven by a tokenizer-SHAPE move, not
+# the composite fingerprint_id string — so derive a distinct tokenizer shape from
+# `fp` (distinct fp => distinct shape => critical; same fp => identical shape).
+# echoed_model + catalog drive the ADVISORY (card) grade.
 # --------------------------------------------------------------------------- #
+def _vec_for(fp: str) -> dict:
+    h = hashlib.sha256(fp.encode()).digest()
+    return {p: 10 + h[i] % 16 for i, p in enumerate("abcdefg")}
+
+
 def _bundle(fp: str, *, model: str = "gemini-pro", ids=None, err_sig: str = "E"):
     return {
         "fingerprint_id": fp,
-        "tokenizer": {"usable": True, "vector": {}},
+        "tokenizer": {"usable": True, "vector": _vec_for(fp)},
         "errors": {"error_signature": err_sig},
         "headers": {"status": 200, "echoed_model": model},
         "catalog": {"ids": ids if ids is not None else ["gemini-pro", "gemini-flash"]},

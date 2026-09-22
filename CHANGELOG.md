@@ -4,6 +4,44 @@
 > versions **independently** (released via `ext-v*` tags) — its history lives in
 > [`extension/CHANGELOG.md`](extension/CHANGELOG.md).
 
+## [0.38.0] — grade a switch by the tokenizer shape, not the composite fingerprint (2026-09-22)
+
+**Stop false CONFIRMED switches on wire/error noise (#127).** The `soak` harness, the
+`watch` daemon, the CLI `monitor` command, `serve`'s Monitor tab, and the observatory all
+decide "did the model switch?" through `monitor.diff`. `diff` used to grade a `critical`
+(CONFIRMED) switch on any change to the **composite** `fingerprint_id` — which folds
+`error_signature`, `header_shape_hash`, streaming `chunk_fields`, and the greedy signature
+in *alongside* the real model signal (the tokenizer shape). A stable local model (Ollama
+`gemma4`, which cannot have switched) tripped a **false CONFIRMED** in a live soak because
+its `error_signature` moved between two probes while the tokenizer shape was **identical**.
+
+- **The tokenizer shape is now the sole switch authority (WS1).** `monitor.diff` grades
+  `critical` **only** on a tokenizer-**shape** change (the overhead-invariant shape vector),
+  never merely because the composite `fingerprint_id` string moved. `fingerprint_id` stays
+  a fine identity pin/label; it is just no longer graded.
+- **`drift_detected` == (a critical tokenizer-shape change exists) — nothing else.** A
+  wire/error/greedy-only change is still **reported** in `changes[]` with its existing
+  non-critical severity (`error_signature` `high`; header / streaming / greedy `medium`),
+  each tagged "provider/wire change — NOT a confirmed model switch", but does **not** set
+  drift. So `watch` no longer exits 2, `soak` no longer records a CONFIRMED, the CLI
+  `monitor` no longer exits 2, and the observatory no longer promotes on CDN/error noise.
+- **Degraded tokenizer path.** The tokenizer shapes are comparable only when **both** runs
+  have a usable tokenizer (`usable` flag true **and** a non-empty shape vector). Otherwise a
+  switch cannot be confirmed: any change is graded advisory, `confidence="degraded"`, and no
+  false `critical` is emitted from wire noise. Both-unusable + nothing else = `changes=[]`,
+  `drift_detected=False`, `confidence="degraded"`.
+- **Real switches still fire.** A genuine tokenizer-shape move (DeepSeek/GLM/z.ai swaps,
+  the mid-session boundary check) is still `critical` + `drift_detected=True`; when a
+  critical tokenizer change is present, non-tokenizer advisories are listed alongside it.
+- **Accepted limitation (WS1-honest).** Identical tokenizer shapes do **not** prove the
+  model is unchanged — two models sharing a tokenizer (e.g. a finetune) look identical, so a
+  same-tokenizer swap yields at most an ADVISORY, never a CONFIRMED switch. This is correct
+  and intended: you can only CONFIRM a switch you can measure.
+- **Output shape unchanged** (`changes[]` / `drift_detected` / `confidence` /
+  `confidence_note`), so every caller and the observatory are compatible either way — only
+  the switch-grading accuracy changes. Live corroboration: an Ollama `gemma4` soak now
+  reports **0 CONFIRMED** switches (was 1); a synthetic tokenizer-shape move still CONFIRMED.
+
 ## [0.37.0] — `soak`: duration-bounded continuous model-switch soak test (2026-09-22)
 
 **A "soak test" for silent model swaps (#124).** The always-on `watch` daemon and the

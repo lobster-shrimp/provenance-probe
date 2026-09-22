@@ -179,7 +179,12 @@ def test_watch_escapes_all_dynamic_values(client):
 # --------------------------------------------------------------------------- #
 
 def _bundle(fp: str, err: str = "sig-1") -> dict:
-    vec = {"a": 10, "b": 12, "c": 15, "d": 11, "e": 13, "f": 14}
+    # #127: a switch is CONFIRMED by a tokenizer-SHAPE move, not the composite
+    # fingerprint_id string. Derive the shape from `fp` so a distinct fp is a
+    # distinct (critical) tokenizer shape, and an identical fp is identical.
+    import hashlib
+    h = hashlib.sha256(fp.encode()).digest()
+    vec = {p: 10 + h[i] % 16 for i, p in enumerate("abcdefg")}
     return {
         "target": {"name": "svc", "base_url": "https://api.vendor.example/v1",
                    "model": "m", "api_style": "openai"},
@@ -208,7 +213,9 @@ def test_monitor_flags_a_fingerprint_change(client, tmp_path, monkeypatch):
     assert r.status_code == 200
     d = r.get_json()
     assert d["drift_detected"] is True
-    assert any(c["field"] == "fingerprint_id" and c["severity"] == "critical"
+    # #127: the CONFIRMED grade comes from the tokenizer-shape move (the switch
+    # authority), not the composite fingerprint_id string.
+    assert any(c["field"] == "tokenizer_vector" and c["severity"] == "critical"
                for c in d["changes"])
     # The response gives the client exactly what the alert renders.
     assert d["baseline"]["fingerprint_id"] == "fp-a"
