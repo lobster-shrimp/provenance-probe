@@ -82,6 +82,27 @@ def hard_evidence(b: dict) -> tuple[Optional[str], str]:
     return None, ""
 
 
+def tokenizer_unusable_note(errors: "dict | None", model: str) -> str:
+    """Explain why the tokenizer layer is unusable, distinguishing a CONFIG/endpoint
+    error from a genuine usage-suppression transparency finding.
+
+    `errors` is `tokenizer.measure(...)["errors"]` — {probe_id: reason}, where a
+    non-2xx primary-probe status is recorded as "... (HTTP <status>)". A 4xx/5xx
+    (e.g. a 404 for a renamed model id or a wrong base_url/path) is a fixable
+    CONFIGURATION issue and must NOT be reported as the vendor suppressing usage;
+    only a 200-with-no-usage.prompt_tokens is the transparency finding.
+    """
+    http_err = any(("HTTP 4" in str(e) or "HTTP 5" in str(e))
+                   for e in (errors or {}).values())
+    if http_err:
+        return (f"primary probe failed — the endpoint returned an HTTP error "
+                f"(model '{model}' not found, or the base_url/path is wrong). "
+                f"Fix the model/base_url; this is a configuration issue, NOT a "
+                f"usage-suppression finding.")
+    return ("endpoint returned 200 without usage.prompt_tokens — "
+            "tokenizer layer unavailable (itself a transparency finding)")
+
+
 def assess_target(target: Target, opts: AssessOpts, *,
                   progress: Progress = None, note: Note = None,
                   client: Optional[Client] = None) -> dict:
@@ -135,8 +156,8 @@ def assess_target(target: Target, opts: AssessOpts, *,
         if b["tokenizer"]["usable"]:
             b["tokenizer_match"] = tokenizer.compare(b["tokenizer"], ref)
         else:
-            _n("        ! endpoint did not return usage.prompt_tokens — "
-               "tokenizer layer unavailable (itself a transparency finding)")
+            _n("        ! " + tokenizer_unusable_note(
+                b["tokenizer"].get("errors"), target.model))
 
     _p("logprob / determinism", 58)
     b["logprobs"] = logprob.logprob_signature(c)
