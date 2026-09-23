@@ -4,6 +4,16 @@
 > versions **independently** (released via `ext-v*` tags) — its history lives in
 > [`extension/CHANGELOG.md`](extension/CHANGELOG.md).
 
+## [0.40.1] — assess: distinguish a config/endpoint HTTP error from a usage-suppression finding (2026-09-23)
+
+- **Fix (`assess.py`):** when the tokenizer layer is unusable, a non-2xx primary-probe
+  status (e.g. a **404** for a renamed model id or a wrong `base_url`/path) is now
+  reported as an actionable **configuration issue** ("model 'X' not found … fix the
+  model/base_url"), not mislabeled as the vendor **suppressing usage** ("transparency
+  finding"). Only a 200-with-no-`usage.prompt_tokens` remains the transparency finding.
+  Surfaced by the live soak run (a stale `gemini-2.0-flash` id → 404). New pure helper
+  `assess.tokenizer_unusable_note()` + regression tests. No detection/scoring change.
+
 ## [0.40.0] — `build-service-catalog`: a signed-ready map of AI apps/websites/services (#131) (2026-09-22)
 
 **A SERVICE/provider catalog, sibling to the model catalog (`build-catalog`).** The
