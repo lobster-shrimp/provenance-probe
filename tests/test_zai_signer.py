@@ -1,11 +1,14 @@
 """z.ai request-signing adapter — the founding-case reactivation.
 
-The golden signatures below were recovered from z.ai's PUBLIC client bundle
-(functions ``ane`` + ``sne`` in index-*.js) and CROSS-VERIFIED against the real
-``js-sha256`` library the client uses (Node), including a multibyte-UTF-8 message.
-Python's stdlib HMAC-SHA256 reproduces js-sha256 byte-for-byte, so these vectors
-pin the recovered algorithm: a drift in the key, canonical string, window, or hash
-flips them.
+The golden signatures below pin the RECOVERED ALGORITHM (canonical string, 5-minute
+window, double HMAC-SHA256) — the method is public and verified byte-for-byte
+against the real ``js-sha256`` library (Node), including a multibyte-UTF-8 message.
+
+They are computed with a deliberately FAKE key (``FAKE_KEY`` below), NOT z.ai's real
+embedded key: this repo does not vendor that literal value. The operator recovers
+the real key from the current client bundle and passes it via
+``signer_config.secret_key`` (see docs/zai-reactivation.md). The signer has no
+embedded default and raises when the key is not configured.
 """
 import base64
 
@@ -17,7 +20,11 @@ from provenance_probe.client import Client
 from provenance_probe.config import Target
 
 
-# --- deterministic golden vectors (fixed timestamp/requestId -> expected token) --
+# A clearly-fake test key. NOT z.ai's real key (which this repo does not ship).
+FAKE_KEY = "TEST-KEY-DO-NOT-USE"
+
+
+# --- deterministic golden vectors (fixed timestamp/requestId + FAKE_KEY -> token) --
 
 # Vector A: ascii message, empty user_id.
 V_A = dict(
@@ -26,8 +33,8 @@ V_A = dict(
     request_id="46daabfa-1cdf-4000-8000-000000000000",
     user_id="",
     expect_b64="SGVsbG8=",
-    expect_derived="00a3bb31e434a6f9fa5f74366d775acc9c156bae0c6ef64d702c9dd252a56d54",
-    expect_signature="ca8c6d540569961a83bdcf1658a6f96e8796781330281e29015631506c831e66",
+    expect_derived="992db111a88286cb70a5d68672e2884d2147bcc19e093f6294c26baae54b5fcf",
+    expect_signature="445932babc488914f261537fdbc68ccc8bd3be7b9b32a657d450bf644db70348",
 )
 
 # Vector B: multibyte UTF-8 message + a non-empty user_id (proves UTF-8 base64
@@ -38,14 +45,8 @@ V_B = dict(
     request_id="322f2d5c-46a6-4111-8222-abcabcabcabc",
     user_id="user-42",
     expect_b64="5L2g5aW9LCB3b3JsZCDwn4yP",
-    expect_signature="d160c9593dbf42529233fa63c3feb63eff54f9a04b54f02283fe0aebaf476f8c",
+    expect_signature="68fa422a64d15ed16896f3e1c096068e8f89c4b8153b102ecb6eb95a0f8f1ba5",
 )
-
-
-def test_secret_key_recovered_verbatim():
-    # The constant embedded in the client JS (function sne). A change here means
-    # the bundle rotated the key and the adapter must be re-recovered.
-    assert zai.SECRET_KEY == "key-@@@@)))()((9))-xxxx&&&%%%%%"
 
 
 def test_sorted_payload_shape():
@@ -59,7 +60,8 @@ def test_compute_signature_vector_a():
     v = V_A
     assert base64.b64encode(v["message"].encode()).decode() == v["expect_b64"]
     sig = zai.compute_signature(message=v["message"], timestamp_ms=v["timestamp_ms"],
-                                request_id=v["request_id"], user_id=v["user_id"])
+                                request_id=v["request_id"], user_id=v["user_id"],
+                                secret_key=FAKE_KEY)
     assert sig == v["expect_signature"]
 
 
@@ -67,15 +69,27 @@ def test_compute_signature_vector_b_multibyte():
     v = V_B
     assert base64.b64encode(v["message"].encode()).decode() == v["expect_b64"]
     sig = zai.compute_signature(message=v["message"], timestamp_ms=v["timestamp_ms"],
-                                request_id=v["request_id"], user_id=v["user_id"])
+                                request_id=v["request_id"], user_id=v["user_id"],
+                                secret_key=FAKE_KEY)
     assert sig == v["expect_signature"]
+
+
+def test_missing_secret_key_raises():
+    # No embedded default: the operator must supply the key. Both the empty-string
+    # and the unset-in-config paths must raise a clear, actionable error.
+    with pytest.raises(ValueError, match="secret_key not configured"):
+        zai.compute_signature(message="x", timestamp_ms=1750000000000,
+                              request_id="r", user_id="u", secret_key="")
+    with pytest.raises(ValueError, match="secret_key not configured"):
+        zai.build_signed_request({"messages": [{"role": "user", "content": "x"}]},
+                                 {"timestamp_ms": 1750000000000, "request_id": "r"})
 
 
 def test_signature_is_deterministic():
     a = zai.compute_signature(message="x", timestamp_ms=1750000000000,
-                              request_id="r", user_id="u")
+                              request_id="r", user_id="u", secret_key=FAKE_KEY)
     b = zai.compute_signature(message="x", timestamp_ms=1750000000000,
-                              request_id="r", user_id="u")
+                              request_id="r", user_id="u", secret_key=FAKE_KEY)
     assert a == b
 
 
@@ -84,15 +98,15 @@ def test_signature_changes_with_window():
     # different signatures even for the same canonical identity/message.
     base = 1750000000000
     s1 = zai.compute_signature(message="x", timestamp_ms=base,
-                               request_id="r", user_id="u")
+                               request_id="r", user_id="u", secret_key=FAKE_KEY)
     s2 = zai.compute_signature(message="x", timestamp_ms=base + zai.WINDOW_MS,
-                               request_id="r", user_id="u")
+                               request_id="r", user_id="u", secret_key=FAKE_KEY)
     assert s1 != s2
 
 
-def test_secret_key_override_changes_signature():
+def test_secret_key_change_changes_signature():
     s = zai.compute_signature(message="x", timestamp_ms=1750000000000,
-                              request_id="r", user_id="u")
+                              request_id="r", user_id="u", secret_key=FAKE_KEY)
     s2 = zai.compute_signature(message="x", timestamp_ms=1750000000000,
                                request_id="r", user_id="u", secret_key="other")
     assert s != s2
@@ -119,7 +133,8 @@ def test_build_signed_request_pins_and_matches_vector():
     body = {"messages": [{"role": "user", "content": v["message"]}]}
     out = zai.build_signed_request(body, {"timestamp_ms": v["timestamp_ms"],
                                           "request_id": v["request_id"],
-                                          "user_id": v["user_id"]})
+                                          "user_id": v["user_id"],
+                                          "secret_key": FAKE_KEY})
     assert out["signature"] == v["expect_signature"]
     assert out["headers"]["X-Signature"] == v["expect_signature"]
     assert out["headers"]["X-FE-Version"] == zai.FE_VERSION
@@ -133,14 +148,15 @@ def test_build_signed_request_pins_and_matches_vector():
 def test_build_signed_request_merges_telemetry():
     out = zai.build_signed_request(
         {"messages": [{"role": "user", "content": "hi"}]},
-        {"timestamp_ms": 1750000000000, "request_id": "r",
+        {"timestamp_ms": 1750000000000, "request_id": "r", "secret_key": FAKE_KEY,
          "telemetry": {"platform": "web", "screen_width": 1920}})
     assert out["params"]["platform"] == "web"
     assert out["params"]["screen_width"] == "1920"        # stringified
 
 
 def test_build_signed_request_defaults_generate_uuid_requestid():
-    out = zai.build_signed_request({"messages": [{"role": "user", "content": "hi"}]})
+    out = zai.build_signed_request({"messages": [{"role": "user", "content": "hi"}]},
+                                   {"secret_key": FAKE_KEY})
     # a fresh uuid4 (36 chars with dashes) when not pinned
     assert len(out["request_id"]) == 36 and out["request_id"].count("-") == 4
 
@@ -173,7 +189,7 @@ def test_client_applies_signer_to_url_and_headers(monkeypatch):
                signer="zai",
                signer_config={"timestamp_ms": 1750000000000,
                               "request_id": "46daabfa-1cdf-4000-8000-000000000000",
-                              "user_id": ""})
+                              "user_id": "", "secret_key": FAKE_KEY})
     c = Client(t)
 
     def fake_post(url, headers=None, json=None, **kw):

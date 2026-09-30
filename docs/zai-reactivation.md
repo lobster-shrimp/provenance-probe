@@ -48,15 +48,41 @@ headers:
 
 Why this is recoverable (no server-issued secret):
 
-- `SECRET_KEY` is a **constant embedded in the client JS** —
-  `key-@@@@)))()((9))-xxxx&&&%%%%%` — not a server-issued value.
+- The signing key is a **constant embedded in the client JS** (in function `sne`),
+  not a server-issued value — anyone can read it from the public bundle. **This repo
+  deliberately does not ship that literal key.** You recover it yourself from the
+  current bundle (see "Recover the signing key" below) and pass it via
+  `signer_config.secret_key`. The signer has **no embedded default** and raises a
+  clear error if the key is not configured.
 - The hash is standard **HMAC-SHA256** (the client uses `js-sha256`'s
   `sha256.hmac(key, msg)`). The derived key (a 64-char hex string) is used as the
   **text** key of the second HMAC. Python's stdlib `hmac`+`hashlib.sha256`
   reproduce it **byte-for-byte** (cross-verified against the real `js-sha256`,
-  including a multibyte-UTF-8 message — see `tests/test_zai_signer.py`).
+  including a multibyte-UTF-8 message — see `tests/test_zai_signer.py`, which pins
+  the algorithm with a clearly-FAKE key, not z.ai's real one).
 - The signature covers **only** `requestId`/`timestamp`/`user_id` + the message
   text + timestamp — **not** the auth token and **not** the telemetry.
+
+### Recover the signing key (operator, read-only)
+
+The key is a short constant string used as the first argument of the HMAC call in
+the minified `sne` signer helper. Recover it from the current client bundle:
+
+```bash
+# 1. Find the main JS bundle referenced by the app shell.
+BUNDLE=$(curl -s https://chat.z.ai/ \
+  | grep -oE 'https://[^"]+/prod-fe-[^"]+/assets/index-[^"]+\.js' | head -1)
+
+# 2. Fetch it and locate the HMAC key constant near the signer helpers.
+#    It is the FIRST string argument of the inner `.hmac("<KEY>", ""+<window>)`
+#    call (the one whose second arg is the floor(timestamp/300000) bucket).
+curl -s "$BUNDLE" | grep -oE '\.hmac\("[^"]+",""\+[a-zA-Z0-9_$]+\)' | head
+```
+
+The quoted string in that match is the key. Pass it as `signer_config.secret_key`.
+If the grep returns nothing, the bundle changed — re-inspect the `sne`/`ane` helpers
+(search the bundle for `signature_timestamp` and read outward) and, if the algorithm
+itself changed, update `provenance_probe/signers/zai.py` accordingly.
 
 ---
 
@@ -91,13 +117,20 @@ Why this is recoverable (no server-issued secret):
      "stream_delta_path": "choices.0.delta.content",
      "response_text_path": "choices.0.message.content",
      "signer": "zai",
-     "signer_config": { "user_id": "<your-session-user-id>" },
+     "signer_config": {
+       "user_id": "<your-session-user-id>",
+       "secret_key": "<key recovered from the client bundle — see above>"
+     },
      "authorized": true,
      "notes": "Founding case (MPA-2026-001). Signed v2 API. Set authorized=true only with authorization."
    }
    ```
 
-   Then set the credential(s) in the environment (never in the file):
+   `signer_config.secret_key` is **required** (recovered per "Recover the signing
+   key" above); the signer raises if it is missing. Note it is a client-side
+   constant, not a personal secret — but it is kept out of this repo and supplied by
+   you so the repo never vendors z.ai's literal key. Then set the session
+   credential(s) in the environment (never in the file):
 
    ```bash
    export ZAI_COOKIE='<fresh cookie header from your browser session>'
@@ -111,16 +144,17 @@ Why this is recoverable (no server-issued secret):
    every request, appends `…&signature_timestamp=<ts>` to the URL, and sets the
    `X-Signature` / `X-FE-Version` headers. `signer_config` also accepts:
    - `fe_version` — override `X-FE-Version` when the bundle rev changes.
-   - `secret_key` — override the embedded key if it rotates.
    - `telemetry` — a dict of the browser-fingerprint query fields, if the server
      starts requiring them (they are sent but **not** signed).
+   - `secret_key` — **required** (above); re-recover and update it if z.ai rotates
+     the key.
 
 ---
 
 ## Honest caveats — this is fragile
 
 - **Per-app adapter.** It reproduces one app's private signing scheme. It **breaks**
-  the moment z.ai rotates `SECRET_KEY`, changes the canonical string, the 5-minute
+  the moment z.ai rotates the signing key, changes the canonical string, the 5-minute
   window, the hash, or the `X-FE-Version` gate. When active probing starts 404ing,
   **re-recover** the scheme from the then-current client bundle and update
   `signers/zai.py` (the golden vectors in `tests/test_zai_signer.py` will flag a
