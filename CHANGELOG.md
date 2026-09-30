@@ -4,6 +4,43 @@
 > versions **independently** (released via `ext-v*` tags) — its history lives in
 > [`extension/CHANGELOG.md`](extension/CHANGELOG.md).
 
+## [0.41.0] — z.ai request-signing adapter: reactivate the founding case (2026-09-30)
+
+**Reactivates active fingerprinting of z.ai (the founding case, advisory MPA-2026-001).**
+z.ai went dark when it moved chat to a **signed, per-request API** —
+`POST /api/v2/chat/completions` gated by an `X-Signature` header + a time-bound
+query string; the gateway 404s any request without a fresh, valid signature, so a
+captured URL can't be replayed and a static template can't precompute it. This
+release recovers the signing scheme from the **public client JS** (read-only) and
+ships a signer so the probe can sign requests itself.
+
+- **New `provenance_probe/signers/` package** — a per-request signer framework for
+  web apps that gate on a signed, time-bound query string / header. `get_signer(name)`
+  resolves a signer; unknown names fail the request cleanly (never sent unsigned).
+- **New `provenance_probe/signers/zai.py`** — pure, deterministic z.ai signer.
+  Recovered algorithm (from the minified `ane`+`sne` client helpers):
+  `canonical = "requestId,<id>,timestamp,<ts>,user_id,<uid>" + "|" + base64(utf8(message)) + "|" + ts`;
+  `derived = HMAC_SHA256(SECRET_KEY, floor(ts/300000))`;
+  `signature = HMAC_SHA256(derived, canonical)` (both hex, `js-sha256` semantics).
+  `SECRET_KEY` is a **constant embedded in the client JS** (no server-issued secret).
+  Python's stdlib HMAC-SHA256 reproduces `js-sha256` **byte-for-byte**, cross-verified
+  against the real library incl. a multibyte-UTF-8 message.
+- **Transport wiring (`config.py` / `client.py`):** `Target` gains optional
+  `signer` + `signer_config`. When set (with `api_style="template"`), `Client.chat`
+  runs the signer per request — appending its query params (`timestamp`, `requestId`,
+  `user_id`, `signature_timestamp`, optional telemetry) to the URL and merging its
+  headers (`X-Signature`, `X-FE-Version`). Empty `signer` → verbatim replay, unchanged.
+- **Tests (`tests/test_zai_signer.py`, 26 cases):** deterministic golden vectors
+  (fixed timestamp/requestId → expected token), UTF-8 parity, window sensitivity,
+  key-override, message extraction, and transport integration (monkeypatched session,
+  no egress) asserting the signed URL + `X-Signature` header.
+- **Docs (`docs/zai-reactivation.md`):** the recovered algorithm writeup + operator
+  runbook to re-enable the observatory target (fresh `ZAI_COOKIE`, `authorized:true`,
+  the `signer`/`signer_config`), with the honest caveat that it is a **fragile per-app
+  adapter** that breaks if z.ai changes its signing.
+- **No secret shipped; no live probing performed.** Reverse-engineering was read-only
+  (public JS only); the operator supplies a fresh session credential to go live.
+
 ## [0.40.1] — assess: distinguish a config/endpoint HTTP error from a usage-suppression finding (2026-09-23)
 
 - **Fix (`assess.py`):** when the tokenizer layer is unusable, a non-2xx primary-probe

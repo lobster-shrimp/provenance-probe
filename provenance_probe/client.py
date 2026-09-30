@@ -219,6 +219,30 @@ class Client:
         p.update(extra or {})
         return p
 
+    def _apply_signer(self, url: str, payload: dict) -> tuple[str, dict, str | None]:
+        """If the target names a per-request signer, compute its query params +
+        headers over this request and fold them into (url, headers). Returns
+        (url, headers, error). ``error`` is set for an unknown signer name so the
+        caller can fail the request cleanly instead of silently sending unsigned."""
+        headers = self.t.headers()
+        name = getattr(self.t, "signer", "")
+        if not name:
+            return url, headers, None
+        from .signers import get_signer
+        fn = get_signer(name)
+        if fn is None:
+            return url, headers, f"unknown signer '{name}'"
+        try:
+            signed = fn(payload, getattr(self.t, "signer_config", {}) or {})
+        except Exception as e:                       # a signer bug must not leak internals
+            return url, headers, self._safe_err(f"signer '{name}' failed: {e}")
+        from urllib.parse import urlencode
+        qs = urlencode(signed.get("params", {}))
+        if qs:
+            url = url + ("&" if "?" in url else "?") + qs
+        headers = {**headers, **(signed.get("headers", {}) or {})}
+        return url, headers, None
+
     def chat(self, prompt: str, *, max_tokens: int = 1, temperature: float = 0.0,
              system: str | None = None, logprobs: bool = False,
              extra: dict | None = None, stream: bool = False) -> Response:
@@ -226,6 +250,9 @@ class Client:
         url = t.url(t.chat_path)
         payload = self._payload(prompt, max_tokens, temperature, system, logprobs, extra or {})
         paths = self._paths()
+        url, req_headers, sign_err = self._apply_signer(url, payload)
+        if sign_err:
+            return Response(0, {}, None, "", None, 0.0, err=sign_err, paths=paths)
         # Web-app template endpoints may stream Server-Sent Events; accumulate
         # the per-chunk text delta so the behavioral layers get the full reply.
         stream_mode = getattr(t, "stream_mode", "none")
@@ -238,7 +265,7 @@ class Client:
         start = time.perf_counter()
         ttft = None
         try:
-            r = self.s.post(url, headers=t.headers(), json=payload,
+            r = self.s.post(url, headers=req_headers, json=payload,
                             timeout=t.timeout, verify=t.verify_tls, stream=sse)
             if sse:
                 chunks, delta_text, total = [], [], 0
@@ -282,7 +309,9 @@ class Client:
             if (r.status_code == 400 and isinstance(payload, dict)
                     and "temperature" in payload and "temperature" in raw.lower()):
                 retry = {k: v for k, v in payload.items() if k != "temperature"}
-                r = self.s.post(url, headers=t.headers(), json=retry,
+                # Reuse the signed url/headers: the signature covers the message
+                # text (unchanged by dropping temperature), so it stays valid.
+                r = self.s.post(url, headers=req_headers, json=retry,
                                 timeout=t.timeout, verify=t.verify_tls)
                 raw = r.text
             ttft = time.perf_counter() - start
