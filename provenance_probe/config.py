@@ -50,6 +50,13 @@ class Target:
     response_model_path: str = ""           # where the echoed model id lives (if any)
     stream_mode: str = "none"               # none | sse
     stream_delta_path: str = ""             # per-chunk text delta path for SSE accumulation
+    # Per-request signer for web apps that gate on a signed, time-bound query
+    # string / header (e.g. z.ai). Names a signer in provenance_probe.signers;
+    # signer_config carries signer-specific inputs (e.g. user_id). The signer runs
+    # on every chat() request, appending its query params to the URL and merging
+    # its headers. Empty -> no signing (verbatim template replay, unchanged).
+    signer: str = ""                        # "" | "zai"
+    signer_config: dict = field(default_factory=dict)
     timeout: float = 60.0
     verify_tls: bool = True
     proxy: str = ""                     # route through your inspecting proxy
