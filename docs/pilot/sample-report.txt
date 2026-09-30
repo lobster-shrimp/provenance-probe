@@ -1,0 +1,41 @@
+# provenance-probe fleet-scan --rollup — SAMPLE CISO POSTURE REPORT
+# =================================================================
+# SYNTHETIC DEMO DATA. Every machine id, endpoint, and finding below is INVENTED
+# for illustration — this is NOT an observation of any real fleet, user, or
+# traffic. It shows the exact shape of the report a pilot produces.
+#
+# Regenerate this verbatim (captured on provenance-probe v0.40.1):
+#
+#     python3 docs/pilot/make-sample-fixture.py /tmp/pilot-fixture
+#     provenance-probe fleet-scan --rollup /tmp/pilot-fixture --fail-on any
+#
+# Exit code: 3 (exposure matched --fail-on any). A clean fleet would exit 0.
+# -----------------------------------------------------------------------------
+
+12 machines scanned; 2 reaching PRC-origin endpoints; 1 off-allowlist unattributed; allowlist holding on 8/12
+
+MACHINES: 12 scanned
+  allowlist (per machine): 8 holding, 3 drifted, 1 unresolved (needs an active probe)
+  freshness (>7d stale): 1 stale (> 7d): ci-runner-11
+
+CLASSIFICATION TOTALS (findings):
+  aggregator-unresolvable: 1
+  off-allowlist-attributed: 2
+  off-allowlist-unattributed: 1
+  sanctioned: 13
+
+PRC-ORIGIN EXPOSURE (endpoint -> machines):
+  api.deepseek.com  [DeepSeek (PRC)]  1 machine(s): eng-laptop-07
+  dashscope.aliyuncs.com  [Alibaba DashScope (Qwen) (PRC)]  1 machine(s): research-laptop-08
+
+ROGUE UPSTREAMS (off-allowlist, grouped by endpoint host):
+  [PRC FLAG] api.deepseek.com  (DeepSeek, PRC)  1 machine(s): eng-laptop-07
+  [PRC FLAG] dashscope.aliyuncs.com  (Alibaba DashScope (Qwen), PRC)  1 machine(s): research-laptop-08
+  [FLAG] llm.shadow-tool.example  (unattributed)  1 machine(s): contractor-laptop-09
+
+UNRESOLVED (needs an active probe — not counted clean or drift):
+  openrouter.ai
+
+
+EXPOSURE: prc=2 drift=3 (fail-on=any -> FAIL)
+
